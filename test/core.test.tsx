@@ -421,6 +421,79 @@ test("CLI forwards optional bearer tokens over HTTPS or loopback only", async ()
   }
 });
 
+test("Tailscale Serve mode rejects missing or unauthorized identities and checks the exact origin", async () => {
+  const previousLogin = process.env.KB_ALLOWED_TAILSCALE_LOGIN;
+  const previousOrigin = process.env.KB_PUBLIC_ORIGIN;
+  process.env.KB_ALLOWED_TAILSCALE_LOGIN = "extreme0728@gmail.com";
+  process.env.KB_PUBLIC_ORIGIN = "https://byungsker-mackbook.tail990faf.ts.net:8443";
+  const authDatabase = openDatabase(path.join(temporaryRoot, "identity-data"), { seedDemo: false });
+  let authServer: ReturnType<ReturnType<typeof createApp>["listen"]> | undefined;
+  try {
+    const guardedApp = createApp(authDatabase);
+    const authBaseUrl = await new Promise<string>((resolve, reject) => {
+      authServer = guardedApp.listen(0, "127.0.0.1", () => {
+        const address = authServer?.address();
+        if (!address || typeof address === "string") {
+          reject(new Error("Could not read the identity test server address."));
+          return;
+        }
+        resolve(`http://127.0.0.1:${address.port}`);
+      });
+      authServer.once("error", reject);
+    });
+
+    const missingIdentity = await fetch(`${authBaseUrl}/api/documents`);
+    assert.equal(missingIdentity.status, 401);
+    assert.equal((await missingIdentity.json()).error, "identity_required");
+
+    const unauthorizedIdentity = await fetch(`${authBaseUrl}/api/documents`, {
+      headers: { "Tailscale-User-Login": "another-user@example.com" },
+    });
+    assert.equal(unauthorizedIdentity.status, 403);
+    assert.equal((await unauthorizedIdentity.json()).error, "identity_rejected");
+
+    const correctIdentity = await fetch(`${authBaseUrl}/api/documents`, {
+      headers: { "Tailscale-User-Login": "EXTREME0728@gmail.com" },
+    });
+    assert.equal(correctIdentity.status, 200);
+    assert.deepEqual((await correctIdentity.json()).documents, []);
+
+    const badOrigin = await fetch(`${authBaseUrl}/api/documents`, {
+      headers: {
+        "Tailscale-User-Login": "extreme0728@gmail.com",
+        Origin: "https://attacker.example",
+      },
+    });
+    assert.equal(badOrigin.status, 403);
+    assert.equal((await badOrigin.json()).error, "origin_rejected");
+
+    for (const malformedOrigin of [
+      "http://byungsker-mackbook.tail990faf.ts.net:8443",
+      "https://byungsker-mackbook.tail990faf.ts.net:8443/path",
+      "not-an-origin",
+    ]) {
+      process.env.KB_PUBLIC_ORIGIN = malformedOrigin;
+      assert.throws(() => createApp(authDatabase), /KB_PUBLIC_ORIGIN/);
+    }
+
+    process.env.KB_PUBLIC_ORIGIN = "https://byungsker-mackbook.tail990faf.ts.net:8443";
+    assert.throws(
+      () => {
+        delete process.env.KB_ALLOWED_TAILSCALE_LOGIN;
+        createApp(authDatabase);
+      },
+      /Set KB_ALLOWED_TAILSCALE_LOGIN and KB_PUBLIC_ORIGIN together/,
+    );
+  } finally {
+    if (authServer) await new Promise<void>((resolve) => authServer?.close(() => resolve()));
+    closeDatabase(authDatabase);
+    if (previousLogin === undefined) delete process.env.KB_ALLOWED_TAILSCALE_LOGIN;
+    else process.env.KB_ALLOWED_TAILSCALE_LOGIN = previousLogin;
+    if (previousOrigin === undefined) delete process.env.KB_PUBLIC_ORIGIN;
+    else process.env.KB_PUBLIC_ORIGIN = previousOrigin;
+  }
+});
+
 test("schema v1 migrates forward without changing existing note IDs, Markdown, or change history", () => {
   const legacyDirectory = path.join(temporaryRoot, "legacy-v1");
   const legacyPath = path.join(legacyDirectory, "knowledge.sqlite");

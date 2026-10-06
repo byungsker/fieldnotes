@@ -1,6 +1,6 @@
 # Local API
 
-All routes are under the same origin as the web app. Requests and responses are JSON unless noted; `GET /api/events` is Server-Sent Events. The server binds to loopback only. There is no CORS access or API authentication in this MVP. The CLI forwards optional `KB_AUTH_TOKEN` as a Bearer token only to HTTPS origins or loopback; Fieldnotes itself does not validate it. For private remote use, terminate HTTPS behind an identity-aware proxy that validates browser and CLI authentication on every route, including SSE, before forwarding to the loopback API.
+All routes are under the same origin as the web app. Requests and responses are JSON unless noted; `GET /api/events` is Server-Sent Events. The server binds to loopback only. Local mode has no API login because it is reachable only on this Mac. For Tailscale Serve, configure both `KB_ALLOWED_TAILSCALE_LOGIN` and the exact HTTPS `KB_PUBLIC_ORIGIN`; the server then requires the matching `Tailscale-User-Login` header on every route, including static assets and SSE, and rejects requests that do not arrive over a loopback connection. Tailscale Serve removes incoming identity headers before adding the authenticated user value. Keep the API loopback-only and do not enable Express proxy trust. The CLI should use the Serve HTTPS origin in `KB_BASE_URL`, so its requests pass through the same identity proxy. The CLI's optional `KB_AUTH_TOKEN` is not validated by Fieldnotes itself.
 
 ## Routes
 

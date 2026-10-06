@@ -48,6 +48,15 @@ function sendError(response: Response, status: number, code: string, message: st
   response.status(status).json({ error: code, message, ...extra });
 }
 
+function normalizedLogin(value: string | undefined): string | undefined {
+  const login = value?.trim().toLowerCase();
+  return login || undefined;
+}
+
+function isLoopbackAddress(address: string | undefined): boolean {
+  return address === "127.0.0.1" || address === "::1" || Boolean(address?.startsWith("::ffff:127."));
+}
+
 function validateDocumentId(value: string): string {
   if (!ID_PATTERN.test(value)) throw new RequestValidationError("Note id must be a UUID.");
   return value;
@@ -162,6 +171,23 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
   const app = express();
   const resolvedStaticDirectory = staticDirectory ? path.resolve(staticDirectory) : undefined;
   const staticIndex = resolvedStaticDirectory ? path.join(resolvedStaticDirectory, "index.html") : undefined;
+  const allowedTailscaleLogin = normalizedLogin(process.env.KB_ALLOWED_TAILSCALE_LOGIN);
+  const configuredPublicOrigin = process.env.KB_PUBLIC_ORIGIN?.trim().replace(/\/$/, "") || undefined;
+
+  if (Boolean(allowedTailscaleLogin) !== Boolean(configuredPublicOrigin)) {
+    throw new Error("Set KB_ALLOWED_TAILSCALE_LOGIN and KB_PUBLIC_ORIGIN together; an origin check alone is not authentication.");
+  }
+  if (configuredPublicOrigin) {
+    let parsedOrigin: URL;
+    try {
+      parsedOrigin = new URL(configuredPublicOrigin);
+    } catch (error) {
+      throw new Error("KB_PUBLIC_ORIGIN must be a valid HTTPS origin.", { cause: error });
+    }
+    if (parsedOrigin.protocol !== "https:" || parsedOrigin.origin !== configuredPublicOrigin) {
+      throw new Error("KB_PUBLIC_ORIGIN must be an HTTPS origin without a path, query, or fragment.");
+    }
+  }
 
   app.disable("x-powered-by");
   app.use((request, response, next) => {
@@ -173,10 +199,28 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
     );
 
+    if (allowedTailscaleLogin) {
+      // Tailscale Serve is the trusted proxy: it removes client-supplied identity headers
+      // and injects the authenticated login. Keep this server loopback-only and do not
+      // enable Express trust proxy; local processes on this Mac remain inside the trust boundary.
+      if (!isLoopbackAddress(request.socket.remoteAddress)) {
+        sendError(response, 403, "untrusted_proxy", "Requests must arrive through the loopback identity proxy.");
+        return;
+      }
+      const requestLogin = normalizedLogin(request.get("Tailscale-User-Login"));
+      if (!requestLogin) {
+        sendError(response, 401, "identity_required", "A Tailscale Serve identity is required.");
+        return;
+      }
+      if (requestLogin !== allowedTailscaleLogin) {
+        sendError(response, 403, "identity_rejected", "This Tailscale identity is not allowed.");
+        return;
+      }
+    }
+
     const origin = request.get("origin");
     if (origin) {
       const expectedOrigin = `${request.protocol}://${request.get("host")}`;
-      const configuredPublicOrigin = process.env.KB_PUBLIC_ORIGIN?.trim().replace(/\/$/, "");
       if (origin !== expectedOrigin && origin !== configuredPublicOrigin) {
         sendError(response, 403, "origin_rejected", "Cross-origin requests are not allowed.");
         return;
