@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowDownUp,
@@ -27,10 +27,21 @@ import {
 } from "lucide-react";
 import { ApiError, apiRequest, jsonRequest } from "./api";
 import { ActionDialog, type ActionDialogConfig, type ActionDialogResult } from "./ActionDialog";
-import { AppViewContext, type WorkspaceScreen } from "./AppViewContext";
+import type { AppViewContextValue, WorkspaceScreen } from "./AppViewContext";
 import { MarkdownBody } from "./MarkdownBody";
-import { Stack } from "./stackflow";
 import type { ChangeRecord, DocumentRecord, DocumentSummary, FolderRecord } from "./types";
+import {
+  mergeWorkspaceHistoryState,
+  workspaceHistoryIndex,
+  workspaceLocationFromHistory,
+  workspacePathForRoute,
+  workspaceRendererForViewport,
+  workspaceRouteForActivity,
+  workspaceRouteFromPathname,
+  workspaceRoutesEqual,
+  type WorkspaceNavigation,
+  type WorkspaceRoute,
+} from "./workspace-routing";
 
 type ConnectionState = "connecting" | "connected" | "reconnecting";
 type SaveState = "saved" | "unsaved" | "saving" | "conflict" | "error";
@@ -45,6 +56,7 @@ type BacklinksResponse = { backlinks: DocumentSummary[] };
 
 const LAST_SEQUENCE_KEY = "fieldnotes:last-change-sequence";
 const THEME_KEY = "fieldnotes:theme";
+const MobileWorkspace = lazy(() => import("./stackflow").then((module) => ({ default: module.MobileWorkspace })));
 type ActiveFolder = string | "root" | null;
 type DraftSnapshot = { title: string; body: string; baseVersion: number };
 type SortOrder = "updated-desc" | "updated-asc" | "title-asc" | "title-desc";
@@ -172,6 +184,10 @@ function initialSequence(): number {
 }
 
 export function App() {
+  const [currentRoute, setCurrentRoute] = useState<WorkspaceRoute>(() => workspaceRouteFromPathname(window.location.pathname));
+  const initialHistoryIndex = workspaceHistoryIndex(window.history.state) ?? 0;
+  const [historyIndex, setHistoryIndex] = useState(initialHistoryIndex);
+  const [workspaceRenderer, setWorkspaceRenderer] = useState(() => workspaceRendererForViewport(window.innerWidth));
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [visibleDocuments, setVisibleDocuments] = useState<DocumentSummary[]>([]);
   const [folders, setFolders] = useState<FolderRecord[]>([]);
@@ -216,6 +232,10 @@ export function App() {
   const draftsRef = useRef(new Map<string, DraftSnapshot>());
   const dialogResolverRef = useRef<((result: ActionDialogResult) => void) | null>(null);
   const navigationPendingRef = useRef(false);
+  const historyIndexRef = useRef(initialHistoryIndex);
+  const currentRouteRef = useRef(currentRoute);
+  const workspaceRendererRef = useRef(workspaceRenderer);
+  const editorWasFocusedBeforeResizeRef = useRef(false);
 
   selectedRef.current = selectedDocument;
   draftTitleRef.current = draftTitle;
@@ -224,6 +244,53 @@ export function App() {
   activeFolderRef.current = activeFolderId;
   actionDialogRef.current = actionDialog;
   activeViewRef.current = activeView;
+  currentRouteRef.current = currentRoute;
+  workspaceRendererRef.current = workspaceRenderer;
+
+  const navigateRoute = useCallback((route: WorkspaceRoute, mode: "push" | "replace" = "push") => {
+    const nextIndex = mode === "push" ? historyIndexRef.current + 1 : historyIndexRef.current;
+    const state = mergeWorkspaceHistoryState(window.history.state, nextIndex);
+    window.history[mode === "push" ? "pushState" : "replaceState"](state, "", workspacePathForRoute(route));
+    historyIndexRef.current = nextIndex;
+    setHistoryIndex(nextIndex);
+    setCurrentRoute(route);
+  }, []);
+
+  const navigation = useMemo<WorkspaceNavigation>(() => ({
+    push(name, params) {
+      navigateRoute(workspaceRouteForActivity(name, params));
+    },
+    replace(name, params) {
+      navigateRoute(workspaceRouteForActivity(name, params), "replace");
+    },
+    pop() {
+      if (historyIndexRef.current > 0) window.history.back();
+      else navigateRoute({ kind: "library" }, "replace");
+    },
+    canGoBack: historyIndex > 0,
+  }), [historyIndex, navigateRoute]);
+
+  useEffect(() => {
+    const existingIndex = workspaceHistoryIndex(window.history.state);
+    const index = existingIndex ?? 0;
+    if (existingIndex === null) {
+      window.history.replaceState(
+        mergeWorkspaceHistoryState(window.history.state, index),
+        "",
+        window.location.href,
+      );
+    }
+    historyIndexRef.current = index;
+
+    const handlePopState = (event: PopStateEvent) => {
+      const next = workspaceLocationFromHistory(window.location.pathname, event.state);
+      historyIndexRef.current = next.historyIndex;
+      setHistoryIndex(next.historyIndex);
+      setCurrentRoute(next.route);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
 
   const requestActionDialog = useCallback((config: ActionDialogConfig) => new Promise<ActionDialogResult>((resolve) => {
     dialogResolverRef.current = resolve;
@@ -364,10 +431,10 @@ export function App() {
   }, []);
 
   const ensureDocumentForRoute = useCallback(async (id: string) => {
-    setRouteError("");
     if (selectedRef.current?.id === id) return;
     try {
       const response = await apiRequest<DocumentResponse>(`/api/documents/${id}`);
+      setRouteError("");
       acceptDocument(response.document);
       void refreshBacklinks(response.document.id);
     } catch {
@@ -714,6 +781,27 @@ export function App() {
     chooseFolder(folderId);
   }, [folders]);
 
+  useEffect(() => {
+    const route = currentRoute;
+    const timer = window.setTimeout(() => {
+      if (!workspaceRoutesEqual(currentRouteRef.current, route)) return;
+      if (route.kind === "document") {
+        void ensureDocumentForRoute(route.documentId);
+        return;
+      }
+      if (route.kind === "folder") {
+        selectFolderForRoute(route.folderId);
+        return;
+      }
+      setRouteError("");
+      if (route.kind === "library") {
+        activeFolderRef.current = null;
+        setActiveFolderId(null);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [currentRoute, ensureDocumentForRoute, selectFolderForRoute]);
+
   const beginFolderCreate = (parentId: string | null) => {
     setCreatingFolderParent(parentId);
     setNewFolderName("");
@@ -875,13 +963,47 @@ export function App() {
     );
   }, [theme]);
 
-  const rememberEditorSelection = (editor: HTMLTextAreaElement) => {
+  const rememberEditorSelection = useCallback((editor: HTMLTextAreaElement) => {
     editorSelectionRef.current = {
       start: editor.selectionStart,
       end: editor.selectionEnd,
       direction: editor.selectionDirection,
     };
-  };
+  }, []);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 820px)");
+    const syncRenderer = () => {
+      const nextRenderer = workspaceRendererForViewport(window.innerWidth);
+      if (nextRenderer === workspaceRendererRef.current) return;
+      const editor = markdownEditorRef.current;
+      editorWasFocusedBeforeResizeRef.current = Boolean(editor && document.activeElement === editor);
+      if (editor) rememberEditorSelection(editor);
+      workspaceRendererRef.current = nextRenderer;
+      setWorkspaceRenderer(nextRenderer);
+    };
+    mediaQuery.addEventListener("change", syncRenderer);
+    window.addEventListener("resize", syncRenderer);
+    syncRenderer();
+    return () => {
+      mediaQuery.removeEventListener("change", syncRenderer);
+      window.removeEventListener("resize", syncRenderer);
+    };
+  }, [rememberEditorSelection]);
+
+  useEffect(() => {
+    if (!editorWasFocusedBeforeResizeRef.current) return;
+    editorWasFocusedBeforeResizeRef.current = false;
+    if (currentRoute.kind !== "document" || activeView !== "write") return;
+    const frame = window.requestAnimationFrame(() => {
+      const editor = markdownEditorRef.current;
+      if (!editor) return;
+      editor.focus({ preventScroll: true });
+      const selection = editorSelectionRef.current;
+      if (selection) editor.setSelectionRange(selection.start, selection.end, selection.direction);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeView, currentRoute.kind, workspaceRenderer]);
 
   const switchEditorView = (nextView: "write" | "preview") => {
     if (nextView === activeViewRef.current) return;
@@ -903,11 +1025,10 @@ export function App() {
 
   const toggleTheme = () => setTheme((current) => current === "dark" ? "light" : "dark");
 
-  const renderWorkspace = (screen: WorkspaceScreen, flow: import("@stackflow/react").Actions, stack: import("@stackflow/core").Stack) => {
+  const renderWorkspace = (screen: WorkspaceScreen, routeNavigation: WorkspaceNavigation) => {
     const displayDocument = screen.kind === "document" && selectedDocument?.id === screen.documentId
       ? selectedDocument
       : null;
-    const currentActivity = stack.activities.find((activity) => activity.isActive);
 
     const confirmDraftLeave = async () => {
       const selected = selectedRef.current;
@@ -932,12 +1053,12 @@ export function App() {
       if (!await confirmDraftLeave()) return;
       setQuery("");
       chooseFolder(null);
-      flow.push("Library", {});
+      routeNavigation.push("Library", {});
     };
 
     const navigateToRecent = async () => {
       if (screen.kind === "recent" || !await confirmDraftLeave()) return;
-      flow.push("Recent", {});
+      routeNavigation.push("Recent", {});
     };
 
     const navigateToFolder = async (folderId: ActiveFolder) => {
@@ -949,8 +1070,8 @@ export function App() {
       if (!await confirmDraftLeave()) return;
       chooseFolder(folderId);
       setRouteError("");
-      if (routeId === null) flow.push("Library", {});
-      else flow.push("Folder", { folderId: routeId });
+      if (routeId === null) routeNavigation.push("Library", {});
+      else routeNavigation.push("Folder", { folderId: routeId });
     };
 
     const resetListFilters = () => {
@@ -960,7 +1081,7 @@ export function App() {
       if (activeFolderRef.current !== null) {
         chooseFolder(null);
         setRouteError("");
-        if (screen.kind === "folder") flow.push("Library", {});
+        if (screen.kind === "folder") routeNavigation.push("Library", {});
       }
     };
 
@@ -970,7 +1091,7 @@ export function App() {
       navigationPendingRef.current = true;
       try {
         if (!await openDocument(id)) return;
-        flow.push("Document", { documentId: id });
+        routeNavigation.push("Document", { documentId: id });
       } finally {
         navigationPendingRef.current = false;
       }
@@ -978,12 +1099,12 @@ export function App() {
 
     const createAndOpenNote = async () => {
       const created = await createNote();
-      if (created) flow.push("Document", { documentId: created.id });
+      if (created) routeNavigation.push("Document", { documentId: created.id });
     };
 
     const navigateBack = () => {
-      if (currentActivity?.isRoot) flow.replace("Library", {});
-      else flow.pop();
+      if (routeNavigation.canGoBack) routeNavigation.pop();
+      else routeNavigation.replace("Library", {});
     };
 
     const backFromDocument = () => {
@@ -999,14 +1120,14 @@ export function App() {
 
     const deleteFolderAndReturn = async () => {
       if (!await confirmDraftLeave()) return;
-      if (await deleteActiveFolder()) flow.replace("Library", {});
+      if (await deleteActiveFolder()) routeNavigation.replace("Library", {});
     };
 
     const createFolderAndOpen = async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       if (!await confirmDraftLeave()) return;
       const folder = await createFolderFromForm(event);
-      if (folder) flow.push("Folder", { folderId: folder.id });
+      if (folder) routeNavigation.push("Folder", { folderId: folder.id });
     };
 
     const openChange = (change: ChangeRecord) => {
@@ -1031,7 +1152,7 @@ export function App() {
           <div className="welcome-art" aria-hidden="true"><span className="art-paper paper-back" /><span className="art-paper paper-front"><span /><span /><span /></span></div>
           <h1 className="workspace-title">That page isn’t here.</h1>
           <p>Open your note library to keep working.</p>
-          <button type="button" className="welcome-create" onClick={() => flow.replace("Library", {})}>Back to notes</button>
+          <button type="button" className="welcome-create" onClick={() => routeNavigation.replace("Library", {})}>Back to notes</button>
         </main>
       );
     }
@@ -1463,10 +1584,21 @@ export function App() {
   );
   };
 
+  const appViewContext: AppViewContextValue = { currentRoute, navigation, renderWorkspace };
+  const desktopScreen = { ...currentRoute, activityId: "desktop" } as WorkspaceScreen;
+
   return (
-    <AppViewContext.Provider value={{ renderWorkspace, ensureDocumentForRoute, selectFolderForRoute }}>
-      <Stack />
+    <>
+      {workspaceRenderer === "desktop" ? (
+        <div className="desktop-workspace-root" data-fieldnotes-renderer="desktop">
+          {renderWorkspace(desktopScreen, navigation)}
+        </div>
+      ) : (
+        <Suspense fallback={<div className="mobile-workspace-root" data-fieldnotes-renderer="mobile-loading" aria-busy="true" />}>
+          <MobileWorkspace value={appViewContext} />
+        </Suspense>
+      )}
       <ActionDialog config={actionDialog} onResolve={resolveActionDialog} />
-    </AppViewContext.Provider>
+    </>
   );
 }

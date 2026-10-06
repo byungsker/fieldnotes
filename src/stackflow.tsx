@@ -3,80 +3,78 @@ import { basicUIPlugin, AppScreen } from "@stackflow/plugin-basic-ui";
 import { basicRendererPlugin } from "@stackflow/plugin-renderer-basic";
 import { historySyncPlugin } from "@stackflow/plugin-history-sync";
 import { stackflow, useActivity, useFlow, useStack } from "@stackflow/react";
-import type { ActivityComponentType } from "@stackflow/react";
-import "@stackflow/plugin-basic-ui/index.css";
+import type { ActivityComponentType, Actions } from "@stackflow/react";
+import { createMemoryHistory } from "history";
+import { AppViewContext, useAppViewContext, type AppViewContextValue, type WorkspaceScreen } from "./AppViewContext";
 import { stackConfig } from "./stackflow.config";
-import { useAppViewContext, type WorkspaceRoute, type WorkspaceScreen } from "./AppViewContext";
+import { workspaceRoutesEqual, type WorkspaceRoute } from "./workspace-routing";
 
-function ActivityScreen({ screen }: { screen: WorkspaceRoute }) {
+const mobileHistory = createMemoryHistory({
+  initialEntries: [window.location.pathname],
+});
+
+function replaceFlowRoute(flow: Actions, route: WorkspaceRoute): void {
+  switch (route.kind) {
+    case "library": flow.replace("Library", {}); break;
+    case "recent": flow.replace("Recent", {}); break;
+    case "folder": flow.replace("Folder", { folderId: route.folderId }); break;
+    case "document": flow.replace("Document", { documentId: route.documentId }); break;
+    case "not-found": flow.replace("NotFound", {}); break;
+  }
+}
+
+function ActivityScreen({ route }: { route: WorkspaceRoute }) {
   const app = useAppViewContext();
   const flow = useFlow();
   const stack = useStack();
   const activity = useActivity();
-  const current = stack.activities.find((item) => item.isActive);
-  const active = current?.id === activity.id;
+  const active = stack.activities.find((item) => item.isActive)?.id === activity.id;
+
+  useEffect(() => {
+    if (active && !workspaceRoutesEqual(route, app.currentRoute)) {
+      replaceFlowRoute(flow, app.currentRoute);
+    }
+  }, [active, app.currentRoute, flow, route]);
 
   useEffect(() => {
     if (!active) return;
     const frame = window.requestAnimationFrame(() => {
       const activityRoot = document.getElementById(`fieldnotes-activity-${activity.id}`);
-      const target = screen.kind === "document"
+      const target = app.currentRoute.kind === "document"
         ? activityRoot?.querySelector<HTMLElement>(".editor-pane")
         : activityRoot?.querySelector<HTMLElement>(".workspace-title") ?? activityRoot?.querySelector<HTMLElement>("h1");
       target?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [active, activity.id, screen.kind]);
+  }, [active, activity.id, app.currentRoute.kind]);
 
-  const workspaceScreen: WorkspaceScreen = { ...screen, activityId: activity.id } as WorkspaceScreen;
+  const workspaceScreen = { ...app.currentRoute, activityId: activity.id } as WorkspaceScreen;
 
   return (
     <AppScreen className="fieldnotes-stack-screen">
-      {app.renderWorkspace(workspaceScreen, flow, stack)}
+      {app.renderWorkspace(workspaceScreen, app.navigation)}
     </AppScreen>
   );
 }
 
 const LibraryActivity: ActivityComponentType<"Library"> = () => (
-  <ActivityScreen screen={{ kind: "library" }} />
+  <ActivityScreen route={{ kind: "library" }} />
 );
 
 const RecentActivity: ActivityComponentType<"Recent"> = () => (
-  <ActivityScreen screen={{ kind: "recent" }} />
+  <ActivityScreen route={{ kind: "recent" }} />
 );
 
-const FolderActivity: ActivityComponentType<"Folder"> = ({ params }) => {
-  const app = useAppViewContext();
-  const { selectFolderForRoute } = app;
-  const activity = useActivity();
-  const stack = useStack();
-  const current = stack.activities.find((item) => item.isActive);
-  const active = current?.id === activity.id;
+const FolderActivity: ActivityComponentType<"Folder"> = ({ params }) => (
+  <ActivityScreen route={{ kind: "folder", folderId: params.folderId }} />
+);
 
-  useEffect(() => {
-    if (active) selectFolderForRoute(params.folderId);
-  }, [active, selectFolderForRoute, params.folderId]);
-
-  return <ActivityScreen screen={{ kind: "folder", folderId: params.folderId }} />;
-};
-
-const DocumentActivity: ActivityComponentType<"Document"> = ({ params }) => {
-  const app = useAppViewContext();
-  const { ensureDocumentForRoute } = app;
-  const activity = useActivity();
-  const stack = useStack();
-  const current = stack.activities.find((item) => item.isActive);
-  const active = current?.id === activity.id;
-
-  useEffect(() => {
-    if (active) void ensureDocumentForRoute(params.documentId);
-  }, [active, ensureDocumentForRoute, params.documentId]);
-
-  return <ActivityScreen screen={{ kind: "document", documentId: params.documentId }} />;
-};
+const DocumentActivity: ActivityComponentType<"Document"> = ({ params }) => (
+  <ActivityScreen route={{ kind: "document", documentId: params.documentId }} />
+);
 
 const NotFoundActivity: ActivityComponentType<"NotFound"> = () => (
-  <ActivityScreen screen={{ kind: "not-found" }} />
+  <ActivityScreen route={{ kind: "not-found" }} />
 );
 
 const stackflowOutput = stackflow({
@@ -94,8 +92,19 @@ const stackflowOutput = stackflow({
     historySyncPlugin({
       config: stackConfig,
       fallbackActivity: () => "NotFound",
+      history: mobileHistory,
     }),
   ],
 });
 
-export const Stack = stackflowOutput.Stack;
+const Stack = stackflowOutput.Stack;
+
+export function MobileWorkspace({ value }: { value: AppViewContextValue }) {
+  return (
+    <div className="mobile-workspace-root" data-fieldnotes-renderer="mobile-stackflow">
+      <AppViewContext.Provider value={value}>
+        <Stack />
+      </AppViewContext.Provider>
+    </div>
+  );
+}
