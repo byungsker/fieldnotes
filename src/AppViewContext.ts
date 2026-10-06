@@ -2,12 +2,13 @@ import { createContext, useContext } from "react";
 import type { ReactNode } from "react";
 import type { WorkspaceNavigation, WorkspaceRoute } from "./workspace-routing";
 
-export type WorkspaceScreen = WorkspaceRoute & { activityId: string };
+export type WorkspaceScreen = WorkspaceRoute & { activityId: string; isActive?: boolean };
 
 export type AppViewContextValue = {
   currentRoute: WorkspaceRoute;
   navigation: WorkspaceNavigation;
   renderWorkspace: (screen: WorkspaceScreen, navigation: WorkspaceNavigation) => ReactNode;
+  restoreMobileListScroll: (activityId: string) => void;
 };
 
 export const AppViewContext = createContext<AppViewContextValue | null>(null);
