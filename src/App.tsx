@@ -30,6 +30,7 @@ import { ApiError, apiRequest, jsonRequest } from "./api";
 import { ActionDialog, type ActionDialogConfig, type ActionDialogResult } from "./ActionDialog";
 import type { AppViewContextValue, WorkspaceScreen } from "./AppViewContext";
 import { MarkdownBody } from "./MarkdownBody";
+import { resolveMobileDrawerSwipe } from "./mobile-drawer-swipe";
 import type { ChangeRecord, DocumentRecord, DocumentSummary, FolderRecord } from "./types";
 import {
   mergeWorkspaceHistoryState,
@@ -64,6 +65,15 @@ type DraftSnapshot = { title: string; body: string; baseVersion: number };
 type SortOrder = "updated-desc" | "updated-asc" | "title-asc" | "title-desc";
 type ColorTheme = "dark" | "light";
 type DocumentListScrollSnapshot = { documentId: string | null; itemOffset: number; scrollTop: number };
+type MobileDrawerTouchStart = {
+  identifier: number;
+  startX: number;
+  startY: number;
+  drawerWasOpen: boolean;
+  startedInDrawer: boolean;
+  listRoute: boolean;
+  viewportWidth: number;
+};
 
 function hasMobileDrawerHistoryState(state: unknown): boolean {
   return typeof state === "object" && state !== null && !Array.isArray(state) &&
@@ -254,6 +264,9 @@ export function App() {
   const pendingDrawerNavigationRef = useRef<{ route: WorkspaceRoute; mode: "push" | "replace" } | null>(null);
   const drawerReturnFocusRef = useRef<HTMLElement | null>(null);
   const drawerWasOpenRef = useRef(hasMobileDrawerHistoryState(window.history.state));
+  const mobileDrawerTouchStartRef = useRef<MobileDrawerTouchStart | null>(null);
+  const suppressSwipeClickRef = useRef(false);
+  const suppressSwipeClickTimerRef = useRef<number | null>(null);
   const documentListScrollRef = useRef(new Map<string, DocumentListScrollSnapshot>());
   const currentListViewKey = documentListViewKey(activeFolderId, query, sortOrder);
   const currentListViewKeyRef = useRef(currentListViewKey);
@@ -317,9 +330,9 @@ export function App() {
     if (list) restoreDocumentListScroll(list);
   }, [restoreDocumentListScroll]);
 
-  const openMobileDrawer = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+  const openMobileDrawer = useCallback((returnFocusTarget: HTMLElement | null) => {
     if (workspaceRendererRef.current !== "mobile-stackflow") return;
-    drawerReturnFocusRef.current = event.currentTarget;
+    drawerReturnFocusRef.current = returnFocusTarget;
     if (!drawerHistoryEntryRef.current) {
       const currentState = window.history.state;
       const base = typeof currentState === "object" && currentState !== null && !Array.isArray(currentState)
@@ -1538,6 +1551,76 @@ export function App() {
       </>
     );
 
+    const handleMobileTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+      if (suppressSwipeClickTimerRef.current !== null) {
+        window.clearTimeout(suppressSwipeClickTimerRef.current);
+        suppressSwipeClickTimerRef.current = null;
+      }
+      suppressSwipeClickRef.current = false;
+      mobileDrawerTouchStartRef.current = null;
+
+      if (workspaceRenderer !== "mobile-stackflow" || !activeScreen || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      if (!touch) return;
+      const drawer = event.currentTarget.querySelector<HTMLElement>(".mobile-navigation-drawer");
+      const startedInDrawer = drawer?.contains(event.target as Node) ?? false;
+      if (showDrawer && !startedInDrawer) return;
+      if (!showDrawer && screen.kind !== "library" && screen.kind !== "folder") return;
+
+      mobileDrawerTouchStartRef.current = {
+        identifier: touch.identifier,
+        startX: touch.clientX,
+        startY: touch.clientY,
+        drawerWasOpen: showDrawer,
+        startedInDrawer,
+        listRoute: screen.kind === "library" || screen.kind === "folder",
+        viewportWidth: window.innerWidth,
+      };
+    };
+
+    const handleMobileTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+      const started = mobileDrawerTouchStartRef.current;
+      mobileDrawerTouchStartRef.current = null;
+      if (!started) return;
+
+      const touch = Array.from(event.changedTouches).find((item) => item.identifier === started.identifier);
+      if (!touch) return;
+      const direction = resolveMobileDrawerSwipe({
+        ...started,
+        endX: touch.clientX,
+        endY: touch.clientY,
+      });
+      if (!direction) return;
+
+      suppressSwipeClickRef.current = true;
+      if (suppressSwipeClickTimerRef.current !== null) window.clearTimeout(suppressSwipeClickTimerRef.current);
+      suppressSwipeClickTimerRef.current = window.setTimeout(() => {
+        suppressSwipeClickRef.current = false;
+        suppressSwipeClickTimerRef.current = null;
+      }, 500);
+
+      if (direction === "open") {
+        openMobileDrawer(event.currentTarget.querySelector<HTMLElement>(".mobile-menu-button"));
+      } else {
+        closeMobileDrawer();
+      }
+    };
+
+    const handleMobileTouchCancel = () => {
+      mobileDrawerTouchStartRef.current = null;
+    };
+
+    const handleSwipeClickCapture = (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!suppressSwipeClickRef.current || event.detail === 0) return;
+      suppressSwipeClickRef.current = false;
+      if (suppressSwipeClickTimerRef.current !== null) {
+        window.clearTimeout(suppressSwipeClickTimerRef.current);
+        suppressSwipeClickTimerRef.current = null;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
     if (screen.kind === "not-found") {
       return (
         <main id={`fieldnotes-activity-${screen.activityId}`} data-fieldnotes-route="not-found" className="route-not-found">
@@ -1550,7 +1633,15 @@ export function App() {
     }
 
     return (
-    <div id={`fieldnotes-activity-${screen.activityId}`} data-fieldnotes-route={screen.kind} className={`app-shell route-${screen.kind}${displayDocument ? " has-selection" : ""}`}>
+    <div
+      id={`fieldnotes-activity-${screen.activityId}`}
+      data-fieldnotes-route={screen.kind}
+      className={`app-shell route-${screen.kind}${displayDocument ? " has-selection" : ""}`}
+      onTouchStart={handleMobileTouchStart}
+      onTouchEnd={handleMobileTouchEnd}
+      onTouchCancel={handleMobileTouchCancel}
+      onClickCapture={handleSwipeClickCapture}
+    >
       <header className="mobile-topbar" aria-hidden={showDrawer}>
         <button
           type="button"
@@ -1558,7 +1649,7 @@ export function App() {
           aria-label="Open navigation"
           aria-expanded={showDrawer}
           aria-controls={"fieldnotes-mobile-drawer-" + screen.activityId}
-          onClick={openMobileDrawer}
+          onClick={(event) => openMobileDrawer(event.currentTarget)}
         ><Menu size={19} aria-hidden="true" /></button>
         <div className="mobile-topbar-brand">
           <span className="brand-mark"><BookOpen size={17} strokeWidth={2.1} /></span>
