@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   MOBILE_DRAWER_SWIPE_MIN_DISTANCE,
   resolveMobileDrawerSwipe,
+  resolveMobileDrawerSwipeDrag,
   type MobileDrawerSwipeInput,
 } from "../src/mobile-drawer-swipe";
 
@@ -52,6 +53,46 @@ test("closes only on a deliberate leftward swipe that begins inside the open dra
   assert.equal(resolveMobileDrawerSwipe({ ...closeFromDrawer, startedInDrawer: false }), null);
   assert.equal(resolveMobileDrawerSwipe({ ...closeFromDrawer, endX: 330 }), null);
   assert.equal(resolveMobileDrawerSwipe({ ...closeFromDrawer, endX: 260 + MOBILE_DRAWER_SWIPE_MIN_DISTANCE - 1 }), null);
+  assert.equal(resolveMobileDrawerSwipe({ ...closeFromDrawer, startX: 8, endX: -72 }), null);
+});
+
+test("tracks horizontal movement as the drawer follows the touch", () => {
+  assert.deepEqual(resolveMobileDrawerSwipeDrag({
+    drawerWasOpen: false,
+    startedInDrawer: false,
+    listRoute: true,
+    startX: 32,
+    startY: 300,
+    currentX: 110,
+    currentY: 305,
+    viewportWidth: 390,
+  }), { direction: "open", progress: 78 / 390, deltaX: 78 });
+  assert.deepEqual(resolveMobileDrawerSwipeDrag({
+    drawerWasOpen: true,
+    startedInDrawer: true,
+    listRoute: true,
+    startX: 260,
+    startY: 300,
+    currentX: 175,
+    currentY: 304,
+    viewportWidth: 390,
+  }), { direction: "close", progress: 85 / 390, deltaX: -85 });
+});
+
+test("leaves Safari edge-back, vertical scrolling, short swipes, and taps available", () => {
+  assert.equal(resolveMobileDrawerSwipeDrag({
+    drawerWasOpen: false,
+    startedInDrawer: false,
+    listRoute: true,
+    startX: 8,
+    startY: 300,
+    currentX: 100,
+    currentY: 302,
+    viewportWidth: 390,
+  }), null);
+  assert.equal(resolveMobileDrawerSwipeDrag({ ...openFromEdge, currentX: 37, currentY: 350 }), null);
+  assert.equal(resolveMobileDrawerSwipeDrag({ ...openFromEdge, currentX: 46, currentY: 303 })?.progress, 14 / 390);
+  assert.equal(resolveMobileDrawerSwipe({ ...openFromEdge, endX: 46, endY: 303 }), null);
 });
 
 test("does not attach drawer swipes at desktop widths", () => {
