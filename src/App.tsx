@@ -18,6 +18,8 @@ import {
   LoaderCircle,
   Menu,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Plus,
   RefreshCw,
@@ -31,7 +33,7 @@ import { ApiError, apiRequest, jsonRequest } from "./api";
 import { ActionDialog, type ActionDialogConfig, type ActionDialogResult } from "./ActionDialog";
 import type { AppViewContextValue, WorkspaceScreen } from "./AppViewContext";
 import { MarkdownBody } from "./MarkdownBody";
-import { resolveMobileDrawerSwipe } from "./mobile-drawer-swipe";
+import { resolveMobileDrawerSwipe, resolveMobileDrawerSwipeDrag } from "./mobile-drawer-swipe";
 import type { ChangeRecord, DocumentRecord, DocumentSummary, FolderRecord } from "./types";
 import {
   mergeWorkspaceHistoryState,
@@ -59,6 +61,7 @@ type BacklinksResponse = { backlinks: DocumentSummary[] };
 
 const LAST_SEQUENCE_KEY = "fieldnotes:last-change-sequence";
 const THEME_KEY = "fieldnotes:theme";
+const DESKTOP_SIDEBAR_KEY = "fieldnotes:desktop-sidebar-collapsed";
 const MOBILE_DRAWER_HISTORY_KEY = "fieldnotes:mobile-drawer";
 const MobileWorkspace = lazy(() => import("./stackflow").then((module) => ({ default: module.MobileWorkspace })));
 type ActiveFolder = string | "root" | null;
@@ -74,6 +77,9 @@ type MobileDrawerTouchStart = {
   startedInDrawer: boolean;
   listRoute: boolean;
   viewportWidth: number;
+  axis: "pending" | "horizontal" | "vertical" | "cancelled";
+  direction: "open" | "close" | null;
+  previewActive: boolean;
 };
 
 function hasMobileDrawerHistoryState(state: unknown): boolean {
@@ -87,6 +93,14 @@ function documentListViewKey(folderId: ActiveFolder, query: string, sortOrder: S
 
 function initialTheme(): ColorTheme {
   return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+}
+
+function initialDesktopSidebarCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(DESKTOP_SIDEBAR_KEY) === "true";
+  } catch {
+    return false;
+  }
 }
 
 function hasDraftChanged(document: DocumentRecord | null, title: string, body: string): boolean {
@@ -238,6 +252,7 @@ export function App() {
   const [query, setQuery] = useState("");
   const [sortOrder, setSortOrder] = useState<SortOrder>("updated-desc");
   const [theme, setTheme] = useState<ColorTheme>(initialTheme);
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(initialDesktopSidebarCollapsed);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [externalVersion, setExternalVersion] = useState<number | null>(null);
@@ -249,6 +264,7 @@ export function App() {
   const [actionDialog, setActionDialog] = useState<ActionDialogConfig | null>(null);
   const [routeError, setRouteError] = useState("");
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(() => hasMobileDrawerHistoryState(window.history.state));
+  const [mobileDrawerSwipePreview, setMobileDrawerSwipePreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const markdownEditorRef = useRef<HTMLTextAreaElement>(null);
@@ -280,6 +296,8 @@ export function App() {
   const mobileDrawerTouchStartRef = useRef<MobileDrawerTouchStart | null>(null);
   const suppressSwipeClickRef = useRef(false);
   const suppressSwipeClickTimerRef = useRef<number | null>(null);
+  const drawerSwipeCloseTimerRef = useRef<number | null>(null);
+  const drawerSwipeResetTimerRef = useRef<number | null>(null);
   const documentListScrollRef = useRef(new Map<string, DocumentListScrollSnapshot>());
   const currentListViewKey = documentListViewKey(activeFolderId, query, sortOrder);
   const currentListViewKeyRef = useRef(currentListViewKey);
@@ -636,11 +654,15 @@ export function App() {
     const currentFolder = activeFolderRef.current;
     if (!value.trim() && currentFolder === null) {
       setVisibleDocuments(documents);
+      setListError("");
       return;
     }
     try {
       const response = await apiRequest<DocumentListResponse>(documentListPath(value, currentFolder));
-      if (requestId === searchRequestRef.current) setVisibleDocuments(response.documents);
+      if (requestId === searchRequestRef.current) {
+        setVisibleDocuments(response.documents);
+        setListError("");
+      }
     } catch (error) {
       if (requestId === searchRequestRef.current) {
         setListError(error instanceof Error ? error.message : "Search is unavailable.");
@@ -1218,12 +1240,73 @@ export function App() {
     );
   }, [theme]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DESKTOP_SIDEBAR_KEY, String(desktopSidebarCollapsed));
+    } catch {
+      // Keep the current sidebar state for this tab if storage is unavailable.
+    }
+  }, [desktopSidebarCollapsed]);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const updateAppViewport = () => {
+      const visualHeight = viewport?.height ?? window.innerHeight;
+      document.documentElement.style.setProperty(
+        "--fieldnotes-app-visual-height",
+        `${Math.min(window.innerHeight, visualHeight)}px`,
+      );
+      document.documentElement.style.setProperty(
+        "--fieldnotes-app-visual-offset-top",
+        `${viewport?.offsetTop ?? 0}px`,
+      );
+    };
+    updateAppViewport();
+    viewport?.addEventListener("resize", updateAppViewport);
+    viewport?.addEventListener("scroll", updateAppViewport);
+    window.addEventListener("resize", updateAppViewport);
+    return () => {
+      viewport?.removeEventListener("resize", updateAppViewport);
+      viewport?.removeEventListener("scroll", updateAppViewport);
+      window.removeEventListener("resize", updateAppViewport);
+      document.documentElement.style.removeProperty("--fieldnotes-app-visual-height");
+      document.documentElement.style.removeProperty("--fieldnotes-app-visual-offset-top");
+    };
+  }, []);
+
+  useEffect(() => {
+    if (mobileDrawerOpen || mobileDrawerSwipePreview) return;
+    document.querySelectorAll<HTMLElement>(".mobile-navigation-drawer, .mobile-drawer-backdrop").forEach((element) => {
+      element.style.removeProperty("transition");
+      element.style.removeProperty("transform");
+      element.style.removeProperty("opacity");
+    });
+  }, [mobileDrawerOpen, mobileDrawerSwipePreview]);
+
+  useEffect(() => () => {
+    if (drawerSwipeCloseTimerRef.current !== null) window.clearTimeout(drawerSwipeCloseTimerRef.current);
+    if (drawerSwipeResetTimerRef.current !== null) window.clearTimeout(drawerSwipeResetTimerRef.current);
+    if (suppressSwipeClickTimerRef.current !== null) window.clearTimeout(suppressSwipeClickTimerRef.current);
+  }, []);
+
   const rememberEditorSelection = useCallback((editor: HTMLTextAreaElement) => {
     editorSelectionRef.current = {
       start: editor.selectionStart,
       end: editor.selectionEnd,
       direction: editor.selectionDirection,
     };
+  }, []);
+
+  const keepEditorControlVisible = useCallback((control: HTMLElement) => {
+    window.requestAnimationFrame(() => {
+      const viewport = window.visualViewport;
+      const visualTop = viewport?.offsetTop ?? 0;
+      const visualBottom = visualTop + (viewport?.height ?? window.innerHeight);
+      const bounds = control.getBoundingClientRect();
+      if (bounds.top < visualTop + 8 || bounds.bottom > visualBottom - 64) {
+        control.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
+    });
   }, []);
 
   useEffect(() => {
@@ -1287,6 +1370,8 @@ export function App() {
   const renderWorkspace = (screen: WorkspaceScreen, routeNavigation: WorkspaceNavigation) => {
     const activeScreen = screen.isActive !== false;
     const showDrawer = activeScreen && workspaceRenderer === "mobile-stackflow" && mobileDrawerOpen;
+    const showDrawerPreview = activeScreen && workspaceRenderer === "mobile-stackflow" && mobileDrawerSwipePreview;
+    const drawerPresented = showDrawer || showDrawerPreview;
     if (activeScreen) activeActivityIdRef.current = screen.activityId;
     const listFolderId = screen.kind === "folder"
       ? screen.folderId === "unfiled" ? "root" : screen.folderId
@@ -1541,7 +1626,9 @@ export function App() {
           disabled={importing}
         >
           {importing ? <LoaderCircle className="spin" size={14} /> : <ArrowUpFromLine size={14} />}
-          {surface === "drawer" ? "Import Markdown" : "Import"}
+          <span className={surface === "drawer" ? "drawer-tool-label" : undefined}>
+            {surface === "drawer" ? "Import Markdown" : "Import"}
+          </span>
         </button>
         <button
           type="button"
@@ -1549,7 +1636,10 @@ export function App() {
           onClick={() => void exportNotes()}
           title="Download a JSON export"
         >
-          <ArrowDownToLine size={14} /> {surface === "drawer" ? "Export backup" : "Export"}
+          <ArrowDownToLine size={14} />
+          <span className={surface === "drawer" ? "drawer-tool-label" : undefined}>
+            {surface === "drawer" ? "Export backup" : "Export"}
+          </span>
         </button>
         <input
           ref={fileInputRef}
@@ -1565,6 +1655,7 @@ export function App() {
     );
 
     const handleMobileTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+      clearDrawerSwipeTimers();
       if (suppressSwipeClickTimerRef.current !== null) {
         window.clearTimeout(suppressSwipeClickTimerRef.current);
         suppressSwipeClickTimerRef.current = null;
@@ -1579,6 +1670,15 @@ export function App() {
       const startedInDrawer = drawer?.contains(event.target as Node) ?? false;
       if (showDrawer && !startedInDrawer) return;
       if (!showDrawer && screen.kind !== "library" && screen.kind !== "folder") return;
+      if (showDrawer && drawer) {
+        drawer.style.transition = "none";
+        drawer.style.transform = "translateX(0)";
+        const backdrop = event.currentTarget.querySelector<HTMLElement>(".mobile-drawer-backdrop");
+        if (backdrop) {
+          backdrop.style.transition = "none";
+          backdrop.style.opacity = "1";
+        }
+      }
 
       mobileDrawerTouchStartRef.current = {
         identifier: touch.identifier,
@@ -1588,7 +1688,105 @@ export function App() {
         startedInDrawer,
         listRoute: screen.kind === "library" || screen.kind === "folder",
         viewportWidth: window.innerWidth,
+        axis: "pending",
+        direction: null,
+        previewActive: false,
       };
+    };
+
+    const markSwipeClick = () => {
+      suppressSwipeClickRef.current = true;
+      if (suppressSwipeClickTimerRef.current !== null) window.clearTimeout(suppressSwipeClickTimerRef.current);
+      suppressSwipeClickTimerRef.current = window.setTimeout(() => {
+        suppressSwipeClickRef.current = false;
+        suppressSwipeClickTimerRef.current = null;
+      }, 500);
+    };
+
+    const clearDrawerSwipeTimers = () => {
+      if (drawerSwipeCloseTimerRef.current !== null) {
+        window.clearTimeout(drawerSwipeCloseTimerRef.current);
+        drawerSwipeCloseTimerRef.current = null;
+      }
+      if (drawerSwipeResetTimerRef.current !== null) {
+        window.clearTimeout(drawerSwipeResetTimerRef.current);
+        drawerSwipeResetTimerRef.current = null;
+      }
+    };
+
+    const finishSwipePreview = (workspace: HTMLElement, wasOpen: boolean) => {
+      const drawer = workspace.querySelector<HTMLElement>(".mobile-navigation-drawer");
+      const backdrop = workspace.querySelector<HTMLElement>(".mobile-drawer-backdrop");
+      if (!drawer) {
+        setMobileDrawerSwipePreview(false);
+        return;
+      }
+      drawer.style.transition = "transform 160ms ease-out";
+      drawer.style.transform = wasOpen ? "translateX(0)" : `translateX(-${window.innerWidth}px)`;
+      if (backdrop) {
+        backdrop.style.transition = "opacity 160ms ease-out";
+        backdrop.style.opacity = wasOpen ? "1" : "0";
+      }
+      clearDrawerSwipeTimers();
+      drawerSwipeResetTimerRef.current = window.setTimeout(() => {
+        drawerSwipeResetTimerRef.current = null;
+        setMobileDrawerSwipePreview(false);
+      }, 170);
+    };
+
+    const handleMobileTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
+      const started = mobileDrawerTouchStartRef.current;
+      if (!started || started.axis === "vertical" || started.axis === "cancelled") return;
+      const touch = Array.from(event.touches).find((item) => item.identifier === started.identifier);
+      if (!touch) return;
+      const drag = resolveMobileDrawerSwipeDrag({
+        ...started,
+        currentX: touch.clientX,
+        currentY: touch.clientY,
+      });
+      if (!drag) {
+        const deltaX = touch.clientX - started.startX;
+        const deltaY = touch.clientY - started.startY;
+        if (Math.abs(deltaY) >= 10 && Math.abs(deltaY) > Math.abs(deltaX) * 1.2) {
+          started.axis = "vertical";
+          if (started.previewActive) finishSwipePreview(event.currentTarget, false);
+        } else if (started.axis === "horizontal") {
+          started.axis = "cancelled";
+          if (started.previewActive) finishSwipePreview(event.currentTarget, started.drawerWasOpen);
+        }
+        return;
+      }
+      if (started.axis === "horizontal" && started.direction !== drag.direction) {
+        started.axis = "cancelled";
+        if (started.previewActive) finishSwipePreview(event.currentTarget, started.drawerWasOpen);
+        return;
+      }
+      started.axis = "horizontal";
+      started.direction = drag.direction;
+
+      const drawer = event.currentTarget.querySelector<HTMLElement>(".mobile-navigation-drawer");
+      if (!drawer) return;
+      if (!started.drawerWasOpen && !started.previewActive) {
+        clearDrawerSwipeTimers();
+        drawer.hidden = false;
+        drawer.style.transition = "none";
+        drawer.style.transform = `translateX(-${started.viewportWidth}px)`;
+        started.previewActive = true;
+        setMobileDrawerSwipePreview(true);
+      }
+
+      const width = drawer.getBoundingClientRect().width || started.viewportWidth;
+      const offset = drag.direction === "open"
+        ? Math.max(-width, Math.min(0, -width + touch.clientX - started.startX))
+        : Math.max(-width, Math.min(0, touch.clientX - started.startX));
+      drawer.style.transition = "none";
+      drawer.style.transform = `translateX(${offset}px)`;
+      const backdrop = event.currentTarget.querySelector<HTMLElement>(".mobile-drawer-backdrop");
+      if (backdrop) {
+        const progress = 1 + offset / width;
+        backdrop.style.transition = "none";
+        backdrop.style.opacity = String(Math.max(0, Math.min(1, progress)));
+      }
     };
 
     const handleMobileTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
@@ -1603,24 +1801,42 @@ export function App() {
         endX: touch.clientX,
         endY: touch.clientY,
       });
-      if (!direction) return;
+      if (!direction || direction !== started.direction || started.axis !== "horizontal") {
+        if (started.direction !== null || started.axis === "horizontal" || started.axis === "cancelled") markSwipeClick();
+        if (started.previewActive || started.drawerWasOpen) finishSwipePreview(event.currentTarget, started.drawerWasOpen);
+        return;
+      }
 
-      suppressSwipeClickRef.current = true;
-      if (suppressSwipeClickTimerRef.current !== null) window.clearTimeout(suppressSwipeClickTimerRef.current);
-      suppressSwipeClickTimerRef.current = window.setTimeout(() => {
-        suppressSwipeClickRef.current = false;
-        suppressSwipeClickTimerRef.current = null;
-      }, 500);
-
+      markSwipeClick();
+      clearDrawerSwipeTimers();
+      const drawer = event.currentTarget.querySelector<HTMLElement>(".mobile-navigation-drawer");
+      const backdrop = event.currentTarget.querySelector<HTMLElement>(".mobile-drawer-backdrop");
+      if (drawer) {
+        const width = drawer.getBoundingClientRect().width || started.viewportWidth;
+        drawer.style.transition = "transform 180ms ease-out";
+        drawer.style.transform = direction === "open" ? "translateX(0)" : `translateX(-${width}px)`;
+      }
+      if (backdrop) {
+        backdrop.style.transition = "opacity 180ms ease-out";
+        backdrop.style.opacity = direction === "open" ? "1" : "0";
+      }
       if (direction === "open") {
         openMobileDrawer(event.currentTarget.querySelector<HTMLElement>(".mobile-menu-button"));
+        setMobileDrawerSwipePreview(false);
       } else {
-        closeMobileDrawer();
+        drawerSwipeCloseTimerRef.current = window.setTimeout(() => {
+          drawerSwipeCloseTimerRef.current = null;
+          closeMobileDrawer();
+        }, 185);
       }
     };
 
-    const handleMobileTouchCancel = () => {
+    const handleMobileTouchCancel = (event: React.TouchEvent<HTMLDivElement>) => {
+      const started = mobileDrawerTouchStartRef.current;
       mobileDrawerTouchStartRef.current = null;
+      if (started && (started.previewActive || started.drawerWasOpen)) {
+        finishSwipePreview(event.currentTarget, started.drawerWasOpen);
+      }
     };
 
     const handleSwipeClickCapture = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -1649,8 +1865,9 @@ export function App() {
     <div
       id={`fieldnotes-activity-${screen.activityId}`}
       data-fieldnotes-route={screen.kind}
-      className={`app-shell route-${screen.kind}${displayDocument ? " has-selection" : ""}`}
+      className={`app-shell route-${screen.kind}${displayDocument ? " has-selection" : ""}${workspaceRenderer === "desktop" && desktopSidebarCollapsed ? " sidebar-collapsed" : ""}`}
       onTouchStart={handleMobileTouchStart}
+      onTouchMove={handleMobileTouchMove}
       onTouchEnd={handleMobileTouchEnd}
       onTouchCancel={handleMobileTouchCancel}
       onClickCapture={handleSwipeClickCapture}
@@ -1673,7 +1890,7 @@ export function App() {
           <span>{connection === "connected" ? "Live" : connection === "connecting" ? "Syncing" : "Reconnecting"}</span>
         </div>
       </header>
-      {showDrawer && (
+      {drawerPresented && (
         <button
           type="button"
           className="mobile-drawer-backdrop"
@@ -1690,27 +1907,42 @@ export function App() {
         aria-hidden={workspaceRenderer === "mobile-stackflow" && !showDrawer}
         aria-modal={showDrawer ? true : undefined}
         role={showDrawer ? "dialog" : undefined}
+        inert={workspaceRenderer === "mobile-stackflow" && !showDrawer}
         tabIndex={-1}
-        hidden={workspaceRenderer === "mobile-stackflow" && !showDrawer}
+        hidden={workspaceRenderer === "mobile-stackflow" && !drawerPresented}
       >
         <button type="button" className="mobile-drawer-close" onClick={closeMobileDrawer}>
           <X size={18} aria-hidden="true" /><span>Close navigation</span>
         </button>
         <div className="brand-lockup">
-          <div className="brand-mark"><BookOpen size={18} strokeWidth={2.1} /></div>
-          <div>
-            <div className="brand-name">Fieldnotes</div>
-            <div className="brand-caption">PERSONAL LIBRARY</div>
+          <div className="brand-identity">
+            <div className="brand-mark"><BookOpen size={18} strokeWidth={2.1} /></div>
+            <div className="brand-copy">
+              <div className="brand-name">Fieldnotes</div>
+              <div className="brand-caption">PERSONAL LIBRARY</div>
+            </div>
           </div>
+          {workspaceRenderer === "desktop" && (
+            <button
+              type="button"
+              className="desktop-sidebar-toggle"
+              aria-label={desktopSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-expanded={!desktopSidebarCollapsed}
+              title={desktopSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              onClick={() => setDesktopSidebarCollapsed((collapsed) => !collapsed)}
+            >
+              {desktopSidebarCollapsed ? <PanelLeftOpen size={16} aria-hidden="true" /> : <PanelLeftClose size={16} aria-hidden="true" />}
+            </button>
+          )}
         </div>
 
         <div className="rail-section-label">YOUR SPACE</div>
-        <button className={`rail-link${screen.kind === "library" ? " active" : ""}`} type="button" onClick={() => void navigateToLibrary()}>
+        <button className={`rail-link${screen.kind === "library" ? " active" : ""}`} type="button" title="All notes" aria-label="All notes" onClick={() => void navigateToLibrary()}>
           <FileText size={16} />
           <span>All notes</span>
           <span className="rail-count">{documents.length}</span>
         </button>
-        <button className={`rail-link${screen.kind === "recent" ? " active" : ""}`} type="button" onClick={() => void navigateToRecent()}><Clock3 size={16} /><span>Recent changes</span></button>
+        <button className={`rail-link${screen.kind === "recent" ? " active" : ""}`} type="button" title="Recent changes" aria-label="Recent changes" onClick={() => void navigateToRecent()}><Clock3 size={16} /><span>Recent changes</span></button>
 
         {workspaceRenderer === "mobile-stackflow" && renderFolderBrowser("drawer")}
 
@@ -2040,6 +2272,7 @@ export function App() {
                 type="text"
                 value={draftTitle}
                 maxLength={160}
+                onFocus={(event) => keepEditorControlVisible(event.currentTarget)}
                 onChange={(event) => {
                   const nextTitle = event.currentTarget.value;
                   setDraftTitle(nextTitle);
@@ -2126,6 +2359,7 @@ export function App() {
                     if (notice === "Saved to this Mac.") setNotice("");
                   }}
                   spellCheck
+                  onFocus={(event) => keepEditorControlVisible(event.currentTarget)}
                   onSelect={(event) => rememberEditorSelection(event.currentTarget)}
                   onClick={(event) => rememberEditorSelection(event.currentTarget)}
                   onKeyUp={(event) => rememberEditorSelection(event.currentTarget)}
