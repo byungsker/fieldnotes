@@ -15,6 +15,7 @@ import {
   FolderPlus,
   Link2,
   LoaderCircle,
+  Menu,
   Moon,
   Pencil,
   Plus,
@@ -56,11 +57,22 @@ type BacklinksResponse = { backlinks: DocumentSummary[] };
 
 const LAST_SEQUENCE_KEY = "fieldnotes:last-change-sequence";
 const THEME_KEY = "fieldnotes:theme";
+const MOBILE_DRAWER_HISTORY_KEY = "fieldnotes:mobile-drawer";
 const MobileWorkspace = lazy(() => import("./stackflow").then((module) => ({ default: module.MobileWorkspace })));
 type ActiveFolder = string | "root" | null;
 type DraftSnapshot = { title: string; body: string; baseVersion: number };
 type SortOrder = "updated-desc" | "updated-asc" | "title-asc" | "title-desc";
 type ColorTheme = "dark" | "light";
+type DocumentListScrollSnapshot = { documentId: string | null; itemOffset: number; scrollTop: number };
+
+function hasMobileDrawerHistoryState(state: unknown): boolean {
+  return typeof state === "object" && state !== null && !Array.isArray(state) &&
+    (state as Record<string, unknown>)[MOBILE_DRAWER_HISTORY_KEY] === true;
+}
+
+function documentListViewKey(folderId: ActiveFolder, query: string, sortOrder: SortOrder): string {
+  return JSON.stringify({ folderId, query, sortOrder });
+}
 
 function initialTheme(): ColorTheme {
   return document.documentElement.dataset.theme === "light" ? "light" : "dark";
@@ -213,6 +225,7 @@ export function App() {
   const [importing, setImporting] = useState(false);
   const [actionDialog, setActionDialog] = useState<ActionDialogConfig | null>(null);
   const [routeError, setRouteError] = useState("");
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(() => hasMobileDrawerHistoryState(window.history.state));
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const markdownEditorRef = useRef<HTMLTextAreaElement>(null);
@@ -235,7 +248,15 @@ export function App() {
   const historyIndexRef = useRef(initialHistoryIndex);
   const currentRouteRef = useRef(currentRoute);
   const workspaceRendererRef = useRef(workspaceRenderer);
+  const activeActivityIdRef = useRef("desktop");
   const editorWasFocusedBeforeResizeRef = useRef(false);
+  const drawerHistoryEntryRef = useRef(hasMobileDrawerHistoryState(window.history.state));
+  const pendingDrawerNavigationRef = useRef<{ route: WorkspaceRoute; mode: "push" | "replace" } | null>(null);
+  const drawerReturnFocusRef = useRef<HTMLElement | null>(null);
+  const drawerWasOpenRef = useRef(hasMobileDrawerHistoryState(window.history.state));
+  const documentListScrollRef = useRef(new Map<string, DocumentListScrollSnapshot>());
+  const currentListViewKey = documentListViewKey(activeFolderId, query, sortOrder);
+  const currentListViewKeyRef = useRef(currentListViewKey);
 
   selectedRef.current = selectedDocument;
   draftTitleRef.current = draftTitle;
@@ -246,15 +267,98 @@ export function App() {
   activeViewRef.current = activeView;
   currentRouteRef.current = currentRoute;
   workspaceRendererRef.current = workspaceRenderer;
+  currentListViewKeyRef.current = currentListViewKey;
+
+  const storeDocumentListScroll = useCallback((list: HTMLElement) => {
+    if (workspaceRendererRef.current !== "mobile-stackflow") return;
+    if (!list.getClientRects().length) return;
+    const activeRoot = list.closest<HTMLElement>(".app-shell");
+    if (
+      !activeRoot ||
+      activeRoot.id !== "fieldnotes-activity-" + activeActivityIdRef.current ||
+      (activeRoot.dataset.fieldnotesRoute !== "library" && activeRoot.dataset.fieldnotesRoute !== "folder")
+    ) return;
+    const listRect = list.getBoundingClientRect();
+    const firstVisible = Array.from(list.querySelectorAll<HTMLElement>("[data-document-id]"))
+      .find((row) => row.getBoundingClientRect().bottom > listRect.top);
+    documentListScrollRef.current.set(list.dataset.listViewKey ?? currentListViewKeyRef.current, {
+      documentId: firstVisible?.dataset.documentId ?? null,
+      itemOffset: firstVisible ? firstVisible.getBoundingClientRect().top - listRect.top : 0,
+      scrollTop: list.scrollTop,
+    });
+  }, []);
+
+  const saveActiveDocumentListScroll = useCallback(() => {
+    if (workspaceRendererRef.current !== "mobile-stackflow") return;
+    const activeRoot = document.getElementById("fieldnotes-activity-" + activeActivityIdRef.current);
+    const list = activeRoot?.querySelector<HTMLElement>(".document-list");
+    if (list) storeDocumentListScroll(list);
+  }, [storeDocumentListScroll]);
+
+  const restoreDocumentListScroll = useCallback((list: HTMLElement) => {
+    const snapshot = documentListScrollRef.current.get(list.dataset.listViewKey ?? currentListViewKeyRef.current);
+    if (!snapshot) return;
+    const anchor = snapshot.documentId
+      ? Array.from(list.querySelectorAll<HTMLElement>("[data-document-id]"))
+        .find((row) => row.dataset.documentId === snapshot.documentId)
+      : null;
+    if (anchor) {
+      const currentOffset = anchor.getBoundingClientRect().top - list.getBoundingClientRect().top;
+      list.scrollTop += currentOffset - snapshot.itemOffset;
+    } else {
+      list.scrollTop = snapshot.scrollTop;
+    }
+  }, []);
+
+  const restoreMobileListScroll = useCallback((activityId: string) => {
+    const activeRoot = document.getElementById("fieldnotes-activity-" + activityId);
+    if (activeRoot?.dataset.fieldnotesRoute !== "library" && activeRoot?.dataset.fieldnotesRoute !== "folder") return;
+    const list = activeRoot.querySelector<HTMLElement>(".document-list");
+    if (list) restoreDocumentListScroll(list);
+  }, [restoreDocumentListScroll]);
+
+  const openMobileDrawer = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    if (workspaceRendererRef.current !== "mobile-stackflow") return;
+    drawerReturnFocusRef.current = event.currentTarget;
+    if (!drawerHistoryEntryRef.current) {
+      const currentState = window.history.state;
+      const base = typeof currentState === "object" && currentState !== null && !Array.isArray(currentState)
+        ? currentState as Record<string, unknown>
+        : {};
+      window.history.pushState(
+        { ...base, [MOBILE_DRAWER_HISTORY_KEY]: true },
+        "",
+        window.location.href,
+      );
+      drawerHistoryEntryRef.current = true;
+    }
+    drawerWasOpenRef.current = true;
+    setMobileDrawerOpen(true);
+  }, []);
+
+  const closeMobileDrawer = useCallback(() => {
+    if (drawerHistoryEntryRef.current) {
+      window.history.back();
+      return;
+    }
+    if (workspaceRendererRef.current !== "mobile-stackflow") return;
+    setMobileDrawerOpen(false);
+  }, []);
 
   const navigateRoute = useCallback((route: WorkspaceRoute, mode: "push" | "replace" = "push") => {
+    saveActiveDocumentListScroll();
+    if (drawerHistoryEntryRef.current) {
+      pendingDrawerNavigationRef.current = { route, mode };
+      window.history.back();
+      return;
+    }
     const nextIndex = mode === "push" ? historyIndexRef.current + 1 : historyIndexRef.current;
     const state = mergeWorkspaceHistoryState(window.history.state, nextIndex);
     window.history[mode === "push" ? "pushState" : "replaceState"](state, "", workspacePathForRoute(route));
     historyIndexRef.current = nextIndex;
     setHistoryIndex(nextIndex);
     setCurrentRoute(route);
-  }, []);
+  }, [saveActiveDocumentListScroll]);
 
   const navigation = useMemo<WorkspaceNavigation>(() => ({
     push(name, params) {
@@ -264,11 +368,15 @@ export function App() {
       navigateRoute(workspaceRouteForActivity(name, params), "replace");
     },
     pop() {
+      if (drawerHistoryEntryRef.current) {
+        closeMobileDrawer();
+        return;
+      }
       if (historyIndexRef.current > 0) window.history.back();
       else navigateRoute({ kind: "library" }, "replace");
     },
     canGoBack: historyIndex > 0,
-  }), [historyIndex, navigateRoute]);
+  }), [closeMobileDrawer, historyIndex, navigateRoute]);
 
   useEffect(() => {
     const existingIndex = workspaceHistoryIndex(window.history.state);
@@ -283,14 +391,114 @@ export function App() {
     historyIndexRef.current = index;
 
     const handlePopState = (event: PopStateEvent) => {
+      if (hasMobileDrawerHistoryState(event.state)) {
+        drawerHistoryEntryRef.current = true;
+        drawerWasOpenRef.current = true;
+        setMobileDrawerOpen(true);
+        return;
+      }
+      const closedDrawer = drawerHistoryEntryRef.current;
+      drawerHistoryEntryRef.current = false;
       const next = workspaceLocationFromHistory(window.location.pathname, event.state);
       historyIndexRef.current = next.historyIndex;
       setHistoryIndex(next.historyIndex);
+      if (closedDrawer) setMobileDrawerOpen(false);
+      const pendingNavigation = pendingDrawerNavigationRef.current;
+      if (closedDrawer && pendingNavigation) {
+        pendingDrawerNavigationRef.current = null;
+        navigateRoute(pendingNavigation.route, pendingNavigation.mode);
+        return;
+      }
       setCurrentRoute(next.route);
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
+  }, [navigateRoute]);
+
+  useEffect(() => {
+    if (workspaceRenderer !== "mobile-stackflow" || !mobileDrawerOpen) {
+      if (drawerWasOpenRef.current && !mobileDrawerOpen) {
+        drawerWasOpenRef.current = false;
+        window.requestAnimationFrame(() => {
+          const trigger = drawerReturnFocusRef.current;
+          const triggerWorkspace = trigger?.closest<HTMLElement>(".app-shell");
+          if (
+            trigger?.isConnected &&
+            trigger.getClientRects().length > 0 &&
+            triggerWorkspace?.id === "fieldnotes-activity-" + activeActivityIdRef.current
+          ) {
+            trigger.focus({ preventScroll: true });
+            return;
+          }
+          const activeWorkspace = document.getElementById("fieldnotes-activity-" + activeActivityIdRef.current);
+          const fallback = activeWorkspace?.querySelector<HTMLElement>(".workspace-title") ??
+            activeWorkspace?.querySelector<HTMLElement>("h1") ??
+            activeWorkspace?.querySelector<HTMLElement>(".editor-pane");
+          fallback?.focus({ preventScroll: true });
+        });
+      }
+      return;
+    }
+
+    drawerWasOpenRef.current = true;
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousRootOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    const activeWorkspace = document.getElementById("fieldnotes-activity-" + activeActivityIdRef.current);
+    const findDrawer = () => activeWorkspace?.querySelector<HTMLElement>(
+      ".mobile-navigation-drawer:not([hidden])",
+    ) ?? null;
+    const backgroundElements = Array.from(activeWorkspace?.querySelectorAll<HTMLElement>(
+      ".mobile-topbar, .note-column, .editor-pane",
+    ) ?? []);
+    const previousAriaHidden = new Map<HTMLElement, string | null>();
+    for (const element of backgroundElements) {
+      previousAriaHidden.set(element, element.getAttribute("aria-hidden"));
+      element.setAttribute("aria-hidden", "true");
+    }
+    const focusFrame = window.requestAnimationFrame(() => {
+      const drawer = findDrawer();
+      const closeButton = drawer?.querySelector<HTMLElement>(".mobile-drawer-close");
+      (closeButton ?? drawer)?.focus({ preventScroll: true });
+    });
+    const onDrawerKeyDown = (event: KeyboardEvent) => {
+      const drawer = findDrawer();
+      if (!drawer) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeMobileDrawer();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(drawer.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => element.getClientRects().length > 0);
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) {
+        event.preventDefault();
+        drawer.focus({ preventScroll: true });
+      } else if (event.shiftKey && (document.activeElement === first || !drawer.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus({ preventScroll: true });
+      } else if (!event.shiftKey && (document.activeElement === last || !drawer.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus({ preventScroll: true });
+      }
+    };
+    document.addEventListener("keydown", onDrawerKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", onDrawerKeyDown);
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousRootOverflow;
+      for (const [element, previousValue] of previousAriaHidden) {
+        if (previousValue === null) element.removeAttribute("aria-hidden");
+        else element.setAttribute("aria-hidden", previousValue);
+      }
+    };
+  }, [closeMobileDrawer, mobileDrawerOpen, workspaceRenderer]);
 
   const requestActionDialog = useCallback((config: ActionDialogConfig) => new Promise<ActionDialogResult>((resolve) => {
     dialogResolverRef.current = resolve;
@@ -335,6 +543,27 @@ export function App() {
       return collator.compare(left.title, right.title) || left.id.localeCompare(right.id);
     });
   }, [sortOrder, visibleDocuments]);
+
+  useEffect(() => {
+    if (workspaceRenderer !== "mobile-stackflow") return;
+    if (currentRoute.kind !== "library" && currentRoute.kind !== "folder") return;
+    let frame = 0;
+    let attempts = 0;
+    const restoreWhenActiveScreenIsReady = () => {
+      const activeRoot = document.getElementById("fieldnotes-activity-" + activeActivityIdRef.current);
+      const list = activeRoot?.querySelector<HTMLElement>(".document-list");
+      if (list && activeRoot?.dataset.fieldnotesRoute === currentRoute.kind) {
+        restoreDocumentListScroll(list);
+        return;
+      }
+      if (++attempts < 30) frame = window.requestAnimationFrame(restoreWhenActiveScreenIsReady);
+    };
+    frame = window.requestAnimationFrame(restoreWhenActiveScreenIsReady);
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [activeFolderId, currentListViewKey, currentRoute, orderedDocuments, restoreDocumentListScroll, sortOrder, workspaceRenderer]);
+
   const visibleFolderRows = useMemo(
     () => folderTreeRows(folders, expandedFolderIds),
     [expandedFolderIds, folders],
@@ -979,6 +1208,10 @@ export function App() {
       const editor = markdownEditorRef.current;
       editorWasFocusedBeforeResizeRef.current = Boolean(editor && document.activeElement === editor);
       if (editor) rememberEditorSelection(editor);
+      if (nextRenderer === "desktop" && drawerHistoryEntryRef.current) {
+        pendingDrawerNavigationRef.current = null;
+        window.history.back();
+      }
       workspaceRendererRef.current = nextRenderer;
       setWorkspaceRenderer(nextRenderer);
     };
@@ -1026,6 +1259,13 @@ export function App() {
   const toggleTheme = () => setTheme((current) => current === "dark" ? "light" : "dark");
 
   const renderWorkspace = (screen: WorkspaceScreen, routeNavigation: WorkspaceNavigation) => {
+    const activeScreen = screen.isActive !== false;
+    const showDrawer = activeScreen && workspaceRenderer === "mobile-stackflow" && mobileDrawerOpen;
+    if (activeScreen) activeActivityIdRef.current = screen.activityId;
+    const listFolderId = screen.kind === "folder"
+      ? screen.folderId === "unfiled" ? "root" : screen.folderId
+      : activeFolderId;
+    const listViewKey = documentListViewKey(listFolderId, query, sortOrder);
     const displayDocument = screen.kind === "document" && selectedDocument?.id === screen.documentId
       ? selectedDocument
       : null;
@@ -1045,6 +1285,7 @@ export function App() {
 
     const navigateToLibrary = async () => {
       if (screen.kind === "library") {
+        closeMobileDrawer();
         setQuery("");
         chooseFolder(null);
         setVisibleDocuments(documents);
@@ -1057,13 +1298,18 @@ export function App() {
     };
 
     const navigateToRecent = async () => {
-      if (screen.kind === "recent" || !await confirmDraftLeave()) return;
+      if (screen.kind === "recent") {
+        closeMobileDrawer();
+        return;
+      }
+      if (!await confirmDraftLeave()) return;
       routeNavigation.push("Recent", {});
     };
 
     const navigateToFolder = async (folderId: ActiveFolder) => {
       const routeId = folderId === null ? null : folderId === "root" ? "unfiled" : folderId;
       if (screen.kind === "folder" && screen.folderId === routeId) {
+        closeMobileDrawer();
         chooseFolder(folderId);
         return;
       }
@@ -1146,6 +1392,152 @@ export function App() {
       if (change.documentId) void navigateToDocument(change.documentId);
     };
 
+    const renderFolderBrowser = (surface: "list" | "drawer") => {
+      const folderInputId = "new-folder-name-" + screen.activityId + "-" + surface;
+      return (
+        <nav
+          className={"folder-browser " + (surface === "drawer" ? "drawer-folder-browser" : "list-folder-browser")}
+          aria-label="Folder navigation"
+        >
+          <div className="folder-browser-header">
+            <span>FOLDERS</span>
+            <button type="button" className="folder-create-trigger" onClick={() => beginFolderCreate(null)}>
+              <FolderPlus size={13} /> New folder
+            </button>
+          </div>
+          <button
+            type="button"
+            className={"folder-nav-item" + (activeFolderId === null ? " active" : "")}
+            onClick={() => void navigateToFolder(null)}
+            aria-current={activeFolderId === null ? "page" : undefined}
+          >
+            <FileText size={14} /><span>All notes</span><span className="folder-count">{documents.length}</span>
+          </button>
+          <button
+            type="button"
+            className={"folder-nav-item" + (activeFolderId === "root" ? " active" : "")}
+            onClick={() => void navigateToFolder("root")}
+            aria-current={activeFolderId === "root" ? "page" : undefined}
+          >
+            <Folder size={14} /><span>Unfiled</span><span className="folder-count">{documents.filter((document) => document.folderId === null).length}</span>
+          </button>
+          <div className="folder-tree-list">
+            {visibleFolderRows.map(({ folder, depth, hasChildren }) => (
+              <div className="folder-tree-row" key={folder.id}>
+                <span className="folder-depth-space" style={{ width: (depth * 13) + "px" }} aria-hidden="true" />
+                {hasChildren ? (
+                  <button
+                    type="button"
+                    className="folder-disclosure"
+                    aria-label={(expandedFolderIds.has(folder.id) ? "Collapse " : "Expand ") + folder.name}
+                    aria-expanded={expandedFolderIds.has(folder.id)}
+                    onClick={() => setExpandedFolderIds((current) => {
+                      const next = new Set(current);
+                      if (next.has(folder.id)) next.delete(folder.id);
+                      else next.add(folder.id);
+                      return next;
+                    })}
+                  >
+                    {expandedFolderIds.has(folder.id) ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                  </button>
+                ) : <span className="folder-disclosure-spacer" aria-hidden="true" />}
+                <button
+                  type="button"
+                  className={"folder-nav-item folder-tree-button" + (activeFolderId === folder.id ? " active" : "")}
+                  onClick={() => void navigateToFolder(folder.id)}
+                  aria-current={activeFolderId === folder.id ? "page" : undefined}
+                  title={folderPathById.get(folder.id)}
+                >
+                  {activeFolderId === folder.id ? <FolderOpen size={14} /> : <Folder size={14} />}
+                  <span>{folder.name}</span><span className="folder-count">{folder.documentCount}</span>
+                </button>
+                <button
+                  type="button"
+                  className="folder-row-action"
+                  aria-label={"Rename " + folder.name}
+                  title={"Rename " + folder.name}
+                  onClick={() => void renameFolder(folder.id)}
+                ><Pencil size={13} /></button>
+              </div>
+            ))}
+          </div>
+          {creatingFolderParent !== undefined && (
+            <form className="folder-create-form" onSubmit={(event) => void createFolderAndOpen(event)}>
+              <label htmlFor={folderInputId}>
+                New {creatingFolderParent ? "subfolder in " + (folderPathById.get(creatingFolderParent) ?? "folder") : "top-level folder"}
+              </label>
+              <input
+                id={folderInputId}
+                value={newFolderName}
+                onChange={(event) => setNewFolderName(event.currentTarget.value)}
+                maxLength={120}
+                autoFocus={surface === "drawer" ? showDrawer : true}
+                required
+              />
+              <div>
+                <button type="submit">Create</button>
+                <button type="button" onClick={() => setCreatingFolderParent(undefined)}>Cancel</button>
+              </div>
+            </form>
+          )}
+          {activeFolder && (
+            <div className="folder-admin" aria-label={activeFolder.name + " folder actions"}>
+              <div className="folder-admin-actions">
+                <button type="button" onClick={() => beginFolderCreate(activeFolder.id)}><FolderPlus size={13} /> Subfolder</button>
+                <button type="button" onClick={() => void renameActiveFolder()}>Rename</button>
+                <button type="button" onClick={() => void deleteFolderAndReturn()}>Delete empty</button>
+              </div>
+              <label className="folder-move-label">
+                Move folder
+                <select
+                  value={activeFolder.parentId ?? "root"}
+                  onChange={(event) => void moveActiveFolder(event.currentTarget.value)}
+                  aria-label={"Move " + activeFolder.name + " to parent folder"}
+                >
+                  <option value="root">Top level</option>
+                  {folders.filter((folder) => !excludedFolderParents.has(folder.id)).map((folder) => (
+                    <option key={folder.id} value={folder.id}>{folderPathById.get(folder.id) ?? folder.name}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
+        </nav>
+      );
+    };
+
+    const renderListTools = (surface: "desktop" | "drawer") => (
+      <>
+        <button
+          type="button"
+          className={"text-tool" + (surface === "drawer" ? " drawer-tool" : "")}
+          onClick={() => fileInputRef.current?.click()}
+          disabled={importing}
+        >
+          {importing ? <LoaderCircle className="spin" size={14} /> : <ArrowUpFromLine size={14} />}
+          {surface === "drawer" ? "Import Markdown" : "Import"}
+        </button>
+        <button
+          type="button"
+          className={"text-tool" + (surface === "drawer" ? " drawer-tool" : "")}
+          onClick={() => void exportNotes()}
+          title="Download a JSON export"
+        >
+          <ArrowDownToLine size={14} /> {surface === "drawer" ? "Export backup" : "Export"}
+        </button>
+        <input
+          ref={fileInputRef}
+          className="visually-hidden"
+          type="file"
+          accept=".md,.markdown,text/markdown"
+          multiple
+          tabIndex={-1}
+          onChange={(event) => void importMarkdown(event)}
+          aria-label="Select Markdown files to import"
+        />
+      </>
+    );
+
     if (screen.kind === "not-found") {
       return (
         <main id={`fieldnotes-activity-${screen.activityId}`} data-fieldnotes-route="not-found" className="route-not-found">
@@ -1159,7 +1551,47 @@ export function App() {
 
     return (
     <div id={`fieldnotes-activity-${screen.activityId}`} data-fieldnotes-route={screen.kind} className={`app-shell route-${screen.kind}${displayDocument ? " has-selection" : ""}`}>
-      <aside className="left-rail" aria-label="Workspace">
+      <header className="mobile-topbar" aria-hidden={showDrawer}>
+        <button
+          type="button"
+          className="mobile-menu-button"
+          aria-label="Open navigation"
+          aria-expanded={showDrawer}
+          aria-controls={"fieldnotes-mobile-drawer-" + screen.activityId}
+          onClick={openMobileDrawer}
+        ><Menu size={19} aria-hidden="true" /></button>
+        <div className="mobile-topbar-brand">
+          <span className="brand-mark"><BookOpen size={17} strokeWidth={2.1} /></span>
+          <span>Fieldnotes</span>
+        </div>
+        <div className="mobile-topbar-sync" aria-label={connectionLabel} aria-live="polite">
+          <span className={"connection-dot " + connection} aria-hidden="true" />
+          <span>{connection === "connected" ? "Live" : connection === "connecting" ? "Syncing" : "Reconnecting"}</span>
+        </div>
+      </header>
+      {showDrawer && (
+        <button
+          type="button"
+          className="mobile-drawer-backdrop"
+          aria-label="Close navigation"
+          aria-hidden="true"
+          tabIndex={-1}
+          onClick={closeMobileDrawer}
+        />
+      )}
+      <aside
+        id={"fieldnotes-mobile-drawer-" + screen.activityId}
+        className="left-rail mobile-navigation-drawer"
+        aria-label={showDrawer ? "Navigation and folders" : "Workspace"}
+        aria-hidden={workspaceRenderer === "mobile-stackflow" && !showDrawer}
+        aria-modal={showDrawer ? true : undefined}
+        role={showDrawer ? "dialog" : undefined}
+        tabIndex={-1}
+        hidden={workspaceRenderer === "mobile-stackflow" && !showDrawer}
+      >
+        <button type="button" className="mobile-drawer-close" onClick={closeMobileDrawer}>
+          <X size={18} aria-hidden="true" /><span>Close navigation</span>
+        </button>
         <div className="brand-lockup">
           <div className="brand-mark"><BookOpen size={18} strokeWidth={2.1} /></div>
           <div>
@@ -1175,6 +1607,8 @@ export function App() {
           <span className="rail-count">{documents.length}</span>
         </button>
         <button className={`rail-link${screen.kind === "recent" ? " active" : ""}`} type="button" onClick={() => void navigateToRecent()}><Clock3 size={16} /><span>Recent changes</span></button>
+
+        {workspaceRenderer === "mobile-stackflow" && renderFolderBrowser("drawer")}
 
         <div className="recent-heading">
           <span className="rail-section-label">RECENT ACTIVITY</span>
@@ -1199,6 +1633,22 @@ export function App() {
           ))}
           {recentChanges.length === 0 && <p className="activity-empty">New edits will appear here.</p>}
         </div>
+
+        {workspaceRenderer === "mobile-stackflow" && (
+          <section className="mobile-drawer-secondary" aria-label="More options">
+            <div className="rail-section-label">MORE</div>
+            <button
+              type="button"
+              className="drawer-action"
+              onClick={toggleTheme}
+              aria-label={theme === "dark" ? "Switch to light appearance" : "Switch to dark appearance"}
+            >
+              {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+              <span>{theme === "dark" ? "Light appearance" : "Dark appearance"}</span>
+            </button>
+            <div className="mobile-drawer-data-actions">{renderListTools("drawer")}</div>
+          </section>
+        )}
 
         <div className="rail-bottom">
           <div className="local-badge"><span className={`connection-dot ${connection}`} />{connectionLabel}</div>
@@ -1237,7 +1687,8 @@ export function App() {
           {!query && <kbd>⌘ K</kbd>}
         </label>
 
-        <nav className="folder-browser" aria-label="Folder navigation">
+        {workspaceRenderer === "desktop" && (
+        <nav className="folder-browser list-folder-browser" aria-label="Folder navigation">
           <div className="folder-browser-header">
             <span>FOLDERS</span>
             <button type="button" className="folder-create-trigger" onClick={() => beginFolderCreate(null)}>
@@ -1340,27 +1791,11 @@ export function App() {
             </div>
           )}
         </nav>
+        )}
 
         <div className="list-subhead">
           <span>{query ? `${visibleDocuments.length} RESULTS` : activeFolderId === "root" ? "UNFILED NOTES" : activeFolder ? folderPathById.get(activeFolder.id)?.toUpperCase() : "ALL NOTES"}</span>
-          <div className="list-tools">
-            <button type="button" className="text-tool" onClick={() => fileInputRef.current?.click()} disabled={importing}>
-              {importing ? <LoaderCircle className="spin" size={14} /> : <ArrowUpFromLine size={14} />}
-              Import
-            </button>
-            <button type="button" className="text-tool" onClick={() => void exportNotes()} title="Download a JSON export">
-              <ArrowDownToLine size={14} /> Export
-            </button>
-            <input
-              ref={fileInputRef}
-              className="visually-hidden"
-              type="file"
-              accept=".md,.markdown,text/markdown"
-              multiple
-              onChange={(event) => void importMarkdown(event)}
-              aria-label="Select Markdown files to import"
-            />
-          </div>
+          {workspaceRenderer === "desktop" && <div className="list-tools">{renderListTools("desktop")}</div>}
         </div>
 
         <div className="list-filter-row">
@@ -1383,13 +1818,19 @@ export function App() {
 
         {listError && <div className="list-error"><span>{listError}</span><button type="button" onClick={() => void refreshDocuments()}><RefreshCw size={14} /> Retry</button></div>}
 
-        <div className="document-list" role="list">
+        <div
+          className="document-list"
+          role="list"
+          data-list-view-key={listViewKey}
+          onScroll={(event) => storeDocumentListScroll(event.currentTarget)}
+        >
           {orderedDocuments.map((document) => (
             <button
               className={`document-row${screen.kind === "document" && screen.documentId === document.id ? " selected" : ""}`}
               type="button"
               key={document.id}
               role="listitem"
+              data-document-id={document.id}
               onClick={() => void navigateToDocument(document.id)}
             >
               <div className="document-row-top">
@@ -1584,7 +2025,7 @@ export function App() {
   );
   };
 
-  const appViewContext: AppViewContextValue = { currentRoute, navigation, renderWorkspace };
+  const appViewContext: AppViewContextValue = { currentRoute, navigation, renderWorkspace, restoreMobileListScroll };
   const desktopScreen = { ...currentRoute, activityId: "desktop" } as WorkspaceScreen;
 
   return (

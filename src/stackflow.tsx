@@ -28,6 +28,8 @@ function ActivityScreen({ route }: { route: WorkspaceRoute }) {
   const flow = useFlow();
   const stack = useStack();
   const activity = useActivity();
+  const currentRouteKind = app.currentRoute.kind;
+  const restoreMobileListScroll = app.restoreMobileListScroll;
   const active = stack.activities.find((item) => item.isActive)?.id === activity.id;
 
   useEffect(() => {
@@ -40,15 +42,18 @@ function ActivityScreen({ route }: { route: WorkspaceRoute }) {
     if (!active) return;
     const frame = window.requestAnimationFrame(() => {
       const activityRoot = document.getElementById(`fieldnotes-activity-${activity.id}`);
-      const target = app.currentRoute.kind === "document"
+      if (currentRouteKind === "library" || currentRouteKind === "folder") {
+        restoreMobileListScroll(activity.id);
+      }
+      const target = currentRouteKind === "document"
         ? activityRoot?.querySelector<HTMLElement>(".editor-pane")
         : activityRoot?.querySelector<HTMLElement>(".workspace-title") ?? activityRoot?.querySelector<HTMLElement>("h1");
       target?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [active, activity.id, app.currentRoute.kind]);
+  }, [active, activity.id, currentRouteKind, restoreMobileListScroll]);
 
-  const workspaceScreen = { ...app.currentRoute, activityId: activity.id } as WorkspaceScreen;
+  const workspaceScreen = { ...app.currentRoute, activityId: activity.id, isActive: active } as WorkspaceScreen;
 
   return (
     <AppScreen className="fieldnotes-stack-screen">
