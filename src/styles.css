@@ -1,4 +1,5 @@
 :root {
+  font-size: 16px;
   color-scheme: light;
   font-family: "Avenir Next", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #28322e;
@@ -19,7 +20,7 @@
 }
 
 * { box-sizing: border-box; }
-body { min-width: 320px; min-height: 100vh; margin: 0; }
+body { min-width: 320px; min-height: 100vh; margin: 0; font-size: 16px; }
 button, input, textarea { font: inherit; }
 button { color: inherit; }
 button, input, textarea, select { touch-action: manipulation; }
@@ -28,6 +29,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 
 .fieldnotes-stack { position: relative; width: 100%; height: 100vh; height: 100dvh; overflow: hidden; background: var(--surface); }
 .fieldnotes-stack-screen { background: var(--surface); }
+.desktop-workspace-root, .mobile-workspace-root { width: 100%; height: 100vh; height: 100dvh; overflow: hidden; background: var(--surface); }
 .app-shell { display: grid; grid-template-columns: 228px 330px minmax(0, 1fr); width: 100%; min-height: 100vh; height: 100vh; overflow: hidden; background: var(--surface); }
 .left-rail { display: flex; flex-direction: column; min-width: 0; padding: 27px 17px 18px; background: #f6f7f4; border-right: 1px solid #e9ebe7; }
 .brand-lockup { display: flex; align-items: center; gap: 11px; padding: 0 8px; margin: 0 0 49px; }
@@ -401,11 +403,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .recent-workspace { display: flex; flex: 1; flex-direction: column; min-height: 100%; overflow-y: auto; background: var(--surface); }
 
 @media (min-width: 821px) {
-  .fieldnotes-stack {
-    --stackflow-plugin-basic-ui-transition-duration: 0ms !important;
-    --stackflow-plugin-basic-ui-computed-transition-duration: 0ms !important;
-    --stackflow-plugin-basic-ui-app-bar-height-transition-duration: 0ms !important;
-  }
+  :root, body { font-size: 16px; }
   .brand-caption, .rail-section-label, .eyebrow, .list-subhead > span, .backlinks-heading { font-size: 10px; }
   .rail-link { font-size: 13px; }
   .search-box { height: 42px; }

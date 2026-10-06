@@ -1,21 +1,13 @@
 import { createContext, useContext } from "react";
-import type { Stack } from "@stackflow/core";
-import type { Actions } from "@stackflow/react";
 import type { ReactNode } from "react";
+import type { WorkspaceNavigation, WorkspaceRoute } from "./workspace-routing";
 
-type ScreenActivity = { activityId: string };
-export type WorkspaceRoute =
-  | { kind: "library" }
-  | { kind: "recent" }
-  | { kind: "folder"; folderId: string }
-  | { kind: "document"; documentId: string }
-  | { kind: "not-found" };
-export type WorkspaceScreen = WorkspaceRoute & ScreenActivity;
+export type WorkspaceScreen = WorkspaceRoute & { activityId: string };
 
 export type AppViewContextValue = {
-  renderWorkspace: (screen: WorkspaceScreen, flow: Actions, stack: Stack) => ReactNode;
-  ensureDocumentForRoute: (id: string) => Promise<void>;
-  selectFolderForRoute: (id: string) => void;
+  currentRoute: WorkspaceRoute;
+  navigation: WorkspaceNavigation;
+  renderWorkspace: (screen: WorkspaceScreen, navigation: WorkspaceNavigation) => ReactNode;
 };
 
 export const AppViewContext = createContext<AppViewContextValue | null>(null);

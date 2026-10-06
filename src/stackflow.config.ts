@@ -18,6 +18,5 @@ export const stackConfig = defineConfig({
     { name: "Document", route: "/notes/:documentId" },
     { name: "NotFound", route: "/404" },
   ],
-  initialActivity: () => "Library",
   transitionDuration: 280,
 });
