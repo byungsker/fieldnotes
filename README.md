@@ -19,6 +19,8 @@ The first database gets three clearly labeled demo notes. They contain no import
 ## Use the app
 
 - Create, edit, preview, search, and delete Markdown notes.
+- Navigate with browser history and Stackflow transitions. The library is `/`, recent activity is `/recent`, folders use `/folders/<folder-id>` (or `/folders/unfiled`), and notes use `/notes/<note-id>`. These URLs can be bookmarked and reloaded directly.
+- On small screens, opening a note becomes a full-screen editor route. Confirmations and rename prompts use keyboard-aware, accessible dialogs; Back closes an open dialog before leaving the current route.
 - Create an unlimited number of nested folders, including empty folders. Select folders to browse direct notes, create notes in the current folder, rename or move folders, and move notes between folders. Deleting a folder is allowed only when it has no notes or subfolders.
 - Write `[[Note title]]` to link a note. Links resolve by case-insensitive title; backlinks appear in Preview. Unresolved links remain visible.
 - See saved activity and live changes from other browser tabs or agents. Each saved change is committed to SQLite before success is returned and then published through SSE. Reconnecting clients replay the durable change log and refresh current notes.
