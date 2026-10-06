@@ -4,6 +4,7 @@ import {
   ArrowDownUp,
   ArrowUpFromLine,
   BookOpen,
+  CalendarDays,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -184,6 +185,18 @@ function relativeDate(value: string): string {
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d ago`;
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function documentDateTime(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "Unknown";
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function operationLabel(operation: ChangeRecord["operation"]): string {
@@ -1984,7 +1997,7 @@ export function App() {
             <header className="editor-toolbar">
               <div className="editor-breadcrumb">
                 <button className="mobile-back" type="button" onClick={backFromDocument} aria-label="Back to notes"><ChevronLeft size={18} /></button>
-                <span className="breadcrumb-muted">{displayDocument.folderId ? folderPathById.get(displayDocument.folderId)?.toUpperCase() ?? "FOLDER" : "UNFILED"}</span><span className="breadcrumb-divider">/</span>
+                <span className="breadcrumb-muted">{displayDocument.folderId ? folderPathById.get(displayDocument.folderId) ?? "Folder" : "Unfiled"}</span><span className="breadcrumb-divider">/</span>
                 <span className="breadcrumb-title">{draftTitle || "Untitled note"}</span>
               </div>
               <div className="toolbar-actions">
@@ -2036,21 +2049,70 @@ export function App() {
                 }}
                 aria-label="Note title"
               />
-              <div className="document-meta">
-                <span>Markdown note</span><span className="meta-separator">·</span><span>Edited {relativeDate(displayDocument.updatedAt)}</span><span className="meta-separator">·</span><span>v{displayDocument.version}</span>
-                <label className="document-folder-label">
-                  Folder
-                  <select
-                    aria-label="Move note to folder"
-                    value={displayDocument.folderId ?? "root"}
-                    disabled={saveState === "saving"}
-                    onChange={(event) => void moveDocumentToFolder(event.currentTarget.value === "root" ? null : event.currentTarget.value)}
-                  >
-                    <option value="root">Unfiled</option>
-                    {folders.map((folder) => <option key={folder.id} value={folder.id}>{folderPathById.get(folder.id) ?? folder.name}</option>)}
-                  </select>
-                </label>
-              </div>
+              {workspaceRenderer === "mobile-stackflow" ? (
+                <div className="document-properties" aria-label="Note properties">
+                  <div className="document-property-row">
+                    <span className="document-property-icon" aria-hidden="true">
+                      {saveState === "saving" ? <LoaderCircle className="spin" size={18} />
+                        : saveState === "conflict" ? <RefreshCw size={18} />
+                          : saveState === "error" ? <X size={18} />
+                            : saveState === "unsaved" ? <span className="document-status-unsaved" />
+                              : <Check size={18} />}
+                    </span>
+                    <span className="document-property-label">Status</span>
+                    <span className="document-property-value">
+                      <span className={`document-state-pill ${saveState}`}><span className={`document-state-dot ${saveState}`} aria-hidden="true" />{saveStateLabel(saveState)}</span>
+                    </span>
+                  </div>
+                  <div className="document-property-row">
+                    <span className="document-property-icon" aria-hidden="true"><CalendarDays size={18} /></span>
+                    <span className="document-property-label">Created</span>
+                    <time className="document-property-value" dateTime={displayDocument.createdAt}>{documentDateTime(displayDocument.createdAt)}</time>
+                  </div>
+                  <label className="document-property-row document-folder-property">
+                    <span className="document-property-icon" aria-hidden="true"><Folder size={18} /></span>
+                    <span className="document-property-label">Folder</span>
+                    <span className="document-property-value">
+                      <select
+                        aria-label="Move note to folder"
+                        value={displayDocument.folderId ?? "root"}
+                        disabled={saveState === "saving"}
+                        onChange={(event) => void moveDocumentToFolder(event.currentTarget.value === "root" ? null : event.currentTarget.value)}
+                      >
+                        <option value="root">Unfiled</option>
+                        {folders.map((folder) => <option key={folder.id} value={folder.id}>{folderPathById.get(folder.id) ?? folder.name}</option>)}
+                      </select>
+                    </span>
+                  </label>
+                  <div className="document-property-row">
+                    <span className="document-property-icon" aria-hidden="true"><Clock3 size={18} /></span>
+                    <span className="document-property-label">Updated</span>
+                    <time className="document-property-value" dateTime={displayDocument.updatedAt}>{documentDateTime(displayDocument.updatedAt)}</time>
+                  </div>
+                  <div className="document-property-row">
+                    <span className="document-property-icon" aria-hidden="true"><FileText size={18} /></span>
+                    <span className="document-property-label">Version</span>
+                    <span className="document-property-value">v{displayDocument.version}</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="document-meta">
+                  <span>Markdown note</span><span className="meta-separator">·</span><span>Edited {relativeDate(displayDocument.updatedAt)}</span><span className="meta-separator">·</span><span>v{displayDocument.version}</span>
+                  <label className="document-folder-label">
+                    Folder
+                    <select
+                      aria-label="Move note to folder"
+                      value={displayDocument.folderId ?? "root"}
+                      disabled={saveState === "saving"}
+                      onChange={(event) => void moveDocumentToFolder(event.currentTarget.value === "root" ? null : event.currentTarget.value)}
+                    >
+                      <option value="root">Unfiled</option>
+                      {folders.map((folder) => <option key={folder.id} value={folder.id}>{folderPathById.get(folder.id) ?? folder.name}</option>)}
+                    </select>
+                  </label>
+                </div>
+              )}
+              {workspaceRenderer === "mobile-stackflow" && <div className="document-divider" aria-hidden="true" />}
               {activeView === "write" ? (
                 <textarea
                   ref={markdownEditorRef}

@@ -402,6 +402,257 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .recent-editor-pane { overflow-y: auto; }
 .recent-workspace { display: flex; flex: 1; flex-direction: column; min-height: 100%; overflow-y: auto; background: var(--surface); }
 
+/* Mobile document view follows the quieter, property-first reading rhythm of the reference. */
+@media (max-width: 820px) {
+  .app-shell.route-document {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .app-shell.route-document .mobile-topbar { display: none; }
+  .app-shell.route-document .editor-pane { grid-row: 1; }
+
+  .app-shell.route-document .editor-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-items: stretch;
+    gap: 4px;
+    flex: 0 0 auto;
+    min-height: 0;
+    padding: calc(env(safe-area-inset-top, 0px) + 5px) 14px 8px;
+    background: var(--surface);
+  }
+
+  .app-shell.route-document .editor-breadcrumb {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    grid-template-rows: minmax(22px, auto) 18px;
+    align-items: center;
+    column-gap: 10px;
+    min-height: 48px;
+  }
+
+  .app-shell.route-document .mobile-back {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    width: 44px;
+    height: 44px;
+    color: var(--ink);
+    border-radius: 12px;
+  }
+
+  .app-shell.route-document .breadcrumb-muted {
+    display: block;
+    grid-column: 2;
+    grid-row: 2;
+    overflow: hidden;
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 12px;
+    letter-spacing: 0;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    text-transform: none;
+    white-space: nowrap;
+  }
+
+  .app-shell.route-document .breadcrumb-divider { display: none; }
+
+  .app-shell.route-document .breadcrumb-title {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: end;
+    max-width: 100%;
+    color: var(--ink);
+    font-size: 16px;
+    font-weight: 650;
+    line-height: 1.25;
+  }
+
+  .app-shell.route-document .toolbar-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 6px;
+    width: 100%;
+  }
+
+  .app-shell.route-document .save-indicator {
+    flex: 1 1 56px;
+    min-width: 48px;
+    gap: 5px;
+    font-size: 12px;
+  }
+
+  .app-shell.route-document .view-switch { flex: 0 0 auto; min-height: 42px; }
+  .app-shell.route-document .view-switch button { min-width: 48px; min-height: 38px; padding: 0 8px; font-size: 13px; }
+  .app-shell.route-document .save-button { flex: 0 0 auto; min-width: 66px; height: 42px; min-height: 42px; padding: 0 9px; font-size: 13px; }
+  .app-shell.route-document .toolbar-delete { flex: 0 0 42px; width: 42px; height: 42px; }
+
+  .app-shell.route-document .document-editor {
+    align-self: stretch;
+    width: 100%;
+    max-width: 760px;
+    min-height: 0;
+    padding: 25px 22px 0;
+    margin: 0 auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .app-shell.route-document .document-editor::-webkit-scrollbar { display: none; }
+
+  .app-shell.route-document .title-input {
+    color: var(--ink);
+    font-family: inherit;
+    font-size: clamp(32px, 8.7vw, 40px);
+    font-weight: 700;
+    letter-spacing: -.7px;
+    line-height: 1.18;
+  }
+
+  .document-properties {
+    display: grid;
+    gap: 1px;
+    margin-top: 24px;
+  }
+
+  .document-property-row {
+    display: grid;
+    grid-template-columns: 22px minmax(78px, .48fr) minmax(0, 1fr);
+    align-items: center;
+    column-gap: 12px;
+    min-height: 46px;
+    min-width: 0;
+    color: var(--ink);
+    font-size: 15px;
+    line-height: 1.4;
+  }
+
+  .document-property-icon { display: grid; place-items: center; color: var(--muted); }
+  .document-status-unsaved { width: 8px; height: 8px; border-radius: 50%; background: #d1a052; }
+  .document-property-label { min-width: 0; color: var(--muted); }
+  .document-property-value { display: block; min-width: 0; overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
+
+  .document-state-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    max-width: 100%;
+    padding: 4px 10px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--canvas);
+    font-size: 14px;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .document-state-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; background: #7da988; }
+  .document-state-dot.unsaved, .document-state-dot.saving { background: #d1a052; }
+  .document-state-dot.conflict, .document-state-dot.error { background: #d47767; }
+  .document-folder-property select {
+    width: 100%;
+    max-width: 100%;
+    min-height: 40px;
+    padding: 0 18px 0 0;
+    overflow: hidden;
+    color: var(--ink);
+    border: 0;
+    background: transparent;
+    font-size: 15px !important;
+    text-overflow: ellipsis;
+  }
+
+  .document-divider { flex: 0 0 1px; height: 1px; margin: 20px 0 10px; background: var(--line); }
+
+  .app-shell.route-document .markdown-editor {
+    min-height: 180px;
+    padding-top: 8px;
+    font-size: 16px !important;
+    line-height: 1.8;
+  }
+
+  .app-shell.route-document .preview-scroll {
+    flex: 0 0 auto;
+    min-height: auto;
+    overflow: visible;
+    padding: 8px 0 14px;
+  }
+
+  .app-shell.route-document .markdown-body {
+    max-width: 700px;
+    margin: 0 auto;
+    color: var(--ink);
+    font-family: "Apple SD Gothic Neo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 17px;
+    letter-spacing: -.12px;
+    line-height: 1.72;
+  }
+
+  .app-shell.route-document .markdown-body p { margin: 1.15em 0; }
+  .app-shell.route-document .markdown-body h1,
+  .app-shell.route-document .markdown-body h2,
+  .app-shell.route-document .markdown-body h3,
+  .app-shell.route-document .markdown-body h4 { font-family: inherit; font-weight: 650; }
+  .app-shell.route-document .markdown-body h1 { font-size: 29px; line-height: 1.28; }
+  .app-shell.route-document .markdown-body h2 { margin-top: 1.55em; font-size: 24px; line-height: 1.35; }
+  .app-shell.route-document .markdown-body h3 { margin-top: 1.4em; font-size: 20px; line-height: 1.4; }
+  .app-shell.route-document .markdown-body ul,
+  .app-shell.route-document .markdown-body ol { padding-left: 1.35em; }
+  .app-shell.route-document .markdown-body li { padding-left: .18em; margin: .35em 0; }
+
+  .app-shell.route-document .editor-status {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    flex: 0 0 auto;
+    min-height: 46px;
+    padding: 9px 0 max(9px, env(safe-area-inset-bottom, 0px));
+    margin-top: 8px;
+    background: var(--surface);
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 380px) {
+  .app-shell.route-document .editor-toolbar { padding-right: 12px; padding-left: 12px; }
+  .app-shell.route-document .document-editor { padding-right: 18px; padding-left: 18px; }
+  .app-shell.route-document .document-property-row { grid-template-columns: 20px minmax(70px, .44fr) minmax(0, 1fr); column-gap: 9px; font-size: 14px; }
+  .app-shell.route-document .view-switch button { min-width: 44px; padding-right: 6px; padding-left: 6px; }
+  .app-shell.route-document .save-button { min-width: 60px; padding-right: 7px; padding-left: 7px; }
+}
+
+html[data-theme="dark"] .app-shell.route-document .editor-pane,
+html[data-theme="dark"] .app-shell.route-document .editor-toolbar,
+html[data-theme="dark"] .app-shell.route-document .document-editor,
+html[data-theme="dark"] .app-shell.route-document .editor-status { background: #191919; }
+html[data-theme="dark"] .app-shell.route-document .editor-toolbar,
+html[data-theme="dark"] .app-shell.route-document .editor-status { border-color: #353535; }
+html[data-theme="dark"] .app-shell.route-document .breadcrumb-muted,
+html[data-theme="dark"] .app-shell.route-document .document-property-label,
+html[data-theme="dark"] .app-shell.route-document .document-property-icon { color: #999; }
+html[data-theme="dark"] .app-shell.route-document .breadcrumb-title,
+html[data-theme="dark"] .app-shell.route-document .title-input,
+html[data-theme="dark"] .app-shell.route-document .document-property-value,
+html[data-theme="dark"] .app-shell.route-document .markdown-body { color: #ededed; }
+html[data-theme="dark"] .app-shell.route-document .document-divider { background: #363636; }
+html[data-theme="dark"] .app-shell.route-document .document-state-pill { color: #ededed; background: #2c2c2c; }
+html[data-theme="dark"] .app-shell.route-document .document-state-pill.saved { color: #e3eee5; background: #315139; }
+html[data-theme="dark"] .app-shell.route-document .document-state-pill.unsaved,
+html[data-theme="dark"] .app-shell.route-document .document-state-pill.saving { color: #f0d6a7; background: #483923; }
+html[data-theme="dark"] .app-shell.route-document .document-state-pill.conflict,
+html[data-theme="dark"] .app-shell.route-document .document-state-pill.error { color: #f2c0b4; background: #482d28; }
+html[data-theme="dark"] .app-shell.route-document .document-folder-property select { color: #ededed; background: transparent; }
+html[data-theme="dark"] .app-shell.route-document .markdown-body h1,
+html[data-theme="dark"] .app-shell.route-document .markdown-body h2,
+html[data-theme="dark"] .app-shell.route-document .markdown-body h3,
+html[data-theme="dark"] .app-shell.route-document .markdown-body h4 { color: #f2f2f2; }
+
 @media (min-width: 821px) {
   :root, body { font-size: 16px; }
   .brand-caption, .rail-section-label, .eyebrow, .list-subhead > span, .backlinks-heading { font-size: 10px; }

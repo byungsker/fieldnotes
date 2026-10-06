@@ -6,7 +6,8 @@ import { test } from "node:test";
 const root = path.resolve(import.meta.dirname, "..");
 const stylesheet = readFileSync(path.join(root, "src/styles.css"), "utf8");
 const html = readFileSync(path.join(root, "index.html"), "utf8");
-const mobileStart = stylesheet.lastIndexOf("@media (max-width: 820px)");
+const mobileTopbarStart = stylesheet.indexOf(".mobile-topbar, .mobile-drawer-backdrop, .mobile-drawer-close");
+const mobileStart = stylesheet.indexOf("@media (max-width: 820px)", mobileTopbarStart);
 assert.ok(mobileStart >= 0, "mobile breakpoint exists");
 const mobileStyles = stylesheet.slice(mobileStart, stylesheet.indexOf("@media (max-width: 380px)", mobileStart));
 const narrowStyles = stylesheet.slice(stylesheet.indexOf("@media (max-width: 380px)", mobileStart));
@@ -46,4 +47,14 @@ test("mobile zoom remains available for accessibility", () => {
   assert.match(viewport, /width=device-width/);
   assert.doesNotMatch(viewport, /maximum-scale\s*=\s*1|user-scalable\s*=\s*no/i);
   assert.doesNotMatch(stylesheet, /touch-action\s*:\s*none/i);
+});
+
+test("mobile note detail follows the reference's compact header and property-first rhythm", () => {
+  assert.match(stylesheet, /\.app-shell\.route-document \.mobile-topbar \{ display: none; \}/);
+  assert.match(stylesheet, /\.app-shell\.route-document \.editor-toolbar \{[\s\S]*?position: sticky;/);
+  assert.match(stylesheet, /\.document-properties \{[\s\S]*?display: grid;/);
+  assert.match(stylesheet, /\.document-property-row \{[\s\S]*?grid-template-columns: 22px/);
+  assert.match(stylesheet, /\.app-shell\.route-document \.markdown-body \{[\s\S]*?font-size: 17px;/);
+  assert.match(stylesheet, /\.app-shell\.route-document \.editor-status \{[\s\S]*?position: sticky;/);
+  assert.match(stylesheet, /html\[data-theme="dark"\] \.app-shell\.route-document \.editor-pane[\s\S]*?background: #191919;/);
 });
