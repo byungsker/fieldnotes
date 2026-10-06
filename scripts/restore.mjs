@@ -17,7 +17,7 @@ function checkDatabase(database, label) {
   const result = database.prepare("PRAGMA quick_check").get();
   if (result?.quick_check !== "ok") throw new Error(`${label} failed SQLite quick_check.`);
   const version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 1) throw new Error(`${label} schema ${version} is newer than this app supports.`);
+  if (version > 2) throw new Error(`${label} schema ${version} is newer than this app supports.`);
 }
 
 function assertNoServerLock() {

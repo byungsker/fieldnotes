@@ -5,8 +5,11 @@ import express from "express";
 import type { ChangeRecord } from "./types.js";
 import {
   createDocument,
+  createFolder,
   deleteDocument,
+  deleteFolder,
   exportDocuments,
+  getFolder,
   getBacklinks,
   getChangesAfter,
   getDocument,
@@ -14,7 +17,13 @@ import {
   getRecentChanges,
   importDocuments,
   listDocuments,
+  listFolders,
+  DuplicateFolderNameError,
+  FolderCycleError,
+  FolderNotEmptyError,
+  MissingFolderError,
   MissingDocumentError,
+  updateFolder,
   updateDocument,
   VersionConflictError,
   type ImportedDocument,
@@ -23,6 +32,7 @@ import {
 
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_TITLE_LENGTH = 160;
+const MAX_FOLDER_NAME_LENGTH = 120;
 const MAX_BODY_LENGTH = 250_000;
 const MAX_IMPORT_FILES = 100;
 const MAX_IMPORT_BYTES = 5_000_000;
@@ -47,6 +57,39 @@ function requestDocumentId(request: Request): string {
   const value = request.params.id;
   if (typeof value !== "string") throw new RequestValidationError("Note id must be a UUID.");
   return validateDocumentId(value);
+}
+
+function validateFolderId(value: unknown): string {
+  if (typeof value !== "string" || !ID_PATTERN.test(value)) {
+    throw new RequestValidationError("Folder id must be a UUID.");
+  }
+  return value;
+}
+
+function requestFolderId(request: Request): string {
+  return validateFolderId(request.params.id);
+}
+
+function validateFolderName(value: unknown): string {
+  if (typeof value !== "string") throw new RequestValidationError("Folder name must be text.");
+  const name = value.trim();
+  if (!name) throw new RequestValidationError("Folder name cannot be empty.");
+  if (name.length > MAX_FOLDER_NAME_LENGTH) {
+    throw new RequestValidationError(`Folder name must be ${MAX_FOLDER_NAME_LENGTH} characters or fewer.`);
+  }
+  const hasControlCharacter = [...name].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint < 32 || codePoint === 127;
+  });
+  if (name === "." || name === ".." || name.includes("/") || name.includes("\\") || hasControlCharacter) {
+    throw new RequestValidationError("Folder names cannot contain path separators or control characters.");
+  }
+  return name;
+}
+
+function validateFolderParent(value: unknown): string | null {
+  if (value === null) return null;
+  return validateFolderId(value);
 }
 
 function validateTitle(value: unknown): string {
@@ -90,9 +133,10 @@ function validateImport(value: unknown): ImportedDocument[] {
     const record = item as Record<string, unknown>;
     const title = validateTitle(record.title);
     const body = validateBody(record.body);
+    const folderId = record.folderId === undefined ? null : validateFolderParent(record.folderId);
     totalCharacters += title.length + body.length;
     if (totalCharacters > MAX_IMPORT_BYTES) throw new RequestValidationError("Import is too large (5 MB maximum).");
-    return { title, body };
+    return { title, body, folderId };
   });
 }
 
@@ -148,13 +192,20 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
   });
 
   app.get("/api/documents", (request, response) => {
-    response.json({ documents: listDocuments(database.db, String(request.query.q ?? "")) });
+    const rawFolderId = request.query.folderId;
+    const folderId = rawFolderId === undefined
+      ? undefined
+      : rawFolderId === "root"
+        ? null
+        : validateFolderId(String(rawFolderId));
+    response.json({ documents: listDocuments(database.db, String(request.query.q ?? ""), folderId) });
   });
 
   app.post("/api/documents", (request, response) => {
     const title = validateTitle(request.body?.title);
     const body = validateBody(request.body?.body ?? "");
-    const document = createDocument(database, title, body);
+    const folderId = request.body?.folderId === undefined ? null : validateFolderParent(request.body.folderId);
+    const document = createDocument(database, title, body, folderId);
     response.status(201).json({ document });
   });
 
@@ -167,7 +218,10 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
     const expectedVersion = validateVersion(request.body?.expectedVersion);
     const title = validateTitle(request.body?.title);
     const body = validateBody(request.body?.body);
-    const document = updateDocument(database, id, expectedVersion, title, body);
+    const folderId = Object.hasOwn(request.body ?? {}, "folderId")
+      ? validateFolderParent(request.body.folderId)
+      : undefined;
+    const document = updateDocument(database, id, expectedVersion, title, body, folderId);
     response.json({ document });
   });
 
@@ -175,6 +229,43 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
     const id = requestDocumentId(request);
     const expectedVersion = validateVersion(request.body?.expectedVersion);
     deleteDocument(database, id, expectedVersion);
+    response.status(204).end();
+  });
+
+  app.get("/api/folders", (_request, response) => {
+    response.json({ folders: listFolders(database.db) });
+  });
+
+  app.post("/api/folders", (request, response) => {
+    const name = validateFolderName(request.body?.name);
+    const parentId = request.body?.parentId === undefined ? null : validateFolderParent(request.body.parentId);
+    const folder = createFolder(database, name, parentId);
+    response.status(201).json({ folder });
+  });
+
+  app.get("/api/folders/:id", (request, response) => {
+    const folder = getFolder(database.db, requestFolderId(request));
+    if (!folder) {
+      sendError(response, 404, "not_found", "Folder not found.");
+      return;
+    }
+    response.json({ folder });
+  });
+
+  app.put("/api/folders/:id", (request, response) => {
+    const id = requestFolderId(request);
+    const expectedVersion = validateVersion(request.body?.expectedVersion);
+    const updates: { name?: string; parentId?: string | null } = {};
+    if (Object.hasOwn(request.body ?? {}, "name")) updates.name = validateFolderName(request.body.name);
+    if (Object.hasOwn(request.body ?? {}, "parentId")) updates.parentId = validateFolderParent(request.body.parentId);
+    if (!Object.keys(updates).length) throw new RequestValidationError("Provide a folder name or parentId to update.");
+    response.json({ folder: updateFolder(database, id, expectedVersion, updates) });
+  });
+
+  app.delete("/api/folders/:id", (request, response) => {
+    const id = requestFolderId(request);
+    const expectedVersion = validateVersion(request.body?.expectedVersion);
+    deleteFolder(database, id, expectedVersion);
     response.status(204).end();
   });
 
@@ -233,7 +324,7 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
   app.get("/api/export", (_request, response) => {
     const exportedAt = new Date().toISOString();
     response.setHeader("Content-Disposition", `attachment; filename="fieldnotes-${exportedAt.slice(0, 10)}.json"`);
-    response.json({ format: "fieldnotes-export", schemaVersion: 1, exportedAt, documents: exportDocuments(database.db) });
+    response.json({ format: "fieldnotes-export", schemaVersion: 2, exportedAt, folders: listFolders(database.db), documents: exportDocuments(database.db) });
   });
 
   app.use("/api", (_request, response) => {
@@ -268,6 +359,22 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
     }
     if (error instanceof MissingDocumentError) {
       sendError(response, 404, "not_found", error.message);
+      return;
+    }
+    if (error instanceof MissingFolderError) {
+      sendError(response, 404, "not_found", error.message);
+      return;
+    }
+    if (error instanceof FolderNotEmptyError) {
+      sendError(response, 409, "folder_not_empty", error.message);
+      return;
+    }
+    if (error instanceof FolderCycleError) {
+      sendError(response, 409, "folder_cycle", error.message);
+      return;
+    }
+    if (error instanceof DuplicateFolderNameError) {
+      sendError(response, 409, "duplicate_folder", error.message);
       return;
     }
     const bodyError = error as { type?: string; status?: number; message?: string };

@@ -14,11 +14,12 @@ npm run dev
 
 Open [http://127.0.0.1:4177](http://127.0.0.1:4177). The Vite UI proxies `/api` to the local Node API. For a production-style local run, use `npm run build` and then `npm start`; it serves the built UI and API from the same local origin.
 
-The first database gets three clearly labeled demo notes. They contain no imported user data. Demo seeding runs once; deleting all notes later does not recreate them. `.env` is optional and contains no secrets; edit it only to change local paths or ports.
+The first database gets three clearly labeled demo notes. They contain no imported user data. Demo seeding runs once; deleting all notes later does not recreate them. `.env` is optional and contains no secrets. The default API port is 4178 during development and 4177 for `npm start`; leave `KB_PORT` unset for these defaults. If you change ports, update `KB_API_ORIGIN` for the Vite proxy and set `KB_BASE_URL` to the local API origin for the CLI.
 
 ## Use the app
 
 - Create, edit, preview, search, and delete Markdown notes.
+- Create an unlimited number of nested folders, including empty folders. Select folders to browse direct notes, create notes in the current folder, rename or move folders, and move notes between folders. Deleting a folder is allowed only when it has no notes or subfolders.
 - Write `[[Note title]]` to link a note. Links resolve by case-insensitive title; backlinks appear in Preview. Unresolved links remain visible.
 - See saved activity and live changes from other browser tabs or agents. Each saved change is committed to SQLite before success is returned and then published through SSE. Reconnecting clients replay the durable change log and refresh current notes.
 - If a note changes while you have a draft open, Fieldnotes keeps your text in the editor and marks the conflict. Load the latest version to replace the draft, or save after resolving it.
@@ -31,13 +32,22 @@ The CLI calls the same API the UI uses. Codex, Hermes, Claude Code, or another l
 ```sh
 npm run kb -- list
 npm run kb -- search "meeting notes"
+npm run kb -- folder list
+npm run kb -- folder create --name "Projects"
+npm run kb -- folder create --name "Research" --parent FOLDER_ID
 npm run kb -- read NOTE_ID
-npm run kb -- create --title "New note" --file ./new-note.md
-npm run kb -- update NOTE_ID --version 3 --file ./revised-note.md
+npm run kb -- create --title "New note" --file ./new-note.md --folder FOLDER_ID
+npm run kb -- update NOTE_ID --version 3 --file ./revised-note.md --folder FOLDER_ID
+npm run kb -- move-document NOTE_ID --version 4 --folder root
+npm run kb -- folder rename FOLDER_ID --version 1 --name "Active projects"
+npm run kb -- folder move FOLDER_ID --version 2 --parent root
+npm run kb -- folder delete FOLDER_ID --version 3
 npm run kb -- delete NOTE_ID --version 4
 ```
 
 `update` and `delete` require the version seen on the last read. A stale version returns a conflict and makes no change. For direct clients, see [API.md](./API.md). Set `KB_BASE_URL` for a different local/private API origin; the default is `http://127.0.0.1:4177`.
+
+`folder list` prints the hierarchy and each folder's version. Folder rename, move, and delete require `--version` from the latest folder list/read. Empty folders are first-class records. Folder names cannot contain `/`, `\\`, control characters, `.` or `..`; duplicate sibling names and cyclic moves are rejected. There is no configured depth or folder-count cap, subject to available storage and runtime limits.
 
 ## Data, backup, and restore
 
@@ -49,7 +59,7 @@ Create and verify a safe SQLite snapshot while Fieldnotes is running:
 npm run db:backup -- /path/to/backups/fieldnotes-YYYY-MM-DD.sqlite
 ```
 
-This uses SQLite `VACUUM INTO`, so the snapshot includes committed WAL data. It does not copy the live database file directly. The app also offers a JSON export from the UI and `/api/export`.
+This uses SQLite `VACUUM INTO`, so the snapshot includes committed WAL data. It does not copy the live database file directly. The app also offers a versioned JSON export from the UI and `/api/export`; exports include the folder hierarchy and each note's folder ID.
 
 To restore, stop Fieldnotes first. The restore script requires `--server-stopped`, checks the server lock and SQLite integrity, stages the replacement in the data directory, and creates a `pre-restore-*.sqlite` snapshot of current data before replacing it:
 
@@ -57,7 +67,7 @@ To restore, stop Fieldnotes first. The restore script requires `--server-stopped
 npm run db:restore -- /path/to/fieldnotes-backup.sqlite --server-stopped
 ```
 
-If a schema migration is added later, back up first, review the migration in `server/database.ts`, then run `npm run db:migrate`. The service applies forward migrations on startup too; the explicit command reports the current schema version. Keep the code version and data backup together when moving machines.
+The folder hierarchy uses SQLite schema version 2. The app migrates version 1 databases forward on startup. Before an explicit migration, stop Fieldnotes, make a verified backup, review the migration in `server/database.ts`, then run `npm run db:migrate`; the script refuses to run while a server lock exists. Restore accepts schema versions supported by this app and the next start applies pending forward migrations. Keep the code version and data backup together when moving machines.
 
 ## Moving to another Mac
 
@@ -65,4 +75,4 @@ Transfer the project source, `package.json`, `package-lock.json`, and `.env.exam
 
 ## Remote access
 
-The server refuses non-loopback `KB_HOST` values and the API does not implement user accounts or authentication tokens. Keep it on `127.0.0.1`; do not expose it directly to a network. Any remote deployment needs a separately reviewed identity-aware access layer and verification of writes and SSE connections before use.
+The server refuses non-loopback `KB_HOST` values and the API does not implement user accounts or authentication tokens. Keep it on `127.0.0.1`; do not expose it directly to a network. A viable future private setup is a TLS reverse proxy on a private network that authenticates every route before forwarding to the loopback-only app: OIDC/SSO for browser use and short-lived bearer tokens for agent CLI requests. The CLI can forward `KB_AUTH_TOKEN` to an HTTPS origin (or loopback for local use); the proxy must validate it. The proxy must protect reads, writes, import/export, and SSE, and must preserve SSE streaming/reconnect behavior. `KB_PUBLIC_ORIGIN` and CORS are not authentication. This project does not configure a proxy, identity provider, credentials, firewall, or remote access; review and test that layer before enabling it.

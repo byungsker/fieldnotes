@@ -19,5 +19,6 @@ screenshots/
 *.jpeg
 *.webp
 Fieldnotes-portable.zip
+Fieldnotes-*-portable.zip
 server.lock
 .DS_Store

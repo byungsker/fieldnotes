@@ -62,7 +62,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .list-header { display: flex; align-items: center; justify-content: space-between; padding: 34px 25px 20px; }
 .eyebrow { margin-bottom: 8px; color: #9aa19b; font-size: 9px; }
 .list-title-row { display: flex; align-items: center; gap: 8px; }
-.list-title-row h1 { margin: 0; font-family: var(--serif); font-size: 26px; font-weight: 500; letter-spacing: -.4px; }
+.list-title-row h1 { max-width: 220px; overflow: hidden; margin: 0; font-family: var(--serif); font-size: 26px; font-weight: 500; letter-spacing: -.4px; text-overflow: ellipsis; white-space: nowrap; }
 .total-count { display: grid; place-items: center; min-width: 19px; height: 18px; padding: 0 5px; margin-top: 3px; color: #819083; background: #edf0eb; border-radius: 5px; font-family: var(--mono); font-size: 9px; }
 .icon-button { display: grid; place-items: center; width: 33px; height: 33px; padding: 0; color: #68746a; border: 1px solid #e4e8e2; border-radius: 9px; background: #fff; cursor: pointer; transition: background .15s ease, border-color .15s ease, color .15s ease; }
 .icon-button:hover { color: #3f684a; border-color: #d2dfd2; background: #f5f8f4; }
@@ -75,6 +75,33 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .search-box input:focus-visible { outline: none; }
 .search-box kbd, .editor-status kbd { padding: 2px 5px; color: #a0a69f; border: 1px solid #eceeeb; border-radius: 4px; background: #fafaf9; font-family: var(--mono); font-size: 9px; white-space: nowrap; }
 .clear-search { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; color: #9ba29c; border: 0; background: transparent; cursor: pointer; }
+.folder-browser { flex: 0 1 auto; max-height: 285px; overflow: auto; padding: 9px; margin: 0 13px 14px; border: 1px solid #eceeea; border-radius: 9px; background: #fff; }
+.folder-browser-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 1px 2px 7px; color: #a1a8a1; font-family: var(--mono); font-size: 8px; letter-spacing: 1px; }
+.folder-create-trigger { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 6px; color: #607867; border: 0; border-radius: 5px; background: transparent; font-family: inherit; font-size: 9px; letter-spacing: 0; cursor: pointer; }
+.folder-create-trigger:hover, .folder-admin-actions button:hover { color: #3f684a; background: #f1f5f0; }
+.folder-nav-item { display: flex; align-items: center; gap: 7px; width: 100%; min-width: 0; min-height: 31px; padding: 4px 7px; color: #758078; text-align: left; border: 0; border-radius: 6px; background: transparent; font-size: 10px; cursor: pointer; }
+.folder-nav-item:hover { background: #f4f6f3; }
+.folder-nav-item.active { color: #41674b; background: #edf3eb; font-weight: 600; }
+.folder-nav-item > svg { flex: 0 0 auto; color: #8a9a8d; }
+.folder-nav-item > span:first-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-count { flex: 0 0 auto; margin-left: auto; color: #a1aaa2; font-family: var(--mono); font-size: 8px; }
+.folder-tree-list { display: flex; flex-direction: column; }
+.folder-tree-row { display: flex; align-items: center; min-width: 0; min-height: 31px; }
+.folder-depth-space { flex: 0 0 auto; }
+.folder-disclosure, .folder-disclosure-spacer { display: grid; flex: 0 0 auto; place-items: center; width: 22px; height: 28px; }
+.folder-disclosure { padding: 0; color: #9aa49b; border: 0; border-radius: 5px; background: transparent; cursor: pointer; }
+.folder-disclosure:hover { color: #4e765d; background: #f2f5f1; }
+.folder-tree-button { flex: 1 1 auto; min-width: 0; }
+.folder-create-form { display: flex; flex-direction: column; gap: 6px; padding: 9px 2px 3px; margin-top: 5px; border-top: 1px solid #edf0eb; }
+.folder-create-form label, .folder-move-label { color: #77827a; font-size: 9px; }
+.folder-create-form input, .folder-move-label select { min-width: 0; min-height: 34px; padding: 0 8px; color: #47534b; border: 1px solid #e2e7e1; border-radius: 6px; background: #fff; font-size: 10px; }
+.folder-create-form > div, .folder-admin-actions { display: flex; align-items: center; gap: 5px; }
+.folder-create-form button, .folder-admin-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 32px; padding: 0 8px; color: #647369; border: 1px solid #e6ebe4; border-radius: 6px; background: #fafbf9; font-size: 9px; cursor: pointer; }
+.folder-create-form button[type="submit"] { color: white; border-color: #557b61; background: #5a8064; }
+.folder-admin { display: flex; flex-direction: column; gap: 7px; padding: 8px 1px 2px; margin-top: 7px; border-top: 1px solid #edf0eb; }
+.folder-admin-actions { flex-wrap: wrap; }
+.folder-move-label { display: flex; align-items: center; gap: 8px; }
+.folder-move-label select { flex: 1 1 auto; }
 .list-subhead { display: flex; align-items: center; justify-content: space-between; padding: 0 23px 10px; color: #a1a8a1; }
 .list-tools { display: flex; align-items: center; gap: 9px; }
 .text-tool { display: inline-flex; align-items: center; gap: 4px; padding: 2px 0; color: #849087; border: 0; background: transparent; font-size: 9px; cursor: pointer; }
@@ -130,6 +157,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .title-input { width: 100%; padding: 0; color: #29342d; border: 0; outline: none; background: transparent; font-family: var(--serif); font-size: clamp(32px, 3.1vw, 42px); font-weight: 400; letter-spacing: -.7px; line-height: 1.2; }
 .title-input:focus-visible { outline: 2px solid rgba(78, 118, 93, .28); outline-offset: 5px; border-radius: 3px; }
 .document-meta { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: #a1a8a1; font-size: 10px; }
+.document-folder-label { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; color: #8b968d; }
+.document-folder-label select { max-width: min(300px, 30vw); min-height: 30px; padding: 0 8px; overflow: hidden; color: #607469; border: 1px solid #e4e9e2; border-radius: 6px; background: #fbfcfa; font-size: 10px; text-overflow: ellipsis; }
 .meta-separator { color: #c9cec8; }
 .markdown-editor { flex: 1; width: 100%; min-height: 150px; padding: 35px 0 20px; resize: none; color: #465149; border: 0; outline: none; background: transparent; font-family: var(--mono); font-size: 12px; line-height: 1.9; tab-size: 2; }
 .markdown-editor:focus-visible { outline: 2px solid rgba(78, 118, 93, .28); outline-offset: 5px; border-radius: 3px; }
@@ -232,6 +261,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
   .mobile-save-state.unsaved, .mobile-save-state.saving { color: #9a744f; }
   .mobile-save-state.conflict, .mobile-save-state.error { color: #ad6e5a; }
   .icon-button { width: 44px; height: 44px; }
+  .folder-browser { max-height: 235px; margin-right: 12px; margin-left: 12px; }
+  .folder-nav-item { min-height: 38px; }
+  .folder-disclosure, .folder-disclosure-spacer { width: 28px; height: 38px; }
   .search-box { height: 44px; }
   .clear-search { width: 44px; height: 44px; min-width: 44px; margin-right: -10px; }
   .text-tool { min-width: 44px; min-height: 44px; padding: 0 4px; font-size: 10px; }
@@ -241,6 +273,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
   .app-shell { grid-template-columns: minmax(0, 1fr); }
   .list-header { padding: 18px 16px 12px; }
   .list-title-row h1 { font-size: 25px; }
+  .list-title-row h1 { max-width: min(250px, 68vw); }
   .search-box { margin-right: 12px; margin-left: 12px; }
   .list-subhead { min-height: 48px; padding: 0 12px 4px; }
   .list-tools { gap: 2px; }
@@ -266,6 +299,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
   .document-editor { overflow-y: auto; overscroll-behavior: contain; padding: 20px 16px 10px; }
   .title-input { font-size: clamp(28px, 8vw, 32px); }
   .document-meta { flex-wrap: wrap; gap: 6px; font-size: 9px; }
+  .document-folder-label { margin-left: 0; }
+  .document-folder-label select { max-width: min(58vw, 230px); min-height: 40px; }
   .markdown-editor { min-height: 140px; padding-top: 18px; font-size: 12px; line-height: 1.75; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
   .preview-scroll { padding: 20px 0 12px; overscroll-behavior: contain; }
   .markdown-body pre { padding: 13px 12px; font-size: 10px; }
