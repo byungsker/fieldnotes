@@ -1,6 +1,7 @@
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { remarkWikiLinks } from "./remark-wikilinks";
+import { markdownBodyForPreview } from "./markdown-preview";
 import type { DocumentSummary } from "./types";
 
 type MarkdownBodyProps = {
@@ -15,6 +16,7 @@ function normalizeTitle(title: string): string {
 
 export function MarkdownBody({ markdown, documents, onOpenDocument }: MarkdownBodyProps) {
   const byTitle = new Map(documents.map((document) => [normalizeTitle(document.title), document]));
+  const previewMarkdown = markdownBodyForPreview(markdown);
 
   return (
     <div className="markdown-body">
@@ -63,7 +65,7 @@ export function MarkdownBody({ markdown, documents, onOpenDocument }: MarkdownBo
           },
         }}
       >
-        {markdown}
+        {previewMarkdown}
       </ReactMarkdown>
     </div>
   );

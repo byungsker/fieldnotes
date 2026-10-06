@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine,
+  ArrowDownUp,
   ArrowUpFromLine,
   BookOpen,
   Check,
@@ -14,10 +15,13 @@ import {
   FolderPlus,
   Link2,
   LoaderCircle,
+  Moon,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
   Save,
+  Sun,
   Trash2,
   X,
 } from "lucide-react";
@@ -40,8 +44,15 @@ type ChangesResponse = { changes: ChangeRecord[]; highWatermark: number };
 type BacklinksResponse = { backlinks: DocumentSummary[] };
 
 const LAST_SEQUENCE_KEY = "fieldnotes:last-change-sequence";
+const THEME_KEY = "fieldnotes:theme";
 type ActiveFolder = string | "root" | null;
 type DraftSnapshot = { title: string; body: string; baseVersion: number };
+type SortOrder = "updated-desc" | "updated-asc" | "title-asc" | "title-desc";
+type ColorTheme = "dark" | "light";
+
+function initialTheme(): ColorTheme {
+  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+}
 
 function hasDraftChanged(document: DocumentRecord | null, title: string, body: string): boolean {
   return Boolean(document && (title !== document.title || body !== document.body));
@@ -174,6 +185,8 @@ export function App() {
   const [draftTitle, setDraftTitle] = useState("");
   const [draftBody, setDraftBody] = useState("");
   const [query, setQuery] = useState("");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("updated-desc");
+  const [theme, setTheme] = useState<ColorTheme>(initialTheme);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [externalVersion, setExternalVersion] = useState<number | null>(null);
@@ -186,7 +199,11 @@ export function App() {
   const [routeError, setRouteError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const markdownEditorRef = useRef<HTMLTextAreaElement>(null);
   const notesHeadingRef = useRef<HTMLHeadingElement>(null);
+  const actionDialogRef = useRef(actionDialog);
+  const activeViewRef = useRef(activeView);
+  const editorSelectionRef = useRef<{ start: number; end: number; direction: "forward" | "backward" | "none" } | null>(null);
   const selectedRef = useRef<DocumentRecord | null>(null);
   const draftTitleRef = useRef("");
   const draftBodyRef = useRef("");
@@ -205,6 +222,8 @@ export function App() {
   draftBodyRef.current = draftBody;
   queryRef.current = query;
   activeFolderRef.current = activeFolderId;
+  actionDialogRef.current = actionDialog;
+  activeViewRef.current = activeView;
 
   const requestActionDialog = useCallback((config: ActionDialogConfig) => new Promise<ActionDialogResult>((resolve) => {
     dialogResolverRef.current = resolve;
@@ -237,6 +256,18 @@ export function App() {
       (draftTitle !== selectedDocument.title || draftBody !== selectedDocument.body),
   );
   const folderPathById = useMemo(() => folderPaths(folders), [folders]);
+  const orderedDocuments = useMemo(() => {
+    const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+    return [...visibleDocuments].sort((left, right) => {
+      if (sortOrder === "title-asc" || sortOrder === "title-desc") {
+        const titleOrder = collator.compare(left.title, right.title);
+        return (sortOrder === "title-asc" ? titleOrder : -titleOrder) || left.id.localeCompare(right.id);
+      }
+      const updatedOrder = Date.parse(left.updatedAt) - Date.parse(right.updatedAt);
+      if (updatedOrder !== 0) return sortOrder === "updated-asc" ? updatedOrder : -updatedOrder;
+      return collator.compare(left.title, right.title) || left.id.localeCompare(right.id);
+    });
+  }, [sortOrder, visibleDocuments]);
   const visibleFolderRows = useMemo(
     () => folderTreeRows(folders, expandedFolderIds),
     [expandedFolderIds, folders],
@@ -309,7 +340,11 @@ export function App() {
     }
   }, []);
 
-  const acceptDocument = useCallback((document: DocumentRecord, restoreDraft = true) => {
+  const acceptDocument = useCallback((
+    document: DocumentRecord,
+    restoreDraft = true,
+    view: "write" | "preview" = "preview",
+  ) => {
     const cachedDraft = restoreDraft ? draftsRef.current.get(document.id) : undefined;
     if (!restoreDraft) draftsRef.current.delete(document.id);
     selectedRef.current = document;
@@ -321,7 +356,8 @@ export function App() {
     setExternalVersion(versionChanged ? document.version : null);
     setExternalDelete(false);
     setBacklinks([]);
-    setActiveView("write");
+    activeViewRef.current = view;
+    setActiveView(view);
     setNotice(versionChanged
       ? "A newer version was saved elsewhere. Your draft is still here."
       : cachedDraft ? "Unsaved draft restored in this tab." : "");
@@ -385,7 +421,7 @@ export function App() {
         setSaveState("conflict");
         setNotice("A newer version was saved elsewhere. Your draft is still here.");
       } else {
-        acceptDocument(response.document);
+        acceptDocument(response.document, true, activeViewRef.current);
         void refreshBacklinks(response.document.id);
       }
     } catch {
@@ -400,6 +436,12 @@ export function App() {
       let more = true;
       while (more) {
         const response = await apiRequest<ChangesResponse>(`/api/changes?after=${sequenceRef.current}`);
+        if (response.highWatermark < sequenceRef.current) {
+          sequenceRef.current = 0;
+          sessionStorage.setItem(LAST_SEQUENCE_KEY, "0");
+          more = true;
+          continue;
+        }
         for (const change of response.changes) await applyIncomingChange(change);
         more = response.changes.length === 500 && sequenceRef.current < response.highWatermark;
       }
@@ -442,6 +484,9 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229 || actionDialogRef.current) return;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (target?.closest("dialog[open], [role='dialog']")) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
         void saveDocument();
@@ -449,6 +494,12 @@ export function App() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         searchInputRef.current?.focus();
+      }
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && !event.repeat && event.key.toLowerCase() === "e") {
+        if (!selectedRef.current) return;
+        if (target?.closest("input:not(.title-input), select, [contenteditable='true']")) return;
+        event.preventDefault();
+        switchEditorView(activeViewRef.current === "write" ? "preview" : "write");
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -474,7 +525,7 @@ export function App() {
         `/api/documents/${selected.id}`,
         jsonRequest("PUT", { expectedVersion: selected.version, title, body }),
       );
-      acceptDocument(response.document, false);
+      acceptDocument(response.document, false, activeViewRef.current);
       await Promise.all([refreshDocuments(), refreshRecent(), refreshBacklinks(response.document.id)]);
       setNotice("Saved to this Mac.");
     } catch (error) {
@@ -500,7 +551,7 @@ export function App() {
     try {
       const folderId = activeFolderId && activeFolderId !== "root" ? activeFolderId : null;
       const response = await apiRequest<DocumentResponse>("/api/documents", jsonRequest("POST", { title: "Untitled note", body: "", folderId }));
-      acceptDocument(response.document);
+      acceptDocument(response.document, true, "write");
       await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
       void refreshBacklinks(response.document.id);
       return response.document;
@@ -576,7 +627,7 @@ export function App() {
     }
     try {
       const response = await apiRequest<DocumentResponse>(`/api/documents/${selected.id}`);
-      acceptDocument(response.document, false);
+      acceptDocument(response.document, false, activeViewRef.current);
       void refreshBacklinks(response.document.id);
       setNotice("Loaded the latest version.");
     } catch (error) {
@@ -702,20 +753,21 @@ export function App() {
     }
   };
 
-  const renameActiveFolder = async () => {
-    if (!activeFolder) return;
+  const renameFolder = async (folderId: string) => {
+    const folder = folders.find((candidate) => candidate.id === folderId);
+    if (!folder) return;
     const name = await requestText({
       title: "Rename folder",
       description: "Choose a name for this folder.",
       label: "Folder name",
-      initialValue: activeFolder.name,
+      initialValue: folder.name,
       submitLabel: "Save name",
       maxLength: 120,
     });
-    if (name === null || name.trim() === activeFolder.name) return;
+    if (name === null || name.trim() === folder.name) return;
     try {
-      await apiRequest<FolderResponse>(`/api/folders/${activeFolder.id}`, jsonRequest("PUT", {
-        expectedVersion: activeFolder.version,
+      await apiRequest<FolderResponse>(`/api/folders/${folder.id}`, jsonRequest("PUT", {
+        expectedVersion: folder.version,
         name,
       }));
       await Promise.all([refreshFolders(), refreshRecent()]);
@@ -723,6 +775,10 @@ export function App() {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Could not rename the folder.");
     }
+  };
+
+  const renameActiveFolder = async () => {
+    if (activeFolder) await renameFolder(activeFolder.id);
   };
 
   const moveActiveFolder = async (parentValue: string) => {
@@ -780,7 +836,7 @@ export function App() {
           folderId,
         }),
       );
-      acceptDocument(response.document);
+      acceptDocument(response.document, true, activeViewRef.current);
       await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
       setNotice("Note moved.");
     } catch (error) {
@@ -805,6 +861,47 @@ export function App() {
   }, [backlinks, documents]);
 
   const connectionLabel = connection === "connected" ? "Live sync on" : connection === "connecting" ? "Connecting" : "Reconnecting";
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      window.localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      // Keep the current theme for this tab if storage is unavailable.
+    }
+    document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute(
+      "content",
+      theme === "dark" ? "#171d19" : "#f7f7f5",
+    );
+  }, [theme]);
+
+  const rememberEditorSelection = (editor: HTMLTextAreaElement) => {
+    editorSelectionRef.current = {
+      start: editor.selectionStart,
+      end: editor.selectionEnd,
+      direction: editor.selectionDirection,
+    };
+  };
+
+  const switchEditorView = (nextView: "write" | "preview") => {
+    if (nextView === activeViewRef.current) return;
+    if (activeViewRef.current === "write" && markdownEditorRef.current) {
+      rememberEditorSelection(markdownEditorRef.current);
+    }
+    activeViewRef.current = nextView;
+    setActiveView(nextView);
+    if (nextView === "write") {
+      window.requestAnimationFrame(() => {
+        const editor = markdownEditorRef.current;
+        if (!editor) return;
+        editor.focus({ preventScroll: true });
+        const selection = editorSelectionRef.current;
+        if (selection) editor.setSelectionRange(selection.start, selection.end, selection.direction);
+      });
+    }
+  };
+
+  const toggleTheme = () => setTheme((current) => current === "dark" ? "light" : "dark");
 
   const renderWorkspace = (screen: WorkspaceScreen, flow: import("@stackflow/react").Actions, stack: import("@stackflow/core").Stack) => {
     const displayDocument = screen.kind === "document" && selectedDocument?.id === screen.documentId
@@ -854,6 +951,17 @@ export function App() {
       setRouteError("");
       if (routeId === null) flow.push("Library", {});
       else flow.push("Folder", { folderId: routeId });
+    };
+
+    const resetListFilters = () => {
+      setQuery("");
+      setSortOrder("updated-desc");
+      setVisibleDocuments(documents);
+      if (activeFolderRef.current !== null) {
+        chooseFolder(null);
+        setRouteError("");
+        if (screen.kind === "folder") flow.push("Library", {});
+      }
     };
 
     const navigateToDocument = async (id: string) => {
@@ -928,43 +1036,6 @@ export function App() {
       );
     }
 
-    if (screen.kind === "recent") {
-      return (
-        <main id={`fieldnotes-activity-${screen.activityId}`} data-fieldnotes-route="recent" className="recent-page">
-          <header className="recent-page-header">
-            <button type="button" className="recent-back" onClick={navigateBack} aria-label="Go back"><ChevronLeft size={20} /></button>
-            <div>
-              <div className="eyebrow">YOUR SPACE</div>
-              <h1 className="workspace-title" tabIndex={-1}>Recent changes</h1>
-            </div>
-            <button type="button" className="recent-library" onClick={() => void navigateToLibrary()}><FileText size={15} /> All notes</button>
-          </header>
-          <div className="recent-page-content">
-            {routeError && <div className="list-error" role="status">{routeError}</div>}
-            <p className="recent-intro">Saved updates from this library, including changes made by agents.</p>
-            {recentChanges.length ? (
-              <ol className="recent-timeline">
-                {recentChanges.map((change) => (
-                  <li key={change.seq}>
-                    <span className={`activity-indicator ${change.operation}`} aria-hidden="true" />
-                    <button
-                      type="button"
-                      className="recent-change"
-                      onClick={() => openChange(change)}
-                      disabled={change.operation === "deleted"}
-                    >
-                      <span className="recent-change-title">{change.title}</span>
-                      <span className="recent-change-meta">{operationLabel(change.operation)} {change.entityType} · {relativeDate(change.createdAt)}</span>
-                    </button>
-                  </li>
-                ))}
-              </ol>
-            ) : <p className="activity-empty">No saved changes yet.</p>}
-          </div>
-        </main>
-      );
-    }
-
     return (
     <div id={`fieldnotes-activity-${screen.activityId}`} data-fieldnotes-route={screen.kind} className={`app-shell route-${screen.kind}${displayDocument ? " has-selection" : ""}`}>
       <aside className="left-rail" aria-label="Workspace">
@@ -982,7 +1053,7 @@ export function App() {
           <span>All notes</span>
           <span className="rail-count">{documents.length}</span>
         </button>
-        <button className="rail-link" type="button" onClick={() => void navigateToRecent()}><Clock3 size={16} /><span>Recent changes</span></button>
+        <button className={`rail-link${screen.kind === "recent" ? " active" : ""}`} type="button" onClick={() => void navigateToRecent()}><Clock3 size={16} /><span>Recent changes</span></button>
 
         <div className="recent-heading">
           <span className="rail-section-label">RECENT ACTIVITY</span>
@@ -1021,6 +1092,9 @@ export function App() {
           <div className="list-title-row"><h1 ref={notesHeadingRef} tabIndex={-1}>{activeFolderId === "root" ? "Unfiled" : activeFolder?.name ?? "Notes"}</h1><span className="total-count">{activeFolderId === null ? documents.length : visibleDocuments.length}</span></div>
           </div>
           <div className="mobile-list-actions">
+            <button className="icon-button theme-toggle theme-toggle-list" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
+              {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
             <button className="mobile-recent-button" type="button" onClick={() => void navigateToRecent()} aria-label="Recent changes" title="Recent changes"><Clock3 size={18} /></button>
             <button className="icon-button add-note-button" type="button" onClick={() => void createAndOpenNote()} aria-label="Create a note" title="Create a note">
               <Plus size={18} />
@@ -1095,6 +1169,13 @@ export function App() {
                   {activeFolderId === folder.id ? <FolderOpen size={14} /> : <Folder size={14} />}
                   <span>{folder.name}</span><span className="folder-count">{folder.documentCount}</span>
                 </button>
+                <button
+                  type="button"
+                  className="folder-row-action"
+                  aria-label={`Rename ${folder.name}`}
+                  title={`Rename ${folder.name}`}
+                  onClick={() => void renameFolder(folder.id)}
+                ><Pencil size={13} /></button>
               </div>
             ))}
           </div>
@@ -1161,10 +1242,28 @@ export function App() {
           </div>
         </div>
 
+        <div className="list-filter-row">
+          <label className="sort-control">
+            <ArrowDownUp size={14} aria-hidden="true" />
+            <select aria-label="Sort notes" value={sortOrder} onChange={(event) => setSortOrder(event.currentTarget.value as SortOrder)}>
+              <option value="updated-desc">Updated · newest</option>
+              <option value="updated-asc">Updated · oldest</option>
+              <option value="title-asc">Title · A to Z</option>
+              <option value="title-desc">Title · Z to A</option>
+            </select>
+          </label>
+          <span className="filter-summary" aria-live="polite">
+            {query.trim() ? `Search: ${query.trim()}` : activeFolderId === "root" ? "Unfiled" : activeFolder ? folderPathById.get(activeFolder.id) : "All notes"}
+          </span>
+          {(query.trim() || activeFolderId !== null || sortOrder !== "updated-desc") && (
+            <button type="button" className="reset-filters" onClick={resetListFilters}>Reset</button>
+          )}
+        </div>
+
         {listError && <div className="list-error"><span>{listError}</span><button type="button" onClick={() => void refreshDocuments()}><RefreshCw size={14} /> Retry</button></div>}
 
         <div className="document-list" role="list">
-          {visibleDocuments.map((document) => (
+          {orderedDocuments.map((document) => (
             <button
               className={`document-row${screen.kind === "document" && screen.documentId === document.id ? " selected" : ""}`}
               type="button"
@@ -1191,7 +1290,41 @@ export function App() {
         <div className="list-footer"><span>{visibleDocuments.length} {visibleDocuments.length === 1 ? "note" : "notes"}</span><span>⌘ S to save</span></div>
       </section>
 
-      <main className="editor-pane" tabIndex={-1}>
+      <main className={`editor-pane${screen.kind === "recent" ? " recent-editor-pane" : ""}`} tabIndex={-1}>
+        {screen.kind === "recent" ? (
+          <div className="recent-workspace">
+            <header className="recent-page-header">
+              <button type="button" className="recent-back" onClick={navigateBack} aria-label="Go back"><ChevronLeft size={20} /></button>
+              <div>
+                <div className="eyebrow">YOUR SPACE</div>
+                <h1 className="workspace-title" tabIndex={-1}>Recent changes</h1>
+              </div>
+              <button type="button" className="recent-library" onClick={() => void navigateToLibrary()}><FileText size={15} /> All notes</button>
+            </header>
+            <div className="recent-page-content">
+              {routeError && <div className="list-error" role="status">{routeError}</div>}
+              <p className="recent-intro">Saved updates from this library, including changes made by agents.</p>
+              {recentChanges.length ? (
+                <ol className="recent-timeline">
+                  {recentChanges.map((change) => (
+                    <li key={change.seq}>
+                      <span className={`activity-indicator ${change.operation}`} aria-hidden="true" />
+                      <button
+                        type="button"
+                        className="recent-change"
+                        onClick={() => openChange(change)}
+                        disabled={change.operation === "deleted"}
+                      >
+                        <span className="recent-change-title">{change.title}</span>
+                        <span className="recent-change-meta">{operationLabel(change.operation)} {change.entityType} · {relativeDate(change.createdAt)}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              ) : <p className="activity-empty">No saved changes yet.</p>}
+            </div>
+          </div>
+        ) : <>
         {routeError && <div className="route-error" role="status">{routeError}</div>}
         {displayDocument ? (
           <>
@@ -1207,13 +1340,16 @@ export function App() {
                   <span>{saveStateLabel(saveState)}</span>
                 </div>
                 <div className="view-switch" role="group" aria-label="Editor view">
-                  <button type="button" className={activeView === "write" ? "chosen" : ""} onClick={() => setActiveView("write")} aria-pressed={activeView === "write"}>Write</button>
-                  <button type="button" className={activeView === "preview" ? "chosen" : ""} onClick={() => setActiveView("preview")} aria-pressed={activeView === "preview"}>Preview</button>
+                  <button type="button" className={activeView === "write" ? "chosen" : ""} onClick={() => switchEditorView("write")} aria-pressed={activeView === "write"}>Write</button>
+                  <button type="button" className={activeView === "preview" ? "chosen" : ""} onClick={() => switchEditorView("preview")} aria-pressed={activeView === "preview"}>Preview</button>
                 </div>
                 <button type="button" className="save-button" onClick={() => void saveDocument()} disabled={!isDirty || saveState === "saving"}>
                   <Save size={15} /><span>Save</span>
                 </button>
                 <button className="icon-button toolbar-delete" type="button" onClick={() => void deleteAndReturn()} aria-label="Delete note" title="Delete note"><Trash2 size={16} /></button>
+                <button className="icon-button theme-toggle theme-toggle-editor" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
+                  {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+                </button>
               </div>
             </header>
 
@@ -1264,6 +1400,7 @@ export function App() {
               </div>
               {activeView === "write" ? (
                 <textarea
+                  ref={markdownEditorRef}
                   className="markdown-editor"
                   value={draftBody}
                   onChange={(event) => {
@@ -1274,6 +1411,9 @@ export function App() {
                     if (notice === "Saved to this Mac.") setNotice("");
                   }}
                   spellCheck
+                  onSelect={(event) => rememberEditorSelection(event.currentTarget)}
+                  onClick={(event) => rememberEditorSelection(event.currentTarget)}
+                  onKeyUp={(event) => rememberEditorSelection(event.currentTarget)}
                   aria-label="Markdown body"
                   placeholder="Start with a thought…\n\nUse ## for a heading, - for a list, or [[Note title]] to connect ideas."
                 />
@@ -1305,6 +1445,8 @@ export function App() {
             </section>
           </>
         ) : (
+          <>
+          {notice && <div className={`notice-bar${saveState === "error" || saveState === "conflict" ? " warning" : ""}`} role="status"><span>{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice("")}><X size={14} /></button></div>}
           <div className="welcome-state">
             <div className="welcome-art"><span className="art-paper paper-back" /><span className="art-paper paper-front"><span /><span /><span /></span><div className="art-spark spark-one">✳</div><div className="art-spark spark-two">✳</div></div>
             <div className="welcome-kicker">A HOME FOR WHAT YOU’RE LEARNING</div>
@@ -1313,7 +1455,9 @@ export function App() {
             <button type="button" className="welcome-create" onClick={() => void createAndOpenNote()}><Plus size={16} /> Create your first note</button>
             <div className="welcome-shortcut"><span>Tip</span> Type <code>[[</code> while writing to link another note.</div>
           </div>
+          </>
         )}
+        </>}
       </main>
     </div>
   );
