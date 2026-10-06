@@ -67,7 +67,7 @@ To restore, stop Fieldnotes first. The restore script requires `--server-stopped
 npm run db:restore -- /path/to/fieldnotes-backup.sqlite --server-stopped
 ```
 
-The folder hierarchy uses SQLite schema version 2. The app migrates version 1 databases forward on startup. Before an explicit migration, stop Fieldnotes, make a verified backup, review the migration in `server/database.ts`, then run `npm run db:migrate`; the script refuses to run while a server lock exists. Restore accepts schema versions supported by this app and the next start applies pending forward migrations. Keep the code version and data backup together when moving machines.
+The folder hierarchy uses SQLite schema version 2. The app migrates version 1 databases forward on startup. Before an explicit migration, stop Fieldnotes, make a verified backup, review the migration in `server/database.ts`, then run `npm run db:migrate`; the script refuses to run while a server lock exists. If it reports a stale lock, verify that no Fieldnotes process is using that data directory, remove only the stale `server.lock`, and retry. Restore accepts schema versions supported by this app and the next start applies pending forward migrations. Keep the code version and data backup together when moving machines.
 
 ## Moving to another Mac
 

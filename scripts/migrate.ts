@@ -16,14 +16,16 @@ if (existsSync(lockPath)) {
   }
   try {
     process.kill(lock.pid, 0);
-    throw new Error(`Fieldnotes server ${lock.pid} is running. Stop it before an explicit migration.`);
   } catch (error) {
-    if (error instanceof Error && error.message.includes("is running")) throw error;
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-      throw new Error(`Cannot verify whether Fieldnotes server ${lock.pid} is running.`, { cause: error });
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+      throw new Error(
+        `Stale server lock at ${lockPath}; after confirming no Fieldnotes process is using this data directory, remove the stale lock and retry migration.`,
+        { cause: error },
+      );
     }
-    throw new Error(`Stale server lock at ${lockPath}; inspect it and confirm the server is stopped before migrating.`, { cause: error });
+    throw new Error(`Cannot verify whether Fieldnotes server ${lock.pid} is running.`, { cause: error });
   }
+  throw new Error(`Fieldnotes server ${lock.pid} is running. Stop it before an explicit migration.`);
 }
 const database = openDatabase(dataDir);
 try {

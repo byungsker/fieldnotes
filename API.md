@@ -21,7 +21,7 @@ All routes are under the same origin as the web app. Requests and responses are 
 | `GET` | `/api/changes?after=SEQ` | Read durable changes after a cursor (up to 500 per page) |
 | `GET` | `/api/changes/recent?limit=N` | Recent activity for the sidebar |
 | `GET` | `/api/events?after=SEQ` | SSE live changes and reconnect replay |
-| `POST` | `/api/import` | Import `{documents:[{title, body}]}` (1–100 notes, 5 MB total) |
+| `POST` | `/api/import` | Import `{documents:[{title, body, folderId?}]}` (1–100 notes, 5 MB total); omit or use `null` for unfiled |
 | `GET` | `/api/export` | Download versioned JSON export |
 
 IDs are generated UUIDs. Folder names are 1–120 characters and cannot contain path separators or control characters. Duplicate folder names are rejected within the same parent. The hierarchy has no application-defined depth limit; practical limits are available memory, storage, and SQLite's recursive-query/runtime limits. Folder moves reject cycles. Deleting a non-empty folder returns `409` with `folder_not_empty` and never cascades to notes or subfolders.
