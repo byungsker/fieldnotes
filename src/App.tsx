@@ -4,9 +4,14 @@ import {
   ArrowUpFromLine,
   BookOpen,
   Check,
+  ChevronDown,
   ChevronLeft,
+  ChevronRight,
   Clock3,
   FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
   Link2,
   LoaderCircle,
   Plus,
@@ -18,18 +23,101 @@ import {
 } from "lucide-react";
 import { ApiError, apiRequest, jsonRequest } from "./api";
 import { MarkdownBody } from "./MarkdownBody";
-import type { ChangeRecord, DocumentRecord, DocumentSummary } from "./types";
+import type { ChangeRecord, DocumentRecord, DocumentSummary, FolderRecord } from "./types";
 
 type ConnectionState = "connecting" | "connected" | "reconnecting";
 type SaveState = "saved" | "unsaved" | "saving" | "conflict" | "error";
 
 type DocumentListResponse = { documents: DocumentSummary[] };
 type DocumentResponse = { document: DocumentRecord };
+type FolderListResponse = { folders: FolderRecord[] };
+type FolderResponse = { folder: FolderRecord };
 type RecentResponse = { changes: ChangeRecord[] };
 type ChangesResponse = { changes: ChangeRecord[]; highWatermark: number };
 type BacklinksResponse = { backlinks: DocumentSummary[] };
 
 const LAST_SEQUENCE_KEY = "fieldnotes:last-change-sequence";
+type ActiveFolder = string | "root" | null;
+
+function documentListPath(query: string, folderId: ActiveFolder): string {
+  const parameters = new URLSearchParams();
+  if (query.trim()) parameters.set("q", query.trim());
+  if (folderId !== null) parameters.set("folderId", folderId);
+  const suffix = parameters.toString();
+  return `/api/documents${suffix ? `?${suffix}` : ""}`;
+}
+
+function folderPaths(folders: FolderRecord[]): Map<string, string> {
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  const paths = new Map<string, string>();
+  for (const folder of folders) {
+    const chain: FolderRecord[] = [];
+    const seen = new Set<string>();
+    let cursor: FolderRecord | undefined = folder;
+    while (cursor && !paths.has(cursor.id) && !seen.has(cursor.id)) {
+      seen.add(cursor.id);
+      chain.push(cursor);
+      cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined;
+    }
+    let prefix = cursor ? paths.get(cursor.id) ?? "" : "";
+    while (chain.length) {
+      const part = chain.pop() as FolderRecord;
+      prefix = prefix ? `${prefix} / ${part.name}` : part.name;
+      paths.set(part.id, prefix);
+    }
+  }
+  return paths;
+}
+
+function folderTreeRows(folders: FolderRecord[], expanded: Set<string>) {
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  const children = new Map<string | null, FolderRecord[]>();
+  for (const folder of folders) {
+    const siblings = children.get(folder.parentId) ?? [];
+    siblings.push(folder);
+    children.set(folder.parentId, siblings);
+  }
+  for (const siblings of children.values()) siblings.sort((left, right) => left.name.localeCompare(right.name));
+
+  const roots = [...(children.get(null) ?? [])];
+  for (const folder of folders) {
+    if (folder.parentId && !byId.has(folder.parentId)) roots.push(folder);
+  }
+  const stack = roots.reverse().map((folder) => ({ folder, depth: 0 }));
+  const rows: Array<{ folder: FolderRecord; depth: number; hasChildren: boolean }> = [];
+  const visited = new Set<string>();
+  while (stack.length) {
+    const current = stack.pop() as { folder: FolderRecord; depth: number };
+    if (visited.has(current.folder.id)) continue;
+    visited.add(current.folder.id);
+    const nested = children.get(current.folder.id) ?? [];
+    rows.push({ folder: current.folder, depth: current.depth, hasChildren: nested.length > 0 });
+    if (expanded.has(current.folder.id)) {
+      for (const folder of [...nested].reverse()) stack.push({ folder, depth: current.depth + 1 });
+    }
+  }
+  return rows;
+}
+
+function descendantIds(folders: FolderRecord[], id: string): Set<string> {
+  const children = new Map<string, string[]>();
+  for (const folder of folders) {
+    if (!folder.parentId) continue;
+    const list = children.get(folder.parentId) ?? [];
+    list.push(folder.id);
+    children.set(folder.parentId, list);
+  }
+  const descendants = new Set([id]);
+  const stack = [id];
+  while (stack.length) {
+    for (const child of children.get(stack.pop() as string) ?? []) {
+      if (descendants.has(child)) continue;
+      descendants.add(child);
+      stack.push(child);
+    }
+  }
+  return descendants;
+}
 
 function relativeDate(value: string): string {
   const date = new Date(value);
@@ -67,6 +155,11 @@ function initialSequence(): number {
 export function App() {
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [visibleDocuments, setVisibleDocuments] = useState<DocumentSummary[]>([]);
+  const [folders, setFolders] = useState<FolderRecord[]>([]);
+  const [activeFolderId, setActiveFolderId] = useState<ActiveFolder>(null);
+  const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(() => new Set());
+  const [creatingFolderParent, setCreatingFolderParent] = useState<string | null | undefined>(undefined);
+  const [newFolderName, setNewFolderName] = useState("");
   const [recentChanges, setRecentChanges] = useState<ChangeRecord[]>([]);
   const [backlinks, setBacklinks] = useState<DocumentSummary[]>([]);
   const [selectedDocument, setSelectedDocument] = useState<DocumentRecord | null>(null);
@@ -89,14 +182,17 @@ export function App() {
   const draftTitleRef = useRef("");
   const draftBodyRef = useRef("");
   const queryRef = useRef("");
+  const activeFolderRef = useRef<ActiveFolder>(null);
   const sequenceRef = useRef(initialSequence());
   const reconcilingRef = useRef(false);
   const searchRequestRef = useRef(0);
+  const folderTreeInitializedRef = useRef(false);
 
   selectedRef.current = selectedDocument;
   draftTitleRef.current = draftTitle;
   draftBodyRef.current = draftBody;
   queryRef.current = query;
+  activeFolderRef.current = activeFolderId;
   const selectedDocumentId = selectedDocument?.id;
 
   useEffect(() => {
@@ -109,26 +205,57 @@ export function App() {
     selectedDocument &&
       (draftTitle !== selectedDocument.title || draftBody !== selectedDocument.body),
   );
+  const folderPathById = useMemo(() => folderPaths(folders), [folders]);
+  const visibleFolderRows = useMemo(
+    () => folderTreeRows(folders, expandedFolderIds),
+    [expandedFolderIds, folders],
+  );
+  const activeFolder = activeFolderId && activeFolderId !== "root"
+    ? folders.find((folder) => folder.id === activeFolderId) ?? null
+    : null;
+  const excludedFolderParents = useMemo(
+    () => activeFolder ? descendantIds(folders, activeFolder.id) : new Set<string>(),
+    [activeFolder, folders],
+  );
 
   const refreshDocuments = useCallback(async () => {
+    const requestId = ++searchRequestRef.current;
     const response = await apiRequest<DocumentListResponse>("/api/documents");
     setDocuments(response.documents);
-    if (!queryRef.current.trim()) setVisibleDocuments(response.documents);
-    else {
-      const search = await apiRequest<DocumentListResponse>(`/api/documents?q=${encodeURIComponent(queryRef.current)}`);
-      setVisibleDocuments(search.documents);
+    const currentQuery = queryRef.current;
+    const currentFolder = activeFolderRef.current;
+    if (!currentQuery.trim() && currentFolder === null) {
+      if (requestId === searchRequestRef.current) setVisibleDocuments(response.documents);
+    } else {
+      const search = await apiRequest<DocumentListResponse>(documentListPath(currentQuery, currentFolder));
+      if (requestId === searchRequestRef.current) setVisibleDocuments(search.documents);
     }
     setListError("");
   }, []);
 
+  const refreshFolders = useCallback(async () => {
+    const response = await apiRequest<FolderListResponse>("/api/folders");
+    setFolders(response.folders);
+    if (!folderTreeInitializedRef.current) {
+      folderTreeInitializedRef.current = true;
+      setExpandedFolderIds(new Set(response.folders.filter((folder) => folder.parentId === null).map((folder) => folder.id)));
+    }
+    if (activeFolderRef.current !== null && activeFolderRef.current !== "root" &&
+      !response.folders.some((folder) => folder.id === activeFolderRef.current)) {
+      activeFolderRef.current = null;
+      setActiveFolderId(null);
+    }
+  }, []);
+
   const refreshSearch = useCallback(async (value: string) => {
     const requestId = ++searchRequestRef.current;
-    if (!value.trim()) {
+    const currentFolder = activeFolderRef.current;
+    if (!value.trim() && currentFolder === null) {
       setVisibleDocuments(documents);
       return;
     }
     try {
-      const response = await apiRequest<DocumentListResponse>(`/api/documents?q=${encodeURIComponent(value)}`);
+      const response = await apiRequest<DocumentListResponse>(documentListPath(value, currentFolder));
       if (requestId === searchRequestRef.current) setVisibleDocuments(response.documents);
     } catch (error) {
       if (requestId === searchRequestRef.current) {
@@ -170,7 +297,17 @@ export function App() {
     sessionStorage.setItem(LAST_SEQUENCE_KEY, String(change.seq));
 
     void refreshDocuments().catch(() => setListError("The note list is temporarily unavailable."));
+    void refreshFolders().catch(() => setListError("The folder list is temporarily unavailable."));
     void refreshRecent().catch(() => undefined);
+
+    if (change.entityType === "folder") {
+      if (change.operation === "deleted" && activeFolderRef.current === change.folderId) {
+        activeFolderRef.current = null;
+        setActiveFolderId(null);
+      }
+      return;
+    }
+    if (!change.documentId) return;
 
     const selected = selectedRef.current;
     if (!selected || selected.id !== change.documentId) return;
@@ -206,7 +343,7 @@ export function App() {
     } catch {
       // A later reconciliation or delete event will resolve this race.
     }
-  }, [acceptDocument, refreshBacklinks, refreshDocuments, refreshRecent]);
+  }, [acceptDocument, refreshBacklinks, refreshDocuments, refreshFolders, refreshRecent]);
 
   const reconcileChanges = useCallback(async () => {
     if (reconcilingRef.current) return;
@@ -218,18 +355,19 @@ export function App() {
         for (const change of response.changes) await applyIncomingChange(change);
         more = response.changes.length === 500 && sequenceRef.current < response.highWatermark;
       }
-      await Promise.all([refreshDocuments(), refreshRecent()]);
+      await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
       setConnection("connected");
     } catch {
       setConnection("reconnecting");
     } finally {
       reconcilingRef.current = false;
     }
-  }, [applyIncomingChange, refreshDocuments, refreshRecent]);
+  }, [applyIncomingChange, refreshDocuments, refreshFolders, refreshRecent]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial list loads synchronize the UI with the API.
     void refreshDocuments().catch(() => setListError("The local service is unavailable. Reconnecting…"));
+    void refreshFolders().catch(() => setListError("The folder list is temporarily unavailable."));
     void refreshRecent().catch(() => undefined);
 
     const source = new EventSource(`/api/events?after=${sequenceRef.current}`);
@@ -247,12 +385,12 @@ export function App() {
     });
     source.addEventListener("ready", () => setConnection("connected"));
     return () => source.close();
-  }, [applyIncomingChange, reconcileChanges, refreshDocuments, refreshRecent]);
+  }, [applyIncomingChange, reconcileChanges, refreshDocuments, refreshFolders, refreshRecent]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void refreshSearch(query), 180);
     return () => window.clearTimeout(timer);
-  }, [query, refreshSearch]);
+  }, [activeFolderId, query, refreshSearch]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -310,9 +448,10 @@ export function App() {
   const createNote = async () => {
     if (isDirty && !window.confirm("Leave this draft without saving?")) return;
     try {
-      const response = await apiRequest<DocumentResponse>("/api/documents", jsonRequest("POST", { title: "Untitled note", body: "" }));
+      const folderId = activeFolderId && activeFolderId !== "root" ? activeFolderId : null;
+      const response = await apiRequest<DocumentResponse>("/api/documents", jsonRequest("POST", { title: "Untitled note", body: "", folderId }));
       acceptDocument(response.document);
-      await Promise.all([refreshDocuments(), refreshRecent()]);
+      await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
       void refreshBacklinks(response.document.id);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Could not create a note.");
@@ -343,7 +482,7 @@ export function App() {
       setSelectedDocument(null);
       setBacklinks([]);
       setNotice("Note deleted.");
-      await Promise.all([refreshDocuments(), refreshRecent()]);
+      await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
     } catch (error) {
       if (error instanceof ApiError && error.code === "version_conflict") {
         setSaveState("conflict");
@@ -387,14 +526,15 @@ export function App() {
       const documentsToImport = await Promise.all(
         files.map(async (file) => {
           const filename = file.name.replace(/\.(markdown|md)$/i, "").trim();
-          return { title: filename || "Imported note", body: await file.text() };
+          const folderId = activeFolderId && activeFolderId !== "root" ? activeFolderId : null;
+          return { title: filename || "Imported note", body: await file.text(), folderId };
         }),
       );
       const response = await apiRequest<{ documents: DocumentRecord[] }>(
         "/api/import",
         jsonRequest("POST", { documents: documentsToImport }),
       );
-      await Promise.all([refreshDocuments(), refreshRecent()]);
+      await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
       if (response.documents[0]) {
         acceptDocument(response.documents[0]);
         void refreshBacklinks(response.documents[0].id);
@@ -424,12 +564,134 @@ export function App() {
     }
   };
 
+  const chooseFolder = (folderId: ActiveFolder) => {
+    activeFolderRef.current = folderId;
+    setActiveFolderId(folderId);
+  };
+
+  const beginFolderCreate = (parentId: string | null) => {
+    setCreatingFolderParent(parentId);
+    setNewFolderName("");
+  };
+
+  const createFolderFromForm = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const name = newFolderName.trim();
+    if (!name) return;
+    try {
+      const response = await apiRequest<FolderResponse>("/api/folders", jsonRequest("POST", {
+        name,
+        parentId: creatingFolderParent ?? null,
+      }));
+      setCreatingFolderParent(undefined);
+      setNewFolderName("");
+      setExpandedFolderIds((current) => {
+        const next = new Set(current);
+        if (creatingFolderParent) next.add(creatingFolderParent);
+        next.add(response.folder.id);
+        return next;
+      });
+      chooseFolder(response.folder.id);
+      await Promise.all([refreshFolders(), refreshDocuments(), refreshRecent()]);
+      setNotice(`Created folder “${response.folder.name}”.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not create the folder.");
+    }
+  };
+
+  const renameActiveFolder = async () => {
+    if (!activeFolder) return;
+    const name = window.prompt("Rename folder", activeFolder.name);
+    if (name === null || name.trim() === activeFolder.name) return;
+    try {
+      await apiRequest<FolderResponse>(`/api/folders/${activeFolder.id}`, jsonRequest("PUT", {
+        expectedVersion: activeFolder.version,
+        name,
+      }));
+      await Promise.all([refreshFolders(), refreshRecent()]);
+      setNotice(`Renamed folder to “${name.trim()}”.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not rename the folder.");
+    }
+  };
+
+  const moveActiveFolder = async (parentValue: string) => {
+    if (!activeFolder) return;
+    const parentId = parentValue === "root" ? null : parentValue;
+    if (parentId === activeFolder.parentId) return;
+    try {
+      await apiRequest<FolderResponse>(`/api/folders/${activeFolder.id}`, jsonRequest("PUT", {
+        expectedVersion: activeFolder.version,
+        parentId,
+      }));
+      await Promise.all([refreshFolders(), refreshRecent()]);
+      setNotice(`Moved folder “${activeFolder.name}”.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not move the folder.");
+    }
+  };
+
+  const deleteActiveFolder = async () => {
+    if (!activeFolder) return;
+    if (!window.confirm(`Delete empty folder “${activeFolder.name}”? Notes and subfolders are never deleted with a folder.`)) return;
+    try {
+      await apiRequest<void>(`/api/folders/${activeFolder.id}`, jsonRequest("DELETE", { expectedVersion: activeFolder.version }));
+      chooseFolder(null);
+      await Promise.all([refreshFolders(), refreshDocuments(), refreshRecent()]);
+      setNotice(`Deleted empty folder “${activeFolder.name}”.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not delete the folder.");
+    }
+  };
+
+  const moveDocumentToFolder = async (folderId: string | null) => {
+    const selected = selectedRef.current;
+    if (!selected) return;
+    if (isDirty) {
+      setNotice("Save the current draft before moving this note.");
+      return;
+    }
+    if (folderId === selected.folderId) return;
+    setSaveState("saving");
+    try {
+      const response = await apiRequest<DocumentResponse>(
+        `/api/documents/${selected.id}`,
+        jsonRequest("PUT", {
+          expectedVersion: selected.version,
+          title: selected.title,
+          body: selected.body,
+          folderId,
+        }),
+      );
+      acceptDocument(response.document);
+      await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
+      setNotice("Note moved.");
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "version_conflict") {
+        setSaveState("conflict");
+        setExternalVersion(error.currentVersion ?? null);
+        setNotice("This note changed elsewhere and was not moved. Load the latest version first.");
+      } else {
+        setSaveState("error");
+        setNotice(error instanceof Error ? error.message : "Could not move the note.");
+      }
+    }
+  };
+
   const openFromRecent = (change: ChangeRecord) => {
+    if (change.entityType === "folder") {
+      if (change.operation === "deleted" || !change.folderId) {
+        setNotice(`Folder “${change.title}” was deleted.`);
+      } else {
+        chooseFolder(change.folderId);
+      }
+      return;
+    }
     if (change.operation === "deleted") {
       setNotice(`“${change.title}” was deleted.`);
       return;
     }
-    void openDocument(change.documentId);
+    if (change.documentId) void openDocument(change.documentId);
   };
 
   const selectedWordCount = useMemo(() => {
@@ -455,7 +717,7 @@ export function App() {
         </div>
 
         <div className="rail-section-label">YOUR SPACE</div>
-        <button className="rail-link active" type="button" onClick={() => { setQuery(""); setVisibleDocuments(documents); }}>
+        <button className={`rail-link${activeFolderId === null ? " active" : ""}`} type="button" onClick={() => { setQuery(""); chooseFolder(null); setVisibleDocuments(documents); }}>
           <FileText size={16} />
           <span>All notes</span>
           <span className="rail-count">{documents.length}</span>
@@ -473,12 +735,12 @@ export function App() {
               key={change.seq}
               type="button"
               onClick={() => openFromRecent(change)}
-              title={`${operationLabel(change.operation)} ${change.title}`}
+              title={`${operationLabel(change.operation)} ${change.entityType} ${change.title}`}
             >
               <span className={`activity-indicator ${change.operation}`} aria-hidden="true" />
               <span className="activity-copy">
                 <span className="activity-title">{change.title}</span>
-                <span className="activity-meta">{operationLabel(change.operation)} · {relativeDate(change.createdAt)}</span>
+                <span className="activity-meta">{operationLabel(change.operation)} {change.entityType} · {relativeDate(change.createdAt)}</span>
               </span>
             </button>
           ))}
@@ -495,7 +757,7 @@ export function App() {
         <div className="list-header">
           <div>
             <div className="eyebrow">YOUR LIBRARY</div>
-          <div className="list-title-row"><h1 ref={notesHeadingRef} tabIndex={-1}>Notes</h1><span className="total-count">{documents.length}</span></div>
+          <div className="list-title-row"><h1 ref={notesHeadingRef} tabIndex={-1}>{activeFolderId === "root" ? "Unfiled" : activeFolder?.name ?? "Notes"}</h1><span className="total-count">{activeFolderId === null ? documents.length : visibleDocuments.length}</span></div>
           </div>
           <button className="icon-button add-note-button" type="button" onClick={() => void createNote()} aria-label="Create a note" title="Create a note">
             <Plus size={18} />
@@ -516,8 +778,105 @@ export function App() {
           {!query && <kbd>⌘ K</kbd>}
         </label>
 
+        <nav className="folder-browser" aria-label="Folder navigation">
+          <div className="folder-browser-header">
+            <span>FOLDERS</span>
+            <button type="button" className="folder-create-trigger" onClick={() => beginFolderCreate(null)}>
+              <FolderPlus size={13} /> New folder
+            </button>
+          </div>
+          <button
+            type="button"
+            className={`folder-nav-item${activeFolderId === null ? " active" : ""}`}
+            onClick={() => chooseFolder(null)}
+            aria-current={activeFolderId === null ? "page" : undefined}
+          >
+            <FileText size={14} /><span>All notes</span><span className="folder-count">{documents.length}</span>
+          </button>
+          <button
+            type="button"
+            className={`folder-nav-item${activeFolderId === "root" ? " active" : ""}`}
+            onClick={() => chooseFolder("root")}
+            aria-current={activeFolderId === "root" ? "page" : undefined}
+          >
+            <Folder size={14} /><span>Unfiled</span><span className="folder-count">{documents.filter((document) => document.folderId === null).length}</span>
+          </button>
+          <div className="folder-tree-list">
+            {visibleFolderRows.map(({ folder, depth, hasChildren }) => (
+              <div className="folder-tree-row" key={folder.id}>
+                <span className="folder-depth-space" style={{ width: `${depth * 13}px` }} aria-hidden="true" />
+                {hasChildren ? (
+                  <button
+                    type="button"
+                    className="folder-disclosure"
+                    aria-label={`${expandedFolderIds.has(folder.id) ? "Collapse" : "Expand"} ${folder.name}`}
+                    aria-expanded={expandedFolderIds.has(folder.id)}
+                    onClick={() => setExpandedFolderIds((current) => {
+                      const next = new Set(current);
+                      if (next.has(folder.id)) next.delete(folder.id);
+                      else next.add(folder.id);
+                      return next;
+                    })}
+                  >
+                    {expandedFolderIds.has(folder.id) ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                  </button>
+                ) : <span className="folder-disclosure-spacer" aria-hidden="true" />}
+                <button
+                  type="button"
+                  className={`folder-nav-item folder-tree-button${activeFolderId === folder.id ? " active" : ""}`}
+                  onClick={() => chooseFolder(folder.id)}
+                  aria-current={activeFolderId === folder.id ? "page" : undefined}
+                  title={folderPathById.get(folder.id)}
+                >
+                  {activeFolderId === folder.id ? <FolderOpen size={14} /> : <Folder size={14} />}
+                  <span>{folder.name}</span><span className="folder-count">{folder.documentCount}</span>
+                </button>
+              </div>
+            ))}
+          </div>
+          {creatingFolderParent !== undefined && (
+            <form className="folder-create-form" onSubmit={(event) => void createFolderFromForm(event)}>
+              <label htmlFor="new-folder-name">New {creatingFolderParent ? `subfolder in ${folderPathById.get(creatingFolderParent) ?? "folder"}` : "top-level folder"}</label>
+              <input
+                id="new-folder-name"
+                value={newFolderName}
+                onChange={(event) => setNewFolderName(event.currentTarget.value)}
+                maxLength={120}
+                autoFocus
+                required
+              />
+              <div>
+                <button type="submit">Create</button>
+                <button type="button" onClick={() => setCreatingFolderParent(undefined)}>Cancel</button>
+              </div>
+            </form>
+          )}
+          {activeFolder && (
+            <div className="folder-admin" aria-label={`${activeFolder.name} folder actions`}>
+              <div className="folder-admin-actions">
+                <button type="button" onClick={() => beginFolderCreate(activeFolder.id)}><FolderPlus size={13} /> Subfolder</button>
+                <button type="button" onClick={() => void renameActiveFolder()}>Rename</button>
+                <button type="button" onClick={() => void deleteActiveFolder()}>Delete empty</button>
+              </div>
+              <label className="folder-move-label">
+                Move folder
+                <select
+                  value={activeFolder.parentId ?? "root"}
+                  onChange={(event) => void moveActiveFolder(event.currentTarget.value)}
+                  aria-label={`Move ${activeFolder.name} to parent folder`}
+                >
+                  <option value="root">Top level</option>
+                  {folders.filter((folder) => !excludedFolderParents.has(folder.id)).map((folder) => (
+                    <option key={folder.id} value={folder.id}>{folderPathById.get(folder.id) ?? folder.name}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
+        </nav>
+
         <div className="list-subhead">
-          <span>{query ? `${visibleDocuments.length} RESULTS` : "ALL NOTES"}</span>
+          <span>{query ? `${visibleDocuments.length} RESULTS` : activeFolderId === "root" ? "UNFILED NOTES" : activeFolder ? folderPathById.get(activeFolder.id)?.toUpperCase() : "ALL NOTES"}</span>
           <div className="list-tools">
             <button type="button" className="text-tool" onClick={() => fileInputRef.current?.click()} disabled={importing}>
               {importing ? <LoaderCircle className="spin" size={14} /> : <ArrowUpFromLine size={14} />}
@@ -574,7 +933,7 @@ export function App() {
             <header className="editor-toolbar">
               <div className="editor-breadcrumb">
                 <button className="mobile-back" type="button" onClick={() => { selectedRef.current = null; setSelectedDocument(null); window.requestAnimationFrame(() => notesHeadingRef.current?.focus()); }} aria-label="Back to notes"><ChevronLeft size={18} /></button>
-                <span className="breadcrumb-muted">NOTES</span><span className="breadcrumb-divider">/</span>
+                <span className="breadcrumb-muted">{selectedDocument.folderId ? folderPathById.get(selectedDocument.folderId)?.toUpperCase() ?? "FOLDER" : "UNFILED"}</span><span className="breadcrumb-divider">/</span>
                 <span className="breadcrumb-title">{draftTitle || "Untitled note"}</span>
               </div>
               <div className="toolbar-actions">
@@ -621,7 +980,21 @@ export function App() {
                 }}
                 aria-label="Note title"
               />
-              <div className="document-meta"><span>Markdown note</span><span className="meta-separator">·</span><span>Edited {relativeDate(selectedDocument.updatedAt)}</span><span className="meta-separator">·</span><span>v{selectedDocument.version}</span></div>
+              <div className="document-meta">
+                <span>Markdown note</span><span className="meta-separator">·</span><span>Edited {relativeDate(selectedDocument.updatedAt)}</span><span className="meta-separator">·</span><span>v{selectedDocument.version}</span>
+                <label className="document-folder-label">
+                  Folder
+                  <select
+                    aria-label="Move note to folder"
+                    value={selectedDocument.folderId ?? "root"}
+                    disabled={saveState === "saving"}
+                    onChange={(event) => void moveDocumentToFolder(event.currentTarget.value === "root" ? null : event.currentTarget.value)}
+                  >
+                    <option value="root">Unfiled</option>
+                    {folders.map((folder) => <option key={folder.id} value={folder.id}>{folderPathById.get(folder.id) ?? folder.name}</option>)}
+                  </select>
+                </label>
+              </div>
               {activeView === "write" ? (
                 <textarea
                   className="markdown-editor"

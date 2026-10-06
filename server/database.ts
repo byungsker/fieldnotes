@@ -4,7 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { EventEmitter } from "node:events";
 import { excerptFromMarkdown, extractWikilinkTargets, normalizeTitle } from "./markdown.js";
-import type { ChangeRecord, DocumentRecord, DocumentSummary } from "./types.js";
+import type { ChangeRecord, DocumentRecord, DocumentSummary, FolderRecord } from "./types.js";
 
 type SqlRow = Record<string, string | number | null>;
 type DatabaseOptions = { seedDemo?: boolean };
@@ -19,9 +19,37 @@ export class VersionConflictError extends Error {
   readonly currentVersion: number;
 
   constructor(currentVersion: number) {
-    super("This note changed since you opened it. Load the latest version before saving again.");
+    super("This item changed since you opened it. Load the latest version before saving again.");
     this.name = "VersionConflictError";
     this.currentVersion = currentVersion;
+  }
+}
+
+export class MissingFolderError extends Error {
+  constructor() {
+    super("Folder not found.");
+    this.name = "MissingFolderError";
+  }
+}
+
+export class FolderNotEmptyError extends Error {
+  constructor() {
+    super("This folder contains notes or subfolders. Move or delete them before deleting the folder.");
+    this.name = "FolderNotEmptyError";
+  }
+}
+
+export class FolderCycleError extends Error {
+  constructor() {
+    super("A folder cannot be moved inside itself or one of its descendants.");
+    this.name = "FolderCycleError";
+  }
+}
+
+export class DuplicateFolderNameError extends Error {
+  constructor() {
+    super("A folder with this name already exists in that location.");
+    this.name = "DuplicateFolderNameError";
   }
 }
 
@@ -37,6 +65,7 @@ function mapDocument(row: SqlRow): DocumentRecord {
   return {
     id: String(row.id),
     title: String(row.title),
+    folderId: row.folder_id === null || row.folder_id === undefined ? null : String(row.folder_id),
     body,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -49,6 +78,7 @@ function mapSummary(row: SqlRow): DocumentSummary {
   return {
     id: String(row.id),
     title: String(row.title),
+    folderId: row.folder_id === null || row.folder_id === undefined ? null : String(row.folder_id),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     version: Number(row.version),
@@ -56,21 +86,36 @@ function mapSummary(row: SqlRow): DocumentSummary {
   };
 }
 
-function mapChange(row: SqlRow): ChangeRecord {
+function mapFolder(row: SqlRow): FolderRecord {
   return {
+    id: String(row.id),
+    name: String(row.name),
+    parentId: row.parent_id === null || row.parent_id === undefined ? null : String(row.parent_id),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    version: Number(row.version),
+    documentCount: Number(row.document_count ?? 0),
+  };
+}
+
+function mapChange(row: SqlRow): ChangeRecord {
+  const entityType = row.entity_type === "folder" ? "folder" : "document";
+  const change = {
     seq: Number(row.seq),
-    documentId: String(row.document_id),
     title: String(row.title),
     operation: String(row.operation) as ChangeRecord["operation"],
     version: Number(row.version),
     createdAt: String(row.created_at),
   };
+  return entityType === "folder"
+    ? { ...change, entityType, folderId: String(row.document_id) }
+    : { ...change, entityType, documentId: String(row.document_id) };
 }
 
 function migrate(db: DatabaseSync): void {
   const row = db.prepare("PRAGMA user_version").get() as SqlRow | undefined;
   const version = Number(row?.user_version ?? 0);
-  if (version > 1) throw new Error(`Database schema ${version} is newer than this app supports.`);
+  if (version > 2) throw new Error(`Database schema ${version} is newer than this app supports.`);
   if (version === 0) {
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -105,6 +150,33 @@ function migrate(db: DatabaseSync): void {
       throw error;
     }
   }
+  if (version === 0 || version === 1) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(`
+        CREATE TABLE folders (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 120),
+          parent_id TEXT REFERENCES folders(id) ON DELETE RESTRICT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          version INTEGER NOT NULL CHECK(version >= 1)
+        );
+        CREATE INDEX folders_parent_id ON folders(parent_id);
+        CREATE UNIQUE INDEX folders_sibling_name
+          ON folders(COALESCE(parent_id, ''), name COLLATE NOCASE);
+        ALTER TABLE documents ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE RESTRICT;
+        CREATE INDEX documents_folder_id ON documents(folder_id);
+        ALTER TABLE changes ADD COLUMN entity_type TEXT NOT NULL DEFAULT 'document'
+          CHECK(entity_type IN ('document', 'folder'));
+        PRAGMA user_version = 2;
+      `);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
 }
 
 function publishSafely(changes: EventEmitter, change: ChangeRecord): void {
@@ -117,16 +189,20 @@ function publishSafely(changes: EventEmitter, change: ChangeRecord): void {
 
 function insertChange(
   db: DatabaseSync,
-  documentId: string,
+  entityId: string,
   title: string,
   operation: ChangeRecord["operation"],
   version: number,
   createdAt: string,
+  entityType: ChangeRecord["entityType"] = "document",
 ): ChangeRecord {
   const result = db
-    .prepare("INSERT INTO changes (document_id, title, operation, version, created_at) VALUES (?, ?, ?, ?, ?)")
-    .run(documentId, title, operation, version, createdAt);
-  return { seq: Number(result.lastInsertRowid), documentId, title, operation, version, createdAt };
+    .prepare("INSERT INTO changes (document_id, entity_type, title, operation, version, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(entityId, entityType, title, operation, version, createdAt);
+  const common = { seq: Number(result.lastInsertRowid), entityType, title, operation, version, createdAt };
+  return entityType === "folder"
+    ? { ...common, folderId: entityId }
+    : { ...common, documentId: entityId };
 }
 
 function transact<T>(
@@ -209,22 +285,122 @@ export function closeDatabase(database: KnowledgeDatabase): void {
   database.db.close();
 }
 
-export function listDocuments(db: DatabaseSync, query = ""): DocumentSummary[] {
+export function listFolders(db: DatabaseSync): FolderRecord[] {
+  const rows = db.prepare(`
+    SELECT f.*,
+      (SELECT COUNT(*) FROM documents d WHERE d.folder_id = f.id) AS document_count
+    FROM folders f
+    ORDER BY f.name COLLATE NOCASE ASC, f.id ASC
+  `).all() as SqlRow[];
+  return rows.map(mapFolder);
+}
+
+export function getFolder(db: DatabaseSync, id: string): FolderRecord | undefined {
+  const row = db.prepare(`
+    SELECT f.*,
+      (SELECT COUNT(*) FROM documents d WHERE d.folder_id = f.id) AS document_count
+    FROM folders f WHERE f.id = ?
+  `).get(id) as SqlRow | undefined;
+  return row ? mapFolder(row) : undefined;
+}
+
+function requireFolder(db: DatabaseSync, id: string): FolderRecord {
+  const folder = getFolder(db, id);
+  if (!folder) throw new MissingFolderError();
+  return folder;
+}
+
+function hasSiblingName(db: DatabaseSync, parentId: string | null, name: string, exceptId?: string): boolean {
+  const row = db.prepare(`
+    SELECT 1 AS found FROM folders
+    WHERE COALESCE(parent_id, '') = COALESCE(?, '')
+      AND name = ? COLLATE NOCASE
+      AND (? IS NULL OR id <> ?)
+    LIMIT 1
+  `).get(parentId, name, exceptId ?? null, exceptId ?? null) as SqlRow | undefined;
+  return Boolean(row);
+}
+
+export function createFolder(database: KnowledgeDatabase, name: string, parentId: string | null): FolderRecord {
+  const id = randomUUID();
+  const timestamp = new Date().toISOString();
+  return transact(database, () => {
+    if (parentId !== null) requireFolder(database.db, parentId);
+    if (hasSiblingName(database.db, parentId, name)) throw new DuplicateFolderNameError();
+    database.db
+      .prepare("INSERT INTO folders (id, name, parent_id, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, 1)")
+      .run(id, name, parentId, timestamp, timestamp);
+    const change = insertChange(database.db, id, name, "created", 1, timestamp, "folder");
+    return { value: getFolder(database.db, id) as FolderRecord, change };
+  });
+}
+
+export function updateFolder(
+  database: KnowledgeDatabase,
+  id: string,
+  expectedVersion: number,
+  changes: { name?: string; parentId?: string | null },
+): FolderRecord {
+  return transact(database, () => {
+    const current = requireFolder(database.db, id);
+    if (current.version !== expectedVersion) throw new VersionConflictError(current.version);
+    const name = changes.name ?? current.name;
+    const parentId = changes.parentId === undefined ? current.parentId : changes.parentId;
+    if (parentId !== null) {
+      requireFolder(database.db, parentId);
+      const cycle = database.db.prepare(`
+        WITH RECURSIVE ancestors(id, parent_id) AS (
+          SELECT id, parent_id FROM folders WHERE id = ?
+          UNION ALL
+          SELECT f.id, f.parent_id FROM folders f JOIN ancestors a ON f.id = a.parent_id
+        )
+        SELECT 1 AS cycle FROM ancestors WHERE id = ? LIMIT 1
+      `).get(parentId, id);
+      if (cycle) throw new FolderCycleError();
+    }
+    if (hasSiblingName(database.db, parentId, name, id)) throw new DuplicateFolderNameError();
+    const timestamp = new Date().toISOString();
+    const version = current.version + 1;
+    database.db
+      .prepare("UPDATE folders SET name = ?, parent_id = ?, updated_at = ?, version = ? WHERE id = ?")
+      .run(name, parentId, timestamp, version, id);
+    const change = insertChange(database.db, id, name, "updated", version, timestamp, "folder");
+    return { value: getFolder(database.db, id) as FolderRecord, change };
+  });
+}
+
+export function deleteFolder(database: KnowledgeDatabase, id: string, expectedVersion: number): void {
+  transact(database, () => {
+    const current = requireFolder(database.db, id);
+    if (current.version !== expectedVersion) throw new VersionConflictError(current.version);
+    const contents = database.db.prepare(`
+      SELECT 1 AS found FROM documents WHERE folder_id = ?
+      UNION ALL SELECT 1 AS found FROM folders WHERE parent_id = ? LIMIT 1
+    `).get(id, id);
+    if (contents) throw new FolderNotEmptyError();
+    const timestamp = new Date().toISOString();
+    database.db.prepare("DELETE FROM folders WHERE id = ?").run(id);
+    const change = insertChange(database.db, id, current.name, "deleted", current.version + 1, timestamp, "folder");
+    return { value: undefined, change };
+  });
+}
+
+export function listDocuments(db: DatabaseSync, query = "", folderId?: string | null): DocumentSummary[] {
   const value = query.trim();
-  const rows = value
-    ? (db
-        .prepare(
-          `SELECT id, title, created_at, updated_at, version, body AS excerpt_source
-           FROM documents
-           WHERE instr(lower(title), lower(?)) > 0 OR instr(lower(body), lower(?)) > 0
-           ORDER BY updated_at DESC, title COLLATE NOCASE ASC`,
-        )
-        .all(value, value) as SqlRow[])
-    : (db
-        .prepare(
-          "SELECT id, title, created_at, updated_at, version, body AS excerpt_source FROM documents ORDER BY updated_at DESC, title COLLATE NOCASE ASC",
-        )
-        .all() as SqlRow[]);
+  const clauses: string[] = [];
+  const parameters: Array<string | null> = [];
+  if (value) {
+    clauses.push("(instr(lower(title), lower(?)) > 0 OR instr(lower(body), lower(?)) > 0)");
+    parameters.push(value, value);
+  }
+  if (folderId !== undefined) {
+    clauses.push(folderId === null ? "folder_id IS NULL" : "folder_id = ?");
+    if (folderId !== null) parameters.push(folderId);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const rows = db
+    .prepare(`SELECT id, title, folder_id, created_at, updated_at, version, body AS excerpt_source FROM documents ${where} ORDER BY updated_at DESC, title COLLATE NOCASE ASC`)
+    .all(...parameters) as SqlRow[];
   return rows.map((row) =>
     mapSummary({ ...row, excerpt: excerptFromMarkdown(String(row.excerpt_source ?? "")) }),
   );
@@ -239,13 +415,15 @@ export function createDocument(
   database: KnowledgeDatabase,
   title: string,
   body: string,
+  folderId: string | null = null,
 ): DocumentRecord {
   const id = randomUUID();
   const timestamp = new Date().toISOString();
   return transact(database, () => {
+    if (folderId !== null) requireFolder(database.db, folderId);
     database.db
-      .prepare("INSERT INTO documents (id, title, body, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, 1)")
-      .run(id, title, body, timestamp, timestamp);
+      .prepare("INSERT INTO documents (id, title, body, folder_id, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, 1)")
+      .run(id, title, body, folderId, timestamp, timestamp);
     const change = insertChange(database.db, id, title, "created", 1, timestamp);
     return { value: getDocument(database.db, id) as DocumentRecord, change };
   });
@@ -257,16 +435,19 @@ export function updateDocument(
   expectedVersion: number,
   title: string,
   body: string,
+  folderId?: string | null,
 ): DocumentRecord {
   return transact(database, () => {
     const current = getDocument(database.db, id);
     if (!current) throw new MissingDocumentError();
     if (current.version !== expectedVersion) throw new VersionConflictError(current.version);
+    const nextFolderId = folderId === undefined ? current.folderId : folderId;
+    if (nextFolderId !== null) requireFolder(database.db, nextFolderId);
     const timestamp = new Date().toISOString();
     const version = current.version + 1;
     database.db
-      .prepare("UPDATE documents SET title = ?, body = ?, updated_at = ?, version = ? WHERE id = ?")
-      .run(title, body, timestamp, version, id);
+      .prepare("UPDATE documents SET title = ?, body = ?, folder_id = ?, updated_at = ?, version = ? WHERE id = ?")
+      .run(title, body, nextFolderId, timestamp, version, id);
     const change = insertChange(database.db, id, title, "updated", version, timestamp);
     return { value: getDocument(database.db, id) as DocumentRecord, change };
   });
@@ -284,7 +465,7 @@ export function deleteDocument(database: KnowledgeDatabase, id: string, expected
   });
 }
 
-export type ImportedDocument = { title: string; body: string };
+export type ImportedDocument = { title: string; body: string; folderId?: string | null };
 
 export function importDocuments(database: KnowledgeDatabase, documents: ImportedDocument[]): DocumentRecord[] {
   return transact(database, () => {
@@ -293,9 +474,11 @@ export function importDocuments(database: KnowledgeDatabase, documents: Imported
     for (const document of documents) {
       const id = randomUUID();
       const timestamp = new Date().toISOString();
+      const folderId = document.folderId ?? null;
+      if (folderId !== null) requireFolder(database.db, folderId);
       database.db
-        .prepare("INSERT INTO documents (id, title, body, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, 1)")
-        .run(id, document.title, document.body, timestamp, timestamp);
+        .prepare("INSERT INTO documents (id, title, body, folder_id, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, 1)")
+        .run(id, document.title, document.body, folderId, timestamp, timestamp);
       changes.push(insertChange(database.db, id, document.title, "created", 1, timestamp));
       result.push(getDocument(database.db, id) as DocumentRecord);
     }
