@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
+import { NodeSelection } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import Link from "@tiptap/extension-link";
@@ -19,6 +20,7 @@ import { Markdown } from "@tiptap/markdown";
 import { common, createLowlight } from "lowlight";
 import {
   Bold,
+  BookmarkPlus,
   Code2,
   Copy,
   Eye,
@@ -147,11 +149,13 @@ export function MarkdownLiveEditor({
   const emittedValueRef = useRef<string | null>(null);
   const editorRef = useRef<Editor | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const imageInsertRangeRef = useRef<{ from: number; to: number } | null>(null);
   const linkRangeRef = useRef<{ from: number; to: number } | null>(null);
   const richModeRef = useRef(false);
   const composingRef = useRef(false);
   const sourceTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const focusSourceAfterFallbackRef = useRef(false);
+  const sourceFallbackTimerRef = useRef<number | null>(null);
 
   adaptersRef.current = adapters;
   onChangeRef.current = onChange;
@@ -165,9 +169,13 @@ export function MarkdownLiveEditor({
   const [sourceReason, setSourceReason] = useState<SourceModeReason | null>(null);
   const [status, setStatus] = useState("");
   const [isUploading, setIsUploading] = useState(false);
+  const [activeCodeLanguage, setActiveCodeLanguage] = useState<string | null>(null);
   const [isLinkOpen, setIsLinkOpen] = useState(false);
   const [linkValue, setLinkValue] = useState("");
   const [linkError, setLinkError] = useState("");
+  const [isBookmarkOpen, setIsBookmarkOpen] = useState(false);
+  const [bookmarkUrl, setBookmarkUrl] = useState("");
+  const [bookmarkError, setBookmarkError] = useState("");
   const [menu, setMenu] = useState<"toc" | "snippets" | null>(null);
   const [snippets, setSnippets] = useState<EditorSnippet[]>([]);
   const [snippetName, setSnippetName] = useState("");
@@ -176,13 +184,37 @@ export function MarkdownLiveEditor({
   const [editingSnippetId, setEditingSnippetId] = useState<string | null>(null);
   const [snippetError, setSnippetError] = useState("");
 
+  const cancelSourceFallback = useCallback(() => {
+    if (sourceFallbackTimerRef.current !== null) {
+      window.clearTimeout(sourceFallbackTimerRef.current);
+      sourceFallbackTimerRef.current = null;
+    }
+  }, []);
+
   const switchToSource = useCallback((reason: SourceModeReason, message: string, restoreFocus = false) => {
+    cancelSourceFallback();
     focusSourceAfterFallbackRef.current = restoreFocus;
     richModeRef.current = false;
     setSourceReason(reason);
     setRoundTripState("source");
     setStatus(message);
-  }, []);
+  }, [cancelSourceFallback]);
+
+  const scheduleSourceFallback = useCallback((activeEditor: Editor) => {
+    cancelSourceFallback();
+    sourceFallbackTimerRef.current = window.setTimeout(() => {
+      sourceFallbackTimerRef.current = null;
+      const currentEditor = editorRef.current;
+      if (!currentEditor || currentEditor.isDestroyed || !richModeRef.current || composingRef.current) return;
+      try {
+        if (!hasExactMarkdownRoundTrip(currentEditor, currentEditor.getMarkdown())) {
+          switchToSource("roundtrip", "This Markdown needs source mode to avoid changing its syntax.", activeEditor.isFocused);
+        }
+      } catch {
+        switchToSource("roundtrip", "Markdown serialization failed. The original source remains available below.", activeEditor.isFocused);
+      }
+    }, 2500);
+  }, [cancelSourceFallback, switchToSource]);
 
   const fetchMetadataAdapter = useCallback((url: string, signal: AbortSignal) => {
     const fetchMetadata = adaptersRef.current?.fetchBookmarkMetadata;
@@ -210,7 +242,7 @@ export function MarkdownLiveEditor({
     [fetchMetadataAdapter]
   );
 
-  const insertUploadedImage = useCallback(async (file: File, position?: number) => {
+  const insertUploadedImage = useCallback(async (file: File, position?: number | { from: number; to: number }) => {
     if (!file.type.startsWith("image/")) {
       setStatus("Choose an image file to attach.");
       return;
@@ -233,8 +265,12 @@ export function MarkdownLiveEditor({
       }
       const name = file.name.replace(/\.[^.]+$/, "") || "image";
       if (position !== undefined) {
-        const safePosition = Math.max(0, Math.min(position, activeEditor.state.doc.content.size));
-        activeEditor.chain().setTextSelection(safePosition).focus().setImage({ src, alt: name }).run();
+        const range = typeof position === "number" ? { from: position, to: position } : position;
+        const safeRange = {
+          from: Math.max(0, Math.min(range.from, activeEditor.state.doc.content.size)),
+          to: Math.max(0, Math.min(range.to, activeEditor.state.doc.content.size)),
+        };
+        activeEditor.chain().setTextSelection(safeRange).focus().setImage({ src, alt: name }).run();
       } else {
         activeEditor.chain().focus().setImage({ src, alt: name }).run();
       }
@@ -258,13 +294,12 @@ export function MarkdownLiveEditor({
         onChangeRef.current(nextValue);
       }
 
-      if (!composingRef.current && !hasExactMarkdownRoundTrip(activeEditor, markdown)) {
-        switchToSource("roundtrip", "This Markdown needs source mode to avoid changing its syntax.", activeEditor.isFocused);
-      }
+      if (hasExactMarkdownRoundTrip(activeEditor, markdown)) cancelSourceFallback();
+      else if (!composingRef.current) scheduleSourceFallback(activeEditor);
     } catch {
-      switchToSource("roundtrip", "Markdown serialization failed. The original source remains available below.", activeEditor.isFocused);
+      if (!composingRef.current) scheduleSourceFallback(activeEditor);
     }
-  }, [switchToSource]);
+  }, [cancelSourceFallback, scheduleSourceFallback]);
 
   const editor = useEditor(
     {
@@ -292,11 +327,10 @@ export function MarkdownLiveEditor({
               if (!activeEditor || activeEditor.isDestroyed || !richModeRef.current) return;
               try {
                 const markdown = activeEditor.getMarkdown();
-                if (!hasExactMarkdownRoundTrip(activeEditor, markdown)) {
-                  switchToSource("roundtrip", "This Markdown needs source mode to avoid changing its syntax.", activeEditor.isFocused);
-                }
+                if (hasExactMarkdownRoundTrip(activeEditor, markdown)) cancelSourceFallback();
+                else scheduleSourceFallback(activeEditor);
               } catch {
-                switchToSource("roundtrip", "Markdown serialization failed. The original source remains available below.", activeEditor.isFocused);
+                scheduleSourceFallback(activeEditor);
               }
             });
             return false;
@@ -333,9 +367,15 @@ export function MarkdownLiveEditor({
           return true;
         },
       },
+      onSelectionUpdate: ({ editor: activeEditor }) => {
+        const language = activeEditor.isActive("codeBlock")
+          ? activeEditor.getAttributes("codeBlock").language || "plaintext"
+          : null;
+        setActiveCodeLanguage(language);
+      },
       onUpdate: ({ editor: activeEditor }) => updateMarkdown(activeEditor),
     },
-    [extensions, updateMarkdown, ariaLabel, insertUploadedImage, switchToSource]
+    [extensions, updateMarkdown, ariaLabel, insertUploadedImage, switchToSource, scheduleSourceFallback, cancelSourceFallback]
   );
 
   useEffect(() => {
@@ -356,10 +396,13 @@ export function MarkdownLiveEditor({
     }
 
     const exact = lineEndingStyleRef.current !== null && hasExactMarkdownRoundTrip(editor, parts.body, true);
+    cancelSourceFallback();
     richModeRef.current = exact;
     setSourceReason(exact ? null : "roundtrip");
     setRoundTripState(exact ? "rich" : "source");
-  }, [editor, value]);
+  }, [editor, value, cancelSourceFallback]);
+
+  useEffect(() => () => cancelSourceFallback(), [cancelSourceFallback]);
 
   useEffect(() => {
     if (!focusSourceAfterFallbackRef.current || roundTripState !== "source") return;
@@ -493,6 +536,22 @@ export function MarkdownLiveEditor({
     setIsLinkOpen(false);
   };
 
+  const insertBookmark = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const url = safeHttpUrl(bookmarkUrl.trim());
+    if (!url || !isStandaloneWebUrl(bookmarkUrl.trim())) {
+      setBookmarkError("Enter one http:// or https:// web address.");
+      return;
+    }
+    if (!editor?.commands.insertBookmarkCard({ url })) {
+      setBookmarkError("This address could not be inserted as a bookmark card.");
+      return;
+    }
+    setBookmarkError("");
+    setIsBookmarkOpen(false);
+    editor.commands.focus();
+  };
+
   const handleSourceEdit = (nextBody: string) => {
     const nextValue = frontmatter + nextBody;
     if (nextValue === incomingValueRef.current) return;
@@ -504,7 +563,9 @@ export function MarkdownLiveEditor({
     const input = event.currentTarget;
     const files = Array.from(input.files || []);
     input.value = "";
-    for (const file of files) void insertUploadedImage(file);
+    const insertionRange = imageInsertRangeRef.current;
+    imageInsertRangeRef.current = null;
+    for (const file of files) void insertUploadedImage(file, insertionRange ?? undefined);
   };
 
   const saveSnippet = async (event: FormEvent<HTMLFormElement>) => {
@@ -579,19 +640,17 @@ export function MarkdownLiveEditor({
         if (event.target instanceof HTMLElement && event.target.closest(".mle-editor-content, .mle-source-textarea")) onFocus?.();
       }}
     >
-      <div className="mle-header">
-        <div className="mle-mode-tabs" role="tablist" aria-label="Editor view">
+      {(showPreviewTab || frontmatter) && <div className="mle-header">
+        {showPreviewTab && <div className="mle-mode-tabs" role="tablist" aria-label="Editor view">
           <button type="button" role="tab" aria-selected={pane === "write"} className={pane === "write" ? "is-active" : ""} onClick={() => setPane("write")}>
             <Pencil aria-hidden="true" /> Write
           </button>
-          {showPreviewTab && (
             <button type="button" role="tab" aria-selected={pane === "preview"} className={pane === "preview" ? "is-active" : ""} onClick={() => setPane("preview")}>
               <Eye aria-hidden="true" /> Preview
             </button>
-          )}
-        </div>
+        </div>}
         {frontmatter && <span className="mle-frontmatter-badge" title="Frontmatter remains unchanged while editing the body">Frontmatter preserved</span>}
-      </div>
+      </div>}
 
       {pane === "write" && roundTripState === "rich" && editor && (
         <>
@@ -615,17 +674,36 @@ export function MarkdownLiveEditor({
               setLinkError("");
               setIsLinkOpen(true);
             }}><Link2 /></ToolbarButton>
-            <ToolbarButton label="Upload image" disabled={!canUpload || isUploading} onClick={() => uploadInputRef.current?.click()}><ImagePlus /></ToolbarButton>
+            <ToolbarButton label="Insert bookmark card" onClick={() => {
+              setBookmarkUrl("");
+              setBookmarkError("");
+              setIsBookmarkOpen(true);
+            }}><BookmarkPlus /></ToolbarButton>
+            <ToolbarButton label="Upload image" disabled={!canUpload || isUploading} onClick={() => {
+              const selection = editor.state.selection;
+              const selectedBookmark = selection instanceof NodeSelection && selection.node.type.name === "bookmarkCard";
+              const insertion = selectedBookmark
+                ? selection.to
+                : selection.from;
+              imageInsertRangeRef.current = selectedBookmark
+                ? { from: insertion, to: insertion }
+                : { from: selection.from, to: selection.to };
+              uploadInputRef.current?.click();
+            }}><ImagePlus /></ToolbarButton>
             <input ref={uploadInputRef} className="mle-visually-hidden" type="file" accept="image/*" multiple onChange={handleImageSelect} aria-label="Choose image files" />
             <ToolbarButton label="Undo" onClick={() => editor.chain().focus().undo().run()}><Undo2 /></ToolbarButton>
             <ToolbarButton label="Redo" onClick={() => editor.chain().focus().redo().run()}><Redo2 /></ToolbarButton>
-            {editor.isActive("codeBlock") && (
+            {activeCodeLanguage !== null && (
               <>
                 <select
                   className="mle-language-select"
                   aria-label="Code block language"
-                  value={editor.getAttributes("codeBlock").language || "plaintext"}
-                  onChange={(event) => editor.chain().focus().updateAttributes("codeBlock", { language: event.currentTarget.value }).run()}
+                  value={activeCodeLanguage}
+                  onChange={(event) => {
+                    const language = event.currentTarget.value;
+                    editor.chain().focus().updateAttributes("codeBlock", { language }).run();
+                    setActiveCodeLanguage(language);
+                  }}
                 >
                   {CODE_LANGUAGES.map((language) => <option key={language} value={language}>{language}</option>)}
                 </select>
@@ -633,9 +711,7 @@ export function MarkdownLiveEditor({
               </>
             )}
             <span className="mle-toolbar-spacer" />
-            {headings.length > 0 && (
-              <ToolbarButton label="Table of contents" onClick={() => setMenu(menu === "toc" ? null : "toc")}><ListTree /></ToolbarButton>
-            )}
+            <ToolbarButton label="Table of contents" disabled={headings.length === 0} onClick={() => setMenu(menu === "toc" ? null : "toc")}><ListTree /><span>Outline</span></ToolbarButton>
             {canManageSnippets && (
               <ToolbarButton label="Snippets" onClick={() => setMenu(menu === "snippets" ? null : "snippets")}>Snips</ToolbarButton>
             )}
@@ -643,11 +719,11 @@ export function MarkdownLiveEditor({
 
           {menu === "toc" && (
             <nav className="mle-popover mle-toc" aria-label="Table of contents">
-              {headings.map((heading) => (
+              {headings.length ? headings.map((heading) => (
                 <button key={heading.index} type="button" className="mle-toc-item" data-level={heading.level} onMouseDown={(event) => event.preventDefault()} onClick={() => scrollToHeading(heading.index)}>
                   {heading.text}
                 </button>
-              ))}
+              )) : <p className="mle-muted">Add a heading to build the outline.</p>}
             </nav>
           )}
 
@@ -724,6 +800,20 @@ export function MarkdownLiveEditor({
               {editor?.isActive("link") && <button type="button" className="mle-quiet-button" onClick={removeLink}>Remove link</button>}
               <button type="button" className="mle-quiet-button" onClick={() => setIsLinkOpen(false)}>Cancel</button>
               <button type="submit" className="mle-action-button">Apply</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {isBookmarkOpen && (
+        <div className="mle-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsBookmarkOpen(false); }}>
+          <form className="mle-link-dialog" role="dialog" aria-modal="true" aria-labelledby="mle-bookmark-title" onSubmit={insertBookmark}>
+            <div className="mle-dialog-heading"><h2 id="mle-bookmark-title">Insert bookmark card</h2><button type="button" className="mle-quiet-button" aria-label="Close bookmark dialog" onClick={() => setIsBookmarkOpen(false)}><X /></button></div>
+            <label>Web address<input autoFocus value={bookmarkUrl} onChange={(event) => setBookmarkUrl(event.target.value)} placeholder="https://example.com/article" /></label>
+            {bookmarkError && <p className="mle-error" role="alert">{bookmarkError}</p>}
+            <div className="mle-dialog-actions">
+              <button type="button" className="mle-quiet-button" onClick={() => setIsBookmarkOpen(false)}>Cancel</button>
+              <button type="submit" className="mle-action-button">Add card</button>
             </div>
           </form>
         </div>

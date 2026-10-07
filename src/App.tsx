@@ -14,7 +14,6 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
-  Eye,
   Link2,
   LoaderCircle,
   Menu,
@@ -33,7 +32,6 @@ import {
 import { ApiError, apiRequest, jsonRequest } from "./api";
 import { ActionDialog, type ActionDialogConfig, type ActionDialogResult } from "./ActionDialog";
 import type { AppViewContextValue, WorkspaceScreen } from "./AppViewContext";
-import { MarkdownBody } from "./MarkdownBody";
 import { MarkdownLiveEditor } from "../packages/markdown-live-editor";
 import { SearchHighlight } from "./SearchHighlight";
 import { createFieldnotesEditorAdapters } from "./editor-adapters";
@@ -316,7 +314,6 @@ export function App() {
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [externalVersion, setExternalVersion] = useState<number | null>(null);
   const [externalDelete, setExternalDelete] = useState(false);
-  const [activeView, setActiveView] = useState<"write" | "preview">("write");
   const [notice, setNotice] = useState("");
   const [listError, setListError] = useState("");
   const [importing, setImporting] = useState(false);
@@ -330,7 +327,6 @@ export function App() {
   const editorHostRef = useRef<HTMLDivElement>(null);
   const notesHeadingRef = useRef<HTMLHeadingElement>(null);
   const actionDialogRef = useRef(actionDialog);
-  const activeViewRef = useRef(activeView);
   const selectedRef = useRef<DocumentRecord | null>(null);
   const draftTitleRef = useRef("");
   const draftBodyRef = useRef("");
@@ -368,7 +364,6 @@ export function App() {
   queryRef.current = query;
   activeFolderRef.current = activeFolderId;
   actionDialogRef.current = actionDialog;
-  activeViewRef.current = activeView;
   currentRouteRef.current = currentRoute;
   workspaceRendererRef.current = workspaceRenderer;
   currentListViewKeyRef.current = currentListViewKey;
@@ -759,7 +754,6 @@ export function App() {
   const acceptDocument = useCallback((
     document: DocumentRecord,
     restoreDraft = true,
-    view: "write" | "preview" = "preview",
   ) => {
     setDocumentLoadError(null);
     const cachedDraft = restoreDraft ? draftsRef.current.get(document.id) : undefined;
@@ -773,8 +767,6 @@ export function App() {
     setExternalVersion(versionChanged ? document.version : null);
     setExternalDelete(false);
     setBacklinks([]);
-    activeViewRef.current = view;
-    setActiveView(view);
     setNotice(versionChanged
       ? "A newer version was saved elsewhere. Your draft is still here."
       : cachedDraft ? "Unsaved draft restored in this tab." : "");
@@ -848,7 +840,7 @@ export function App() {
         setSaveState("conflict");
         setNotice("A newer version was saved elsewhere. Your draft is still here.");
       } else {
-        acceptDocument(response.document, true, activeViewRef.current);
+        acceptDocument(response.document);
         void refreshBacklinks(response.document.id);
       }
     } catch {
@@ -922,12 +914,6 @@ export function App() {
         event.preventDefault();
         searchInputRef.current?.focus();
       }
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && !event.repeat && event.key.toLowerCase() === "e") {
-        if (!selectedRef.current) return;
-        if (target?.closest("input:not(.title-input), select, [contenteditable='true']")) return;
-        event.preventDefault();
-        switchEditorView(activeViewRef.current === "write" ? "preview" : "write");
-      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -952,7 +938,7 @@ export function App() {
         `/api/documents/${selected.id}`,
         jsonRequest("PUT", { expectedVersion: selected.version, title, body }),
       );
-      acceptDocument(response.document, false, activeViewRef.current);
+      acceptDocument(response.document, false);
       await Promise.all([refreshDocuments(), refreshRecent(), refreshBacklinks(response.document.id)]);
       setNotice("Saved to this Mac.");
     } catch (error) {
@@ -978,7 +964,7 @@ export function App() {
     try {
       const folderId = activeFolderId && activeFolderId !== "root" ? activeFolderId : null;
       const response = await apiRequest<DocumentResponse>("/api/documents", jsonRequest("POST", { title: "Untitled note", body: "", folderId }));
-      acceptDocument(response.document, true, "write");
+      acceptDocument(response.document);
       await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
       void refreshBacklinks(response.document.id);
       return response.document;
@@ -1054,7 +1040,7 @@ export function App() {
     }
     try {
       const response = await apiRequest<DocumentResponse>(`/api/documents/${selected.id}`);
-      acceptDocument(response.document, false, activeViewRef.current);
+      acceptDocument(response.document, false);
       void refreshBacklinks(response.document.id);
       setNotice("Loaded the latest version.");
     } catch (error) {
@@ -1284,7 +1270,7 @@ export function App() {
           folderId,
         }),
       );
-      acceptDocument(response.document, true, activeViewRef.current);
+      acceptDocument(response.document);
       await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
       setNotice("Note moved.");
     } catch (error) {
@@ -1418,27 +1404,14 @@ export function App() {
   useEffect(() => {
     if (!editorWasFocusedBeforeResizeRef.current) return;
     editorWasFocusedBeforeResizeRef.current = false;
-    if (currentRoute.kind !== "document" || activeView !== "write") return;
+    if (currentRoute.kind !== "document") return;
     const frame = window.requestAnimationFrame(() => {
       const editor = editorHostRef.current?.querySelector<HTMLElement>(".mle-prosemirror, .mle-source-textarea");
       if (!editor) return;
       editor.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeView, currentRoute.kind, workspaceRenderer]);
-
-  const switchEditorView = (nextView: "write" | "preview") => {
-    if (nextView === activeViewRef.current) return;
-    activeViewRef.current = nextView;
-    setActiveView(nextView);
-    if (nextView === "write") {
-      window.requestAnimationFrame(() => {
-        const editor = editorHostRef.current?.querySelector<HTMLElement>(".mle-prosemirror, .mle-source-textarea");
-        if (!editor) return;
-        editor.focus({ preventScroll: true });
-      });
-    }
-  };
+  }, [currentRoute.kind, workspaceRenderer]);
 
   const toggleTheme = () => setTheme((current) => current === "dark" ? "light" : "dark");
 
@@ -2345,10 +2318,6 @@ export function App() {
                   {saveState === "saving" ? <LoaderCircle className="spin" size={14} /> : saveState === "saved" ? <Check size={14} /> : saveState === "conflict" ? <RefreshCw size={13} /> : <span className="unsaved-dot" />}
                   <span>{saveStateLabel(saveState)}</span>
                 </div>
-                <div className="view-switch" role="group" aria-label="Editor view">
-                  <button type="button" className={activeView === "write" ? "chosen" : ""} onClick={() => switchEditorView("write")} aria-label="Write" title="Write" aria-pressed={activeView === "write"}><Pencil size={15} aria-hidden="true" /><span className="toolbar-action-label">Write</span></button>
-                  <button type="button" className={activeView === "preview" ? "chosen" : ""} onClick={() => switchEditorView("preview")} aria-label="Preview" title="Preview" aria-pressed={activeView === "preview"}><Eye size={15} aria-hidden="true" /><span className="toolbar-action-label">Preview</span></button>
-                </div>
                 <button type="button" className="save-button" onClick={() => void saveDocument()} disabled={!isDirty || saveState === "saving"} aria-label="Save changes" title="Save changes">
                   <Save size={15} aria-hidden="true" /><span className="toolbar-action-label">Save</span>
                 </button>
@@ -2374,7 +2343,7 @@ export function App() {
               </div>
             )}
 
-            <section className="document-editor" aria-label={activeView === "write" ? "Markdown editor" : "Markdown preview"}>
+            <section className="document-editor" aria-label="Markdown editor">
               <input
                 className="title-input"
                 type="text"
@@ -2436,7 +2405,7 @@ export function App() {
                   </div>
                 </div>
               <div className="document-divider" aria-hidden="true" />
-              <div ref={editorHostRef} className="fieldnotes-rich-editor" hidden={activeView !== "write"}>
+              <div ref={editorHostRef} className="fieldnotes-rich-editor">
                 <MarkdownLiveEditor
                   value={draftBody}
                   adapters={editorAdapters}
@@ -2455,17 +2424,14 @@ export function App() {
                   }}
                 />
               </div>
-              <div className="preview-scroll" hidden={activeView !== "preview"}>
-                  <MarkdownBody markdown={draftBody} documents={documents} onOpenDocument={(id) => void navigateToDocument(id)} />
-                  <section className="backlinks-panel">
-                    <div className="backlinks-heading"><Link2 size={15} /><span>LINKED FROM</span><span className="backlink-count">{linkedTitles.length}</span></div>
-                    {linkedTitles.length ? (
-                      <div className="backlink-list">
-                        {linkedTitles.map((document) => <button type="button" key={document.id} onClick={() => void navigateToDocument(document.id)}><FileText size={14} />{document.title}<span>{relativeDate(document.updatedAt)}</span></button>)}
-                      </div>
-                    ) : <p className="no-backlinks">No notes link here yet. Add <code>[[{draftTitle || "this note"}]]</code> to another note.</p>}
-                  </section>
-              </div>
+              <section className="backlinks-panel">
+                <div className="backlinks-heading"><Link2 size={15} /><span>LINKED FROM</span><span className="backlink-count">{linkedTitles.length}</span></div>
+                {linkedTitles.length ? (
+                  <div className="backlink-list">
+                    {linkedTitles.map((document) => <button type="button" key={document.id} onClick={() => void navigateToDocument(document.id)}><FileText size={14} />{document.title}<span>{relativeDate(document.updatedAt)}</span></button>)}
+                  </div>
+                ) : <p className="no-backlinks">No notes link here yet. Add <code>[[{draftTitle || "this note"}]]</code> to another note.</p>}
+              </section>
               <div className="editor-status">
                 <span className="mobile-status">
                   <span className="mobile-sync-state" aria-label={connectionLabel}>

@@ -18,14 +18,14 @@ The first database gets three clearly labeled demo notes. They contain no import
 
 ## Use the app
 
-- Create, edit, preview, search, and delete Markdown notes.
+- Create, edit, search, and delete Markdown notes.
 - Navigate with browser history. Desktop keeps the library, list, and active workspace in a stable multi-pane layout without route animations; mobile keeps Stackflow transitions and history. The library is `/`, recent activity is `/recent`, folders use `/folders/<folder-id>` (or `/folders/unfiled`), and notes use `/notes/<note-id>`. These URLs can be bookmarked and reloaded directly.
 - On small screens, opening a note becomes a full-screen editor route. Confirmations and rename prompts use keyboard-aware, accessible dialogs; Back closes an open dialog before leaving the current route.
 - Create an unlimited number of nested folders, including empty folders. Select folders to browse direct notes, create notes in the current folder, rename folders from their row action, or move folders and notes. Deleting a folder is allowed only when it has no notes or subfolders.
 - Sort notes by title A–Z/Z–A or updated time, newest/oldest. Sorting composes with the selected all-notes, unfiled, or folder view and text search; Reset clears the search and folder selection and returns to newest updates.
-- Existing notes open in Preview; new notes open in Write. Use `⌘E` on macOS or `Ctrl+E` on other platforms to switch between Write and Preview while retaining the draft and editor selection. A leading, closed YAML frontmatter block is hidden in Preview only; the original Markdown remains in storage, the editor, imports, and exports. Unclosed frontmatter is shown as Markdown.
+- Notes open directly in the rich Markdown editor. Supported Markdown renders as editable text, headings, lists, links, code blocks, bookmark cards, and images; syntax that cannot round-trip exactly falls back to source editing rather than being silently rewritten. A closed YAML frontmatter block is protected and shown with a “Frontmatter preserved” badge. The stored Markdown remains unchanged until you save.
 - Dark theme is the first-use default regardless of OS appearance. The sun/moon control switches themes and stores the explicit choice for future visits.
-- Write `[[Note title]]` to link a note. Links resolve by case-insensitive title; backlinks appear in Preview. Unresolved links remain visible.
+- Write `[[Note title]]` to link a note. Links resolve by case-insensitive title; backlinks appear below the editor. Unresolved links remain visible.
 - See saved activity and live changes from other browser tabs or agents. Each saved change is committed to SQLite before success is returned and then published through SSE. Reconnecting clients replay the durable change log and refresh current notes.
 - If a note changes while you have a draft open, Fieldnotes keeps your text in the editor and marks the conflict. Load the latest version to replace the draft, or save after resolving it.
 - Import one or more `.md` or `.markdown` files without changing their text. Export the whole library as a versioned JSON file. This is generic Markdown import; front matter and Markdown remain text, but Obsidian plugins, attachments, embeds, and all vault-specific syntax are not promised to work.

@@ -1305,7 +1305,7 @@ html[data-theme="dark"] select:focus-visible { outline-color: rgba(164, 211, 171
   .editor-breadcrumb { min-height: 44px; gap: 8px; }
   .breadcrumb-muted, .breadcrumb-divider { display: none; }
   .breadcrumb-title { max-width: none; color: var(--ink); font-size: 14px; font-weight: 600; line-height: 1.35; }
-  .toolbar-actions { display: grid; grid-template-columns: minmax(56px, 1fr) auto auto auto; align-items: center; gap: 6px; width: 100%; }
+  .toolbar-actions { display: grid; grid-template-columns: minmax(56px, 1fr) auto auto; align-items: center; gap: 6px; width: 100%; }
   .save-indicator { display: flex; min-width: 0; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 550; }
   .save-indicator > span { overflow: hidden; text-overflow: ellipsis; }
   .view-switch { min-height: 46px; padding: 2px; border-radius: 10px; }
