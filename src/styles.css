@@ -207,7 +207,7 @@ button:focus-visible, input:focus-visible, textarea:not(.markdown-editor):focus-
 .document-folder-label select { max-width: min(300px, 30vw); min-height: 30px; padding: 0 8px; overflow: hidden; color: #607469; border: 1px solid #e4e9e2; border-radius: 6px; background: #fbfcfa; font-size: 10px; text-overflow: ellipsis; }
 .meta-separator { color: #c9cec8; }
 .markdown-editor { flex: 1; width: 100%; min-height: 150px; padding: 35px 0 20px; resize: none; color: #465149; border: 0; outline: none; background: transparent; font-family: var(--mono); font-size: 12px; line-height: 1.9; tab-size: 2; }
-.markdown-editor:focus-visible { box-shadow: inset 2px 0 0 rgba(78, 118, 93, .36); }
+.markdown-editor:focus-visible { box-shadow: inset 2px 0 0 var(--accent); }
 .markdown-editor::placeholder { color: #b5bcb6; }
 .editor-status { display: flex; align-items: center; gap: 13px; min-height: 34px; padding-top: 9px; color: #a0a7a0; border-top: 1px solid #f0f1ee; font-size: 9px; }
 .mobile-status { display: none; }
@@ -959,6 +959,7 @@ html[data-theme="dark"] button:focus-visible,
 html[data-theme="dark"] input:focus-visible,
 html[data-theme="dark"] textarea:focus-visible,
 html[data-theme="dark"] select:focus-visible { outline-color: rgba(164, 211, 171, .48); }
+html[data-theme="dark"] .markdown-editor:focus-visible { box-shadow: inset 2px 0 0 #a4d3ab; }
 
 .mobile-topbar, .mobile-drawer-backdrop, .mobile-drawer-close { display: none; }
 
