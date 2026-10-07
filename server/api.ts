@@ -187,6 +187,34 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
   const staticIndex = resolvedStaticDirectory ? path.join(resolvedStaticDirectory, "index.html") : undefined;
   const allowedTailscaleLogin = normalizedLogin(process.env.KB_ALLOWED_TAILSCALE_LOGIN);
   const configuredPublicOrigin = process.env.KB_PUBLIC_ORIGIN?.trim().replace(/\/$/, "") || undefined;
+  const activeResponses = new Set<Promise<void>>();
+  const eventStreams = new Set<() => void>();
+  let draining = false;
+  let drainPromise: Promise<void> | undefined;
+
+  const trackResponse = (response: Response): void => {
+    let settled = false;
+    let resolveCompletion: () => void = () => undefined;
+    const completion = new Promise<void>((resolve) => { resolveCompletion = resolve; });
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      activeResponses.delete(completion);
+      resolveCompletion();
+    };
+    activeResponses.add(completion);
+    response.once("finish", finish);
+    response.once("close", finish);
+  };
+
+  app.locals.beginShutdown = (): Promise<void> => {
+    if (drainPromise) return drainPromise;
+    draining = true;
+    const pendingResponses = [...activeResponses];
+    for (const close of [...eventStreams]) close();
+    drainPromise = Promise.all(pendingResponses).then(() => undefined);
+    return drainPromise;
+  };
 
   if (Boolean(allowedTailscaleLogin) !== Boolean(configuredPublicOrigin)) {
     throw new Error("Set KB_ALLOWED_TAILSCALE_LOGIN and KB_PUBLIC_ORIGIN together; an origin check alone is not authentication.");
@@ -240,6 +268,12 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
         return;
       }
     }
+    if (draining) {
+      response.setHeader("Connection", "close");
+      sendError(response, 503, "server_shutting_down", "Fieldnotes is draining existing requests.");
+      return;
+    }
+    trackResponse(response);
     next();
   });
 
@@ -401,11 +435,32 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
     for (const change of getChangesAfter(database.db, after)) send(change);
     response.write(`event: ready\ndata: ${JSON.stringify({ highWatermark: getLatestChangeSequence(database.db) })}\n\n`);
 
-    const heartbeat = setInterval(() => response.write(": keep-alive\n\n"), 20_000);
-    request.on("close", () => {
+    const heartbeat = setInterval(() => {
+      if (!response.writableEnded && !response.destroyed) response.write(": keep-alive\n\n");
+    }, 20_000);
+    heartbeat.unref();
+    let cleaned = false;
+    let closeForShutdown: () => void = () => undefined;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
       clearInterval(heartbeat);
       database.changes.off("change", onChange);
-    });
+      eventStreams.delete(closeForShutdown);
+    };
+    closeForShutdown = () => {
+      try {
+        if (!response.writableEnded && !response.destroyed) {
+          response.write("event: server_shutdown\ndata: {\"reconnect\":true}\n\n");
+          response.end();
+        }
+      } finally {
+        cleanup();
+      }
+    };
+    eventStreams.add(closeForShutdown);
+    response.once("finish", cleanup);
+    response.once("close", cleanup);
   });
 
   app.post("/api/import", (request, response) => {
