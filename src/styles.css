@@ -207,8 +207,21 @@ button:focus-visible, input:focus-visible, textarea:not(.markdown-editor):focus-
 .document-folder-label select { max-width: min(300px, 30vw); min-height: 30px; padding: 0 8px; overflow: hidden; color: #607469; border: 1px solid #e4e9e2; border-radius: 6px; background: #fbfcfa; font-size: 10px; text-overflow: ellipsis; }
 .meta-separator { color: #c9cec8; }
 .markdown-editor { flex: 1; width: 100%; min-height: 150px; padding: 35px 0 20px; resize: none; color: #465149; border: 0; outline: none; background: transparent; font-family: var(--mono); font-size: 12px; line-height: 1.9; tab-size: 2; }
-.markdown-editor:focus-visible { box-shadow: inset 2px 0 0 var(--accent); }
 .markdown-editor::placeholder { color: #b5bcb6; }
+.fieldnotes-rich-editor { flex: 1 0 auto; min-width: 0; min-height: 0; }
+.fieldnotes-rich-editor[hidden] { display: none; }
+.fieldnotes-rich-editor .mle-shell { --mle-border: var(--line); --mle-muted: var(--muted); --mle-ink: var(--ink); --mle-surface: var(--surface); --mle-soft: var(--canvas); --mle-accent: var(--accent); border: 0; border-radius: 0; background: transparent; color: var(--ink); }
+.fieldnotes-rich-editor .mle-header { min-height: 42px; padding: 5px 0; }
+.fieldnotes-rich-editor .mle-toolbar { position: sticky; top: 0; z-index: 3; padding-right: 0; padding-left: 0; background: var(--surface); }
+.fieldnotes-rich-editor .mle-editor-content { padding: 20px 0 18px; }
+.fieldnotes-rich-editor .mle-prosemirror { color: var(--ink); font-family: var(--serif); font-size: 16px; line-height: 1.8; caret-color: var(--ink); }
+.fieldnotes-rich-editor .mle-prosemirror:focus-visible { outline: none; }
+.fieldnotes-rich-editor .mle-prosemirror h1,
+.fieldnotes-rich-editor .mle-prosemirror h2,
+.fieldnotes-rich-editor .mle-prosemirror h3 { color: var(--ink); font-family: var(--serif); font-weight: 550; }
+.fieldnotes-rich-editor .mle-source-textarea { min-height: 230px; padding: 16px 0; border-color: var(--line); background: var(--surface); color: var(--ink); }
+.fieldnotes-rich-editor .mle-status,
+.fieldnotes-rich-editor .mle-preservation-message { padding-left: 0; padding-right: 0; }
 .editor-status { display: flex; align-items: center; gap: 13px; min-height: 34px; padding-top: 9px; color: #a0a7a0; border-top: 1px solid #f0f1ee; font-size: 9px; }
 .mobile-status { display: none; }
 .save-hint { display: flex; align-items: center; gap: 5px; margin-left: auto; }
@@ -398,6 +411,11 @@ button:focus-visible, input:focus-visible, textarea:not(.markdown-editor):focus-
   .document-folder-label { margin-left: 0; }
   .document-folder-label select { max-width: min(58vw, 230px); min-height: 40px; }
   .markdown-editor { min-height: 140px; padding-top: 18px; font-size: 12px; line-height: 1.75; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+  .fieldnotes-rich-editor { flex: 0 0 auto; }
+  .fieldnotes-rich-editor .mle-editor-content { padding-top: 14px; }
+  .fieldnotes-rich-editor .mle-prosemirror { font-family: "Apple SD Gothic Neo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 16px; line-height: 1.75; }
+  .fieldnotes-rich-editor .mle-toolbar { margin-inline: -4px; }
+  .fieldnotes-rich-editor .mle-tool-button { min-width: 40px; min-height: 40px; }
   .preview-scroll { padding: 20px 0 12px; overscroll-behavior: contain; }
   .markdown-body pre { padding: 13px 12px; font-size: 10px; }
   .backlink-list button { min-height: 44px; }
@@ -959,7 +977,6 @@ html[data-theme="dark"] button:focus-visible,
 html[data-theme="dark"] input:focus-visible,
 html[data-theme="dark"] textarea:focus-visible,
 html[data-theme="dark"] select:focus-visible { outline-color: rgba(164, 211, 171, .48); }
-html[data-theme="dark"] .markdown-editor:focus-visible { box-shadow: inset 2px 0 0 #a4d3ab; }
 
 .mobile-topbar, .mobile-drawer-backdrop, .mobile-drawer-close { display: none; }
 

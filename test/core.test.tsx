@@ -43,6 +43,19 @@ async function json(pathname: string, init?: RequestInit) {
   return { response, body };
 }
 
+test("Markdown preview renders only bounded raster data images and skips unsafe HTML", () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(MarkdownBody, {
+      markdown: "![safe](data:image/webp;base64,QUJD)\n\n![unsafe](data:image/svg+xml;base64,PHN2Zz4=)\n\n<script>alert(1)</script>",
+      documents: [],
+      onOpenDocument: () => undefined,
+    }),
+  );
+  assert.match(markup, /<img[^>]+src="data:image\/webp;base64,QUJD"/);
+  assert.match(markup, /Image omitted: unsupported or unsafe source\./);
+  assert.doesNotMatch(markup, /<script|alert\(1\)/);
+});
+
 function postJson(method: string, body: unknown): RequestInit {
   return { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
 }
@@ -141,6 +154,16 @@ test("human API and agent CLI create, read, search, update, and delete the same 
   assert.equal(deleteResult.status, 0, deleteResult.stderr);
   const missing = await json(`/api/documents/${note.id}`);
   assert.equal(missing.response.status, 404);
+});
+
+test("bookmark metadata API rejects private targets before attempting a request", async () => {
+  const blocked = await json(`/api/bookmarks/metadata?url=${encodeURIComponent("https://127.0.0.1/internal")}`);
+  assert.equal(blocked.response.status, 400);
+  assert.equal(blocked.body.error, "invalid_bookmark_url");
+
+  const http = await json(`/api/bookmarks/metadata?url=${encodeURIComponent("http://example.com/")}`);
+  assert.equal(http.response.status, 400);
+  assert.equal(http.body.error, "invalid_bookmark_url");
 });
 
 test("stale concurrent updates and stale deletes are rejected atomically", async () => {
@@ -246,6 +269,22 @@ test("cross-origin writes are rejected", async () => {
     headers: { "Content-Type": "application/json", Origin: "https://untrusted.example" },
   });
   assert.equal(result.status, 403);
+});
+
+test("Markdown body size limit accepts 250,000 characters and rejects the next character", async () => {
+  const accepted = await json("/api/documents", postJson("POST", {
+    title: "Bounded image sync fixture",
+    body: "a".repeat(250_000),
+  }));
+  assert.equal(accepted.response.status, 201);
+  const rejected = await json("/api/documents", postJson("POST", {
+    title: "Oversized image sync fixture",
+    body: "a".repeat(250_001),
+  }));
+  assert.equal(rejected.response.status, 400);
+  assert.match(rejected.body.message, /250 KB maximum/);
+  const deleted = await json(`/api/documents/${accepted.body.document.id}`, postJson("DELETE", { expectedVersion: 1 }));
+  assert.equal(deleted.response.status, 204);
 });
 
 test("SQLite backup uses VACUUM INTO and restore validates plus preserves the previous database", () => {

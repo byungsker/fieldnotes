@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { ErrorRequestHandler, Express, Request, Response } from "express";
 import express from "express";
+import { BookmarkMetadataFetchError, fetchBookmarkMetadata, UnsafeBookmarkUrlError } from "./bookmark-metadata.js";
 import type { ChangeRecord } from "./types.js";
 import {
   createDocument,
@@ -235,6 +236,12 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
     response.json({ ok: true, schemaVersion: Number((database.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) });
   });
 
+  app.get("/api/bookmarks/metadata", async (request, response) => {
+    if (typeof request.query.url !== "string") throw new RequestValidationError("A single bookmark URL is required.");
+    const metadata = await fetchBookmarkMetadata(request.query.url);
+    response.json({ metadata });
+  });
+
   app.get("/api/documents", (request, response) => {
     const rawFolderId = request.query.folderId;
     const folderId = rawFolderId === undefined
@@ -395,6 +402,14 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
     }
     if (error instanceof RequestValidationError) {
       sendError(response, 400, "invalid_request", error.message);
+      return;
+    }
+    if (error instanceof UnsafeBookmarkUrlError) {
+      sendError(response, 400, "invalid_bookmark_url", error.message);
+      return;
+    }
+    if (error instanceof BookmarkMetadataFetchError) {
+      sendError(response, 502, "bookmark_metadata_unavailable", error.message);
       return;
     }
     if (error instanceof VersionConflictError) {
