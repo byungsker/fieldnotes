@@ -43,9 +43,9 @@ import {
 import { BookmarkCard } from "./BookmarkCardExtension.tsx";
 import { MarkdownPreview } from "./MarkdownPreview.tsx";
 import { WikiLink } from "./WikiLinkExtension.tsx";
+import { hasContentPreservingMarkdownRoundTrip, type MarkdownSerializationApi } from "./markdown-roundtrip.ts";
 import {
   detectMarkdownLineEndingStyle,
-  normalizeMarkdownLineEndings,
   restoreMarkdownLineEndings,
   splitTerminalNewlineSuffix,
   stripNormalizedTerminalNewlines,
@@ -62,29 +62,8 @@ import type { EditorSnippet, MarkdownLiveEditorAdapters, MarkdownLiveEditorProps
 const lowlight = createLowlight(common);
 const CODE_LANGUAGES = ["plaintext", "javascript", "typescript", "json", "html", "css", "bash", "python", "sql", "yaml", "markdown"] as const;
 
-interface MarkdownApi {
-  parse: (markdown: string) => unknown;
-  serialize: (document: unknown) => string;
-}
-
-type EditorWithMarkdown = Editor & { markdown?: MarkdownApi };
+type EditorWithMarkdown = Editor & { markdown?: MarkdownSerializationApi };
 type SourceModeReason = "roundtrip" | "paste";
-
-function hasExactMarkdownRoundTrip(editor: Editor, markdown: string, retainTerminalNewlines = false): boolean {
-  if (markdown === "") return true;
-  try {
-    const markdownApi = (editor as EditorWithMarkdown).markdown;
-    if (!markdownApi) return false;
-    const normalizedInput = normalizeMarkdownLineEndings(markdown);
-    const normalizedOutput = normalizeMarkdownLineEndings(markdownApi.serialize(markdownApi.parse(markdown)));
-    if (normalizedInput === null || normalizedOutput === null) return false;
-    return retainTerminalNewlines
-      ? stripNormalizedTerminalNewlines(normalizedOutput) === stripNormalizedTerminalNewlines(normalizedInput)
-      : normalizedOutput === normalizedInput;
-  } catch {
-    return false;
-  }
-}
 
 function shortcutMatches(event: KeyboardEvent, shortcut: string | null | undefined): boolean {
   if (!shortcut) return false;
@@ -207,7 +186,8 @@ export function MarkdownLiveEditor({
       const currentEditor = editorRef.current;
       if (!currentEditor || currentEditor.isDestroyed || !richModeRef.current || composingRef.current) return;
       try {
-        if (!hasExactMarkdownRoundTrip(currentEditor, currentEditor.getMarkdown())) {
+        const markdownApi = (currentEditor as EditorWithMarkdown).markdown;
+        if (!markdownApi || !hasContentPreservingMarkdownRoundTrip(markdownApi, currentEditor.getMarkdown())) {
           switchToSource("roundtrip", "This Markdown needs source mode to avoid changing its syntax.", activeEditor.isFocused);
         }
       } catch {
@@ -294,7 +274,8 @@ export function MarkdownLiveEditor({
         onChangeRef.current(nextValue);
       }
 
-      if (hasExactMarkdownRoundTrip(activeEditor, markdown)) cancelSourceFallback();
+      const markdownApi = (activeEditor as EditorWithMarkdown).markdown;
+      if (markdownApi && hasContentPreservingMarkdownRoundTrip(markdownApi, markdown)) cancelSourceFallback();
       else if (!composingRef.current) scheduleSourceFallback(activeEditor);
     } catch {
       if (!composingRef.current) scheduleSourceFallback(activeEditor);
@@ -327,7 +308,8 @@ export function MarkdownLiveEditor({
               if (!activeEditor || activeEditor.isDestroyed || !richModeRef.current) return;
               try {
                 const markdown = activeEditor.getMarkdown();
-                if (hasExactMarkdownRoundTrip(activeEditor, markdown)) cancelSourceFallback();
+                const markdownApi = (activeEditor as EditorWithMarkdown).markdown;
+                if (markdownApi && hasContentPreservingMarkdownRoundTrip(markdownApi, markdown)) cancelSourceFallback();
                 else scheduleSourceFallback(activeEditor);
               } catch {
                 scheduleSourceFallback(activeEditor);
@@ -351,9 +333,10 @@ export function MarkdownLiveEditor({
             activeEditor.commands.insertBookmarkCard({ url: text.trim() });
             return true;
           }
-          if (!activeEditor || !hasExactMarkdownRoundTrip(activeEditor, text)) {
+          const markdownApi = activeEditor && (activeEditor as EditorWithMarkdown).markdown;
+          if (!markdownApi || !hasContentPreservingMarkdownRoundTrip(markdownApi, text)) {
             setPane("write");
-            switchToSource("paste", "This paste is not an exact Markdown round trip. Source mode is open; paste again there to preserve it.", activeEditor?.isFocused ?? false);
+            switchToSource("paste", "Rich editing would change this Markdown's content or structure. Source mode is open; paste again there to preserve it.", activeEditor?.isFocused ?? false);
             return true;
           }
           activeEditor.commands.insertContent(text, { contentType: "markdown" });
@@ -395,11 +378,14 @@ export function MarkdownLiveEditor({
       incomingValueRef.current = value;
     }
 
-    const exact = lineEndingStyleRef.current !== null && hasExactMarkdownRoundTrip(editor, parts.body, true);
+    const markdownApi = (editor as EditorWithMarkdown).markdown;
+    const canEditRich = lineEndingStyleRef.current !== null
+      && markdownApi !== undefined
+      && hasContentPreservingMarkdownRoundTrip(markdownApi, parts.body, true);
     cancelSourceFallback();
-    richModeRef.current = exact;
-    setSourceReason(exact ? null : "roundtrip");
-    setRoundTripState(exact ? "rich" : "source");
+    richModeRef.current = canEditRich;
+    setSourceReason(canEditRich ? null : "roundtrip");
+    setRoundTripState(canEditRich ? "rich" : "source");
   }, [editor, value, cancelSourceFallback]);
 
   useEffect(() => () => cancelSourceFallback(), [cancelSourceFallback]);
@@ -769,8 +755,8 @@ export function MarkdownLiveEditor({
         <div className="mle-source-fallback">
           <p className="mle-preservation-message" role="status">
             {sourceReason === "paste"
-                ? "This Markdown could not round-trip exactly. Paste again here to preserve every character."
-                : "Rich editing is disabled for this note because its Markdown did not round-trip exactly."}
+                ? "Rich editing would change this Markdown's content or structure. Paste again here to preserve every character."
+                : "Rich editing is disabled for this note because parsing or serialization changes its content or structure."}
           </p>
           {frontmatter && <pre className="mle-frontmatter" aria-label="Protected frontmatter">{frontmatter}</pre>}
           <textarea
