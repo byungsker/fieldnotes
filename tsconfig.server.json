@@ -12,5 +12,5 @@
     "types": ["node"],
     "noImplicitOverride": true
   },
-  "include": ["server/**/*.ts", "scripts/migrate.ts", "shared/**/*.ts"]
+  "include": ["server/**/*.ts", "scripts/migrate.ts", "scripts/vault-migrate.ts", "scripts/vault-files.ts", "shared/**/*.ts"]
 }

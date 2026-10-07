@@ -936,7 +936,7 @@ export function App() {
     try {
       const response = await apiRequest<DocumentResponse>(
         `/api/documents/${selected.id}`,
-        jsonRequest("PUT", { expectedVersion: selected.version, title, body }),
+        jsonRequest("PUT", { expectedVersion: selected.version, expectedHash: selected.contentHash, title, body }),
       );
       acceptDocument(response.document, false);
       await Promise.all([refreshDocuments(), refreshRecent(), refreshBacklinks(response.document.id)]);
@@ -1006,7 +1006,7 @@ export function App() {
       destructive: true,
     })) return false;
     try {
-      await apiRequest<void>(`/api/documents/${selected.id}`, jsonRequest("DELETE", { expectedVersion: selected.version }));
+      await apiRequest<void>(`/api/documents/${selected.id}`, jsonRequest("DELETE", { expectedVersion: selected.version, expectedHash: selected.contentHash }));
       draftsRef.current.delete(selected.id);
       selectedRef.current = null;
       setSelectedDocument(null);
@@ -1265,6 +1265,7 @@ export function App() {
         `/api/documents/${selected.id}`,
         jsonRequest("PUT", {
           expectedVersion: selected.version,
+          expectedHash: selected.contentHash,
           title: selected.title,
           body: selected.body,
           folderId,

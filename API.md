@@ -7,11 +7,12 @@ All routes are under the same origin as the web app. Requests and responses are 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/health` | Health and database schema version |
+| `GET` | `/api/vault/status` | Active storage mode, counts, and durable vault sequence |
 | `GET` | `/api/documents?q=term&folderId=ID` | List or search notes; omit `folderId` for all notes, use `root` for unfiled notes |
 | `POST` | `/api/documents` | Create `{title, body, folderId?}`; omit or use `null` for unfiled |
 | `GET` | `/api/documents/:id` | Read a complete note, including `version` |
-| `PUT` | `/api/documents/:id` | Update `{expectedVersion, title, body, folderId?}`; `folderId` moves the note |
-| `DELETE` | `/api/documents/:id` | Delete `{expectedVersion}` |
+| `PUT` | `/api/documents/:id` | Update `{expectedVersion, title, body, folderId?, expectedHash?}`; `folderId` moves the note |
+| `DELETE` | `/api/documents/:id` | Delete `{expectedVersion, expectedHash?}` |
 | `GET` | `/api/folders` | List folders, including empty folders and direct-note counts |
 | `POST` | `/api/folders` | Create `{name, parentId?}`; omit or use `null` for a top-level folder |
 | `GET` | `/api/folders/:id` | Read a folder and its version |
@@ -26,7 +27,9 @@ All routes are under the same origin as the web app. Requests and responses are 
 
 IDs are generated UUIDs. Folder names are 1–120 characters and cannot contain path separators or control characters. Duplicate folder names are rejected within the same parent. The hierarchy has no application-defined depth limit; practical limits are available memory, storage, and SQLite's recursive-query/runtime limits. Folder moves reject cycles. Deleting a non-empty folder returns `409` with `folder_not_empty` and never cascades to notes or subfolders.
 
-Document and folder updates/deletes require the exact current version. A stale write returns `409` with `{error:"version_conflict", currentVersion}`; no change or change-log entry is committed. Folder changes use `entityType:"folder"` and `folderId` in the durable change log; document changes retain `entityType:"document"` and `documentId`. Mutations and their change-log entries share a SQLite transaction.
+Document and folder updates/deletes require the exact current version. Vault-mode clients should also send the `contentHash` returned with a document; the server checks the version and hash against the current Markdown file. A stale write returns `409` with `{error:"version_conflict", currentVersion, currentHash?}` and does not commit the requested mutation. Folder changes use `entityType:"folder"` and `folderId` in the durable change log; document changes retain `entityType:"document"` and `documentId`.
+
+In SQLite mode, mutations and change-log entries share a SQLite transaction. In filesystem mode, the `.md` write and private `.fieldnotes` operation journal are flushed before success. The SQLite file `vault-index.sqlite` is a rebuildable search index. API requests reconcile the vault before reading or writing, and an OS file watcher plus periodic scan notices edits made in Finder or another Markdown editor. Markdown responses then include a vault-relative `filePath` and SHA-256 `contentHash`; SQLite-mode responses omit them.
 
 Each SSE `change` event has a monotonically increasing `id` and JSON data:
 
@@ -48,7 +51,7 @@ Send `Last-Event-ID` on reconnect. The server replays changes after that sequenc
 curl http://127.0.0.1:4177/api/documents/NOTE_ID
 curl -X PUT http://127.0.0.1:4177/api/documents/NOTE_ID \
   -H 'content-type: application/json' \
-  -d '{"expectedVersion":3,"title":"Example","body":"Updated Markdown"}'
+  -d '{"expectedVersion":3,"expectedHash":"<sha256 from the last read>","title":"Example","body":"Updated Markdown"}'
 ```
 
 ## Folder examples

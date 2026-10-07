@@ -21,6 +21,7 @@ Usage:
   node scripts/kb.mjs folder rename ID --version N --name NAME
   node scripts/kb.mjs folder move ID --version N --parent ID|root
   node scripts/kb.mjs folder delete ID --version N
+  node scripts/kb.mjs vault status
 
 Set KB_BASE_URL to point at a different private instance. Writes use version checks.`);
 }
@@ -60,6 +61,7 @@ async function request(path, init) {
     error.status = response.status;
     error.code = body.error;
     error.currentVersion = body.currentVersion;
+    error.currentHash = body.currentHash;
     throw error;
   }
   if (response.status === 204) return undefined;
@@ -90,7 +92,8 @@ function printDocuments(documents) {
   }
   for (const note of documents) {
     const excerpt = note.excerpt ? ` — ${note.excerpt}` : "";
-    console.log(`${note.id}  v${note.version}  ${note.title}${excerpt}`);
+    const filePath = note.filePath ? `  [${note.filePath}]` : "";
+    console.log(`${note.id}  v${note.version}  ${note.title}${filePath}${excerpt}`);
   }
 }
 
@@ -108,7 +111,7 @@ async function main() {
     const id = positionals[0];
     if (!id) throw new Error("read requires a note ID.");
     const { document } = await request(`/api/documents/${encodeURIComponent(id)}`);
-    console.log(JSON.stringify({ id: document.id, title: document.title, version: document.version, updatedAt: document.updatedAt }, null, 2));
+    console.log(JSON.stringify({ id: document.id, title: document.title, version: document.version, updatedAt: document.updatedAt, filePath: document.filePath, contentHash: document.contentHash }, null, 2));
     console.log("\n--- Markdown ---\n");
     console.log(document.body);
     return;
@@ -139,7 +142,7 @@ async function main() {
     }
     const title = flags.title ?? latest.title;
     const body = await bodyFrom(flags, latest.body);
-    const payload = { expectedVersion, title, body };
+    const payload = { expectedVersion, expectedHash: latest.contentHash, title, body };
     if (flags.folder !== undefined) payload.folderId = flags.folder === "root" ? null : flags.folder;
     const { document } = await request(`/api/documents/${encodeURIComponent(id)}`, json("PUT", payload));
     console.log(`Updated ${document.id} (version ${document.version})`);
@@ -150,7 +153,13 @@ async function main() {
     const id = positionals[0];
     if (!id) throw new Error("delete requires a note ID.");
     const expectedVersion = versionFlag(flags);
-    await request(`/api/documents/${encodeURIComponent(id)}`, json("DELETE", { expectedVersion }));
+    const { document: latest } = await request(`/api/documents/${encodeURIComponent(id)}`);
+    if (latest.version !== expectedVersion) {
+      const error = new Error(`Stale version: requested v${expectedVersion}, current is v${latest.version}. Read the note again before retrying.`);
+      error.status = 409;
+      throw error;
+    }
+    await request(`/api/documents/${encodeURIComponent(id)}`, json("DELETE", { expectedVersion, expectedHash: latest.contentHash }));
     console.log(`Deleted ${id}`);
     return;
   }
@@ -169,6 +178,7 @@ async function main() {
     const folderId = flags.folder === "root" ? null : flags.folder;
     const { document } = await request(`/api/documents/${encodeURIComponent(id)}`, json("PUT", {
       expectedVersion,
+      expectedHash: latest.contentHash,
       title: latest.title,
       body: latest.body,
       folderId,
@@ -240,6 +250,13 @@ async function main() {
 
     usage();
     throw new Error(`Unknown folder action: ${action ?? "(missing)"}`);
+  }
+
+  if (command === "vault") {
+    if (positionals[0] !== "status") throw new Error("vault requires the status action.");
+    const status = await request("/api/vault/status");
+    console.log(JSON.stringify(status, null, 2));
+    return;
   }
 
   usage();
