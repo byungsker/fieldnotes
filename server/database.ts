@@ -402,7 +402,7 @@ export function listDocuments(db: DatabaseSync, query = "", folderId?: string | 
     .prepare(`SELECT id, title, folder_id, created_at, updated_at, version, body AS excerpt_source FROM documents ${where} ORDER BY updated_at DESC, title COLLATE NOCASE ASC`)
     .all(...parameters) as SqlRow[];
   return rows.map((row) =>
-    mapSummary({ ...row, excerpt: excerptFromMarkdown(String(row.excerpt_source ?? "")) }),
+    mapSummary({ ...row, excerpt: excerptFromMarkdown(String(row.excerpt_source ?? ""), 150, value) }),
   );
 }
 

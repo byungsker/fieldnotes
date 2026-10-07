@@ -33,3 +33,15 @@ The top-of-document comparison matches the reference's compact pinned title cont
 ## Iteration notes
 
 The first review found the folder context hidden by a generic mobile rule; the document-specific rule was corrected and the view captured again. The initial synthetic note did not scroll far enough to compare the compact pinned header, so it was extended with generic synthetic paragraphs and recaptured. The final top and scrolled comparison images above were reviewed together at equal viewport dimensions.
+
+## 2026-10-07 search, properties, and panel QA
+
+- Four additional Library reference screenshots were materialized through the private Library workflow and viewed. They showed the duplicate search clear affordance, the visible `Search: …` query tag, frontmatter text leaking into excerpts, and the mobile note property/toolbar layout. The source images remain outside this repository.
+- QA ran in a fresh Chrome profile against an isolated loopback Vite/API pair and a temporary synthetic SQLite database under `/tmp`; it did not open or write the production database. The synthetic note included Korean, English, punctuation, raw HTML text, and YAML frontmatter.
+- The desktop Notes list collapsed independently from the folder sidebar, expanded editor width from 882 px to 1212 px, survived reload, and reopened through an accessible control. The folder sidebar remained collapsed when reopening the note list.
+- Browser search tests found and highlighted Korean, English, and punctuation literally; the query tag was absent; the custom clear button cleared search and keyboard insertion still edited the input. The single visible clear affordance was captured; temporarily hiding the custom button left no native X visible.
+- Folder filtering returned only the synthetic note in its selected folder. Search snippets centered a mid-body match and omitted YAML fields. The raw note body including frontmatter remained unchanged.
+- Desktop and mobile note views shared Status, Created, Folder, Updated, and Version properties. Mobile screenshots were reviewed at 320, 360, and 390 px; note and list views had no horizontal page overflow. Write, Preview, Save, and Delete targets measured 44 × 44 px at 390 px; Write/Preview/Save labels were visually hidden while accessible names remained. The toolbar stayed sticky at top 0 and the document editor had 36 px top padding.
+- Date unit tests cover 23 h 59 min versus exactly 24 h, Korean calendar formatting across UTC midnight, and invalid timestamps. Lint, typecheck, and the isolated integration suite passed (35 tests). The visual browser was Chrome emulation; physical iPhone Safari was not tested.
+
+Synthetic captures are kept outside Git under `/tmp/fieldnotes-qa-*`; no reference or user-data images were added to the repository.

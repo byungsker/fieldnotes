@@ -219,6 +219,27 @@ test("generic Markdown import/export preserves content and path-like inputs cann
   assert.match(rendered, /class="wiki-link"/);
 });
 
+test("search excerpts omit YAML frontmatter and center body matches without changing stored Markdown", async () => {
+  const body = `---\ntitle: frontmatter-only-token\nstatus: private\n---\n\n${"Earlier readable context. ".repeat(9)}\n한국어 테스트와 English Needle! 뒤쪽 문장.`;
+  const created = await json("/api/documents", postJson("POST", { title: "Excerpt fixture", body }));
+  assert.equal(created.response.status, 201);
+  const id = created.body.document.id;
+
+  const bodySearch = await json("/api/documents?q=Needle");
+  const bodyMatch = bodySearch.body.documents.find((document: { id: string }) => document.id === id);
+  assert.ok(bodyMatch);
+  assert.match(bodyMatch.excerpt, /Needle/);
+  assert.doesNotMatch(bodyMatch.excerpt, /frontmatter-only-token|status: private/);
+  assert.match(bodyMatch.excerpt, /…/);
+
+  const metadataSearch = await json("/api/documents?q=frontmatter-only-token");
+  const metadataMatch = metadataSearch.body.documents.find((document: { id: string }) => document.id === id);
+  assert.ok(metadataMatch);
+  assert.doesNotMatch(metadataMatch.excerpt, /frontmatter-only-token|status: private/);
+  const readBack = await json(`/api/documents/${id}`);
+  assert.equal(readBack.body.document.body, body);
+});
+
 test("cross-origin writes are rejected", async () => {
   const result = await fetch(`${baseUrl}/api/documents`, {
     ...postJson("POST", { title: "Nope", body: "" }),
