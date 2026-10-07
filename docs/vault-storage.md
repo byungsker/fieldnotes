@@ -8,7 +8,9 @@ The vault must be a Fieldnotes-owned directory under `KB_DATA_DIR`. Do not point
 
 This conversion reads the existing Fieldnotes SQLite library and writes a new app-owned directory. It does not read or modify any Obsidian vault. Keep the service stopped through backup and migration, and do not edit the source database or new vault during the conversion.
 
-1. Stop Fieldnotes cleanly. Confirm `data/server.lock` is absent. If a lock remains, inspect the process and do not delete the lock until you confirm the process has exited.
+1. Stop Fieldnotes cleanly. SIGTERM closes active SSE streams, rejects new requests, drains accepted requests, closes idle keep-alive connections, and only then closes SQLite and removes its own lock. Confirm `data/server.lock` is absent. If a lock remains, inspect the process and do not delete the lock until you confirm the process has exited.
+
+   If a LaunchAgent or other supervisor manages Fieldnotes, inspect its exact label and working directory, then temporarily unload that one job before stopping the server so `KeepAlive` cannot start a second copy during maintenance. After migration, load that same job once; do not also run `npm start` manually.
 2. Create a standalone snapshot with SQLite's online backup mechanism. Use a private, ignored location and do not overwrite an existing backup:
 
    ```sh
@@ -29,6 +31,8 @@ This conversion reads the existing Fieldnotes SQLite library and writes a new ap
 5. Check `npm run kb -- vault status`, then open a few notes in the UI and confirm the same notes through `npm run kb -- list` and `read`.
 
 Migration preserves note IDs, titles, Markdown bytes, folder IDs, versions, timestamps, and history sequence. Filenames are encoded and bounded for portable filesystems; duplicate titles receive stable ID suffixes. Folder display names remain in the manifest if their physical path needs encoding. The private migration manifest contains note titles and paths, so keep it under the ignored, mode-700 `data/private-backups` directory.
+
+Opening a schema v2 SQLite database with this release upgrades its schema to v3 by adding file metadata columns with empty defaults. This is a metadata-only SQLite migration: document bodies, IDs, folders, and history remain in SQLite. Filesystem storage begins only when `KB_VAULT_DIR` points to a verified Fieldnotes vault.
 
 If verification fails, the script exits before changing `.env`; the original SQLite file remains available. A failed conversion removes only the temporary staging directory it created. Inspect and resolve the reported issue, then run again with a new destination and manifest name.
 

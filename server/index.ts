@@ -51,7 +51,9 @@ const staticDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 const app = createApp(database, isDevelopment ? undefined : staticDirectory);
 const stopVaultMonitor = startVaultMonitor(database);
 const server = app.listen(port, host, () => {
-  console.log(`Fieldnotes API listening on http://${host}:${port}`);
+  const address = server.address();
+  const listeningPort = address && typeof address !== "string" ? address.port : port;
+  console.log(`Fieldnotes API listening on http://${host}:${listeningPort}`);
   console.log(database.vault ? `Markdown vault: ${database.vault.rootDir}` : `SQLite data directory: ${dataDir}`);
 });
 
@@ -63,15 +65,38 @@ server.on("error", (error) => {
   process.exitCode = 1;
 });
 
-let shuttingDown = false;
+let shutdownPromise: Promise<void> | undefined;
 function shutdown(): void {
-  if (shuttingDown) return;
-  shuttingDown = true;
+  if (shutdownPromise) return;
   stopVaultMonitor();
-  server.close(() => {
+  const serverClosed = new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  });
+  const beginShutdown = app.locals.beginShutdown as (() => Promise<void>) | undefined;
+  if (!beginShutdown) {
+    console.error("Fieldnotes HTTP drain controller is missing; leaving the database open.");
+    process.exitCode = 1;
+    return;
+  }
+  shutdownPromise = (async () => {
+    await beginShutdown();
+    server.closeAllConnections();
+    await serverClosed;
     closeDatabase(database);
-    if (existsSync(lockPath)) unlinkSync(lockPath);
-    process.exit(0);
+    if (existsSync(lockPath)) {
+      try {
+        const lock = JSON.parse(readFileSync(lockPath, "utf8")) as { pid?: number };
+        if (lock.pid === process.pid) unlinkSync(lockPath);
+        else console.error("Fieldnotes shutdown left a lock owned by another process untouched.");
+      } catch (error) {
+        console.error("Could not verify the Fieldnotes server lock during shutdown:", error);
+      }
+    }
+  })().then(() => {
+    process.exitCode = 0;
+  }).catch((error: unknown) => {
+    console.error("Fieldnotes graceful shutdown failed; the process remains alive for recovery:", error);
+    process.exitCode = 1;
   });
 }
 
