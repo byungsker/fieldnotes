@@ -1,5 +1,5 @@
 export interface MarkdownParts {
-  /** The original, byte-for-byte frontmatter prefix, including its final line ending. */
+  /** The original, byte-for-byte frontmatter prefix and following blank separator lines. */
   frontmatter: string;
   body: string;
 }
@@ -29,9 +29,15 @@ export function splitLeadingFrontmatter(source: string): MarkdownParts {
   while (cursor < source.length) {
     const line = getLine(source, cursor);
     if (line.value === "---") {
+      let prefixEnd = line.next;
+      while (prefixEnd < source.length) {
+        const separator = getLine(source, prefixEnd);
+        if (separator.value.trim() !== "") break;
+        prefixEnd = separator.next;
+      }
       return {
-        frontmatter: source.slice(0, line.next),
-        body: source.slice(line.next),
+        frontmatter: source.slice(0, prefixEnd),
+        body: source.slice(prefixEnd),
       };
     }
     if (line.next === cursor || line.next === source.length) break;
