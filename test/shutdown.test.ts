@@ -2,12 +2,60 @@ import assert from "node:assert/strict";
 import { request as httpRequest } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, existsSync, rmSync } from "node:fs";
+import { createApp } from "../server/api.js";
+import { closeDatabase, openDatabase } from "../server/database.js";
 import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
 const projectDirectory = path.resolve(import.meta.dirname, "..");
+
+test("the HTTP drain guard rejects new writes on a still-open listener", { timeout: 8_000 }, async () => {
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), "fieldnotes-drain-guard-test-"));
+  const database = openDatabase(dataDir, { seedDemo: false });
+  const app = createApp(database);
+  const server = app.listen(0, "127.0.0.1");
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("listening", resolve);
+      server.once("error", reject);
+    });
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const events = await fetch(`${baseUrl}/api/events`, { signal: AbortSignal.timeout(5_000) });
+    assert.equal(events.status, 200);
+    assert.ok(events.body);
+    const reader = events.body.getReader();
+    await reader.read();
+
+    const beginShutdown = app.locals.beginShutdown as () => Promise<void>;
+    const draining = beginShutdown();
+    const blocked = await fetch(`${baseUrl}/api/documents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Rejected during drain", body: "" }),
+    });
+    assert.equal(blocked.status, 503);
+    assert.equal((await blocked.json()).error, "server_shutting_down");
+
+    let streamText = "";
+    const decoder = new TextDecoder();
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      streamText += decoder.decode(chunk.value);
+    }
+    assert.match(streamText, /event: server_shutdown/);
+    await draining;
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    closeDatabase(database);
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
 
 function waitForExit(child: ChildProcess, timeoutMs: number): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   if (child.exitCode !== null || child.signalCode !== null) {
