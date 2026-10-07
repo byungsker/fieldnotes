@@ -55,6 +55,7 @@ import {
 
 type ConnectionState = "connecting" | "connected" | "reconnecting";
 type SaveState = "saved" | "unsaved" | "saving" | "conflict" | "error";
+type DocumentListStatus = "loading" | "loaded" | "error";
 
 type DocumentListResponse = { documents: DocumentSummary[] };
 type DocumentResponse = { document: DocumentRecord };
@@ -234,6 +235,59 @@ function initialSequence(): number {
   return Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
+function DocumentListSkeleton() {
+  return (
+    <div className="document-list-skeleton" role="status" aria-label="Loading notes" aria-busy="true">
+      {Array.from({ length: 5 }, (_, index) => (
+        <div className="document-skeleton-row" key={index} aria-hidden="true">
+          <div className="document-skeleton-top">
+            <span className="loading-skeleton document-skeleton-title" />
+            <span className="loading-skeleton document-skeleton-date" />
+          </div>
+          <span className="loading-skeleton document-skeleton-excerpt" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function WorkspaceLoadingSkeleton({ document = false }: { document?: boolean }) {
+  return (
+    <div
+      className={`workspace-loading-skeleton${document ? " document-loading-skeleton" : ""}`}
+      role="status"
+      aria-label={document ? "Loading note" : "Loading your library"}
+      aria-busy="true"
+    >
+      {document ? (
+        <>
+          <span className="loading-skeleton workspace-skeleton-title" aria-hidden="true" />
+          <div className="workspace-skeleton-properties" aria-hidden="true">
+            <span className="loading-skeleton" />
+            <span className="loading-skeleton" />
+            <span className="loading-skeleton" />
+          </div>
+          <span className="loading-skeleton workspace-skeleton-divider" aria-hidden="true" />
+          <div className="workspace-skeleton-body" aria-hidden="true">
+            <span className="loading-skeleton" />
+            <span className="loading-skeleton" />
+            <span className="loading-skeleton" />
+            <span className="loading-skeleton" />
+          </div>
+        </>
+      ) : (
+        <>
+          <span className="loading-skeleton workspace-skeleton-art" aria-hidden="true" />
+          <span className="loading-skeleton workspace-skeleton-kicker" aria-hidden="true" />
+          <span className="loading-skeleton workspace-skeleton-heading" aria-hidden="true" />
+          <span className="loading-skeleton workspace-skeleton-copy" aria-hidden="true" />
+          <span className="loading-skeleton workspace-skeleton-copy short" aria-hidden="true" />
+        </>
+      )}
+    </div>
+  );
+}
+
 export function App() {
   const [currentRoute, setCurrentRoute] = useState<WorkspaceRoute>(() => workspaceRouteFromPathname(window.location.pathname));
   const initialHistoryIndex = workspaceHistoryIndex(window.history.state) ?? 0;
@@ -241,6 +295,7 @@ export function App() {
   const [workspaceRenderer, setWorkspaceRenderer] = useState(() => workspaceRendererForViewport(window.innerWidth));
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [visibleDocuments, setVisibleDocuments] = useState<DocumentSummary[]>([]);
+  const [documentListStatus, setDocumentListStatus] = useState<DocumentListStatus>("loading");
   const [folders, setFolders] = useState<FolderRecord[]>([]);
   const [activeFolderId, setActiveFolderId] = useState<ActiveFolder>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(() => new Set());
@@ -267,6 +322,7 @@ export function App() {
   const [importing, setImporting] = useState(false);
   const [actionDialog, setActionDialog] = useState<ActionDialogConfig | null>(null);
   const [routeError, setRouteError] = useState("");
+  const [documentLoadError, setDocumentLoadError] = useState<{ documentId: string; message: string } | null>(null);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(() => hasMobileDrawerHistoryState(window.history.state));
   const [mobileDrawerSwipePreview, setMobileDrawerSwipePreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -283,6 +339,7 @@ export function App() {
   const sequenceRef = useRef(initialSequence());
   const reconcilingRef = useRef(false);
   const searchRequestRef = useRef(0);
+  const documentsLoadedRef = useRef(false);
   const folderTreeInitializedRef = useRef(false);
   const draftsRef = useRef(new Map<string, DraftSnapshot>());
   const dialogResolverRef = useRef<((result: ActionDialogResult) => void) | null>(null);
@@ -625,17 +682,28 @@ export function App() {
 
   const refreshDocuments = useCallback(async () => {
     const requestId = ++searchRequestRef.current;
-    const response = await apiRequest<DocumentListResponse>("/api/documents");
-    setDocuments(response.documents);
-    const currentQuery = queryRef.current;
-    const currentFolder = activeFolderRef.current;
-    if (!currentQuery.trim() && currentFolder === null) {
-      if (requestId === searchRequestRef.current) setVisibleDocuments(response.documents);
-    } else {
-      const search = await apiRequest<DocumentListResponse>(documentListPath(currentQuery, currentFolder));
-      if (requestId === searchRequestRef.current) setVisibleDocuments(search.documents);
+    if (!documentsLoadedRef.current) {
+      setDocumentListStatus("loading");
+      setListError("");
     }
-    setListError("");
+    try {
+      const response = await apiRequest<DocumentListResponse>("/api/documents");
+      setDocuments(response.documents);
+      const currentQuery = queryRef.current;
+      const currentFolder = activeFolderRef.current;
+      if (!currentQuery.trim() && currentFolder === null) {
+        if (requestId === searchRequestRef.current) setVisibleDocuments(response.documents);
+      } else {
+        const search = await apiRequest<DocumentListResponse>(documentListPath(currentQuery, currentFolder));
+        if (requestId === searchRequestRef.current) setVisibleDocuments(search.documents);
+      }
+      setListError("");
+      documentsLoadedRef.current = true;
+      setDocumentListStatus("loaded");
+    } catch (error) {
+      if (!documentsLoadedRef.current) setDocumentListStatus("error");
+      throw error;
+    }
   }, []);
 
   const refreshFolders = useCallback(async () => {
@@ -653,6 +721,7 @@ export function App() {
   }, []);
 
   const refreshSearch = useCallback(async (value: string) => {
+    if (!documentsLoadedRef.current) return;
     const requestId = ++searchRequestRef.current;
     const currentFolder = activeFolderRef.current;
     if (!value.trim() && currentFolder === null) {
@@ -692,6 +761,7 @@ export function App() {
     restoreDraft = true,
     view: "write" | "preview" = "preview",
   ) => {
+    setDocumentLoadError(null);
     const cachedDraft = restoreDraft ? draftsRef.current.get(document.id) : undefined;
     if (!restoreDraft) draftsRef.current.delete(document.id);
     selectedRef.current = document;
@@ -711,14 +781,23 @@ export function App() {
   }, []);
 
   const ensureDocumentForRoute = useCallback(async (id: string) => {
-    if (selectedRef.current?.id === id) return;
+    if (selectedRef.current?.id === id) {
+      setDocumentLoadError(null);
+      setRouteError("");
+      return;
+    }
+    setDocumentLoadError(null);
+    setRouteError("");
     try {
       const response = await apiRequest<DocumentResponse>(`/api/documents/${id}`);
+      if (currentRouteRef.current.kind !== "document" || currentRouteRef.current.documentId !== id) return;
       setRouteError("");
       acceptDocument(response.document);
       void refreshBacklinks(response.document.id);
     } catch {
-      setRouteError("This note could not be found. It may have been deleted.");
+      if (currentRouteRef.current.kind === "document" && currentRouteRef.current.documentId === id) {
+        setDocumentLoadError({ documentId: id, message: "This note could not be found. It may have been deleted." });
+      }
     }
   }, [acceptDocument, refreshBacklinks]);
 
@@ -753,6 +832,7 @@ export function App() {
         selectedRef.current = null;
         setSelectedDocument(null);
         setBacklinks([]);
+        setDocumentLoadError({ documentId: selected.id, message: "This note was deleted elsewhere." });
         setNotice("This note was deleted on another client.");
       }
       return;
@@ -1526,7 +1606,7 @@ export function App() {
             onClick={() => void navigateToFolder(null)}
             aria-current={activeFolderId === null ? "page" : undefined}
           >
-            <FileText size={14} /><span>All notes</span><span className="folder-count">{documents.length}</span>
+            <FileText size={14} /><span>All notes</span><span className="folder-count">{documentListStatus === "loaded" ? documents.length : <span className="count-skeleton" role="status" aria-label="Loading note count" />}</span>
           </button>
           <button
             type="button"
@@ -1944,7 +2024,7 @@ export function App() {
         <button className={`rail-link${screen.kind === "library" ? " active" : ""}`} type="button" title="All notes" aria-label="All notes" onClick={() => void navigateToLibrary()}>
           <FileText size={16} />
           <span>All notes</span>
-          <span className="rail-count">{documents.length}</span>
+          <span className="rail-count">{documentListStatus === "loaded" ? documents.length : <span className="count-skeleton" role="status" aria-label="Loading note count" />}</span>
         </button>
         <button className={`rail-link${screen.kind === "recent" ? " active" : ""}`} type="button" title="Recent changes" aria-label="Recent changes" onClick={() => void navigateToRecent()}><Clock3 size={16} /><span>Recent changes</span></button>
         {workspaceRenderer === "desktop" && desktopListCollapsed && (
@@ -2011,7 +2091,7 @@ export function App() {
         <div className="list-header">
           <div>
             <div className="eyebrow">YOUR LIBRARY</div>
-          <div className="list-title-row"><h1 ref={notesHeadingRef} tabIndex={-1}>{activeFolderId === "root" ? "Unfiled" : activeFolder?.name ?? "Notes"}</h1><span className="total-count">{activeFolderId === null ? documents.length : visibleDocuments.length}</span></div>
+          <div className="list-title-row"><h1 ref={notesHeadingRef} tabIndex={-1}>{activeFolderId === "root" ? "Unfiled" : activeFolder?.name ?? "Notes"}</h1><span className="total-count">{documentListStatus === "loaded" ? activeFolderId === null ? documents.length : visibleDocuments.length : <span className="count-skeleton" role="status" aria-label="Loading note count" />}</span></div>
           </div>
           <div className="mobile-list-actions">
             <button className="icon-button theme-toggle theme-toggle-list" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
@@ -2066,7 +2146,7 @@ export function App() {
             onClick={() => void navigateToFolder(null)}
             aria-current={activeFolderId === null ? "page" : undefined}
           >
-            <FileText size={14} /><span>All notes</span><span className="folder-count">{documents.length}</span>
+            <FileText size={14} /><span>All notes</span><span className="folder-count">{documentListStatus === "loaded" ? documents.length : <span className="count-skeleton" role="status" aria-label="Loading note count" />}</span>
           </button>
           <button
             type="button"
@@ -2159,7 +2239,7 @@ export function App() {
         )}
 
         <div className="list-subhead">
-          <span>{query ? `${visibleDocuments.length} RESULTS` : activeFolderId === "root" ? "UNFILED NOTES" : activeFolder ? folderPathById.get(activeFolder.id)?.toUpperCase() : "ALL NOTES"}</span>
+          <span>{documentListStatus === "loading" ? "LOADING NOTES" : query ? `${visibleDocuments.length} RESULTS` : activeFolderId === "root" ? "UNFILED NOTES" : activeFolder ? folderPathById.get(activeFolder.id)?.toUpperCase() : "ALL NOTES"}</span>
           {workspaceRenderer === "desktop" && <div className="list-tools">{renderListTools("desktop")}</div>}
         </div>
 
@@ -2173,21 +2253,22 @@ export function App() {
               <option value="title-desc">Title · Z to A</option>
             </select>
           </label>
-          <span className="visually-hidden" aria-live="polite">{visibleDocuments.length} search results</span>
+          <span className="visually-hidden" aria-live="polite">{documentListStatus === "loading" ? "Loading notes" : `${visibleDocuments.length} search results`}</span>
           {(query.trim() || activeFolderId !== null || sortOrder !== "updated-desc") && (
             <button type="button" className="reset-filters" onClick={resetListFilters}>Reset</button>
           )}
         </div>
 
-        {listError && <div className="list-error"><span>{listError}</span><button type="button" onClick={() => void refreshDocuments()}><RefreshCw size={14} /> Retry</button></div>}
+        {listError && <div className="list-error"><span>{listError}</span><button type="button" onClick={() => void refreshDocuments().catch(() => setListError("The local service is unavailable. Reconnecting…"))}><RefreshCw size={14} /> Retry</button></div>}
 
         <div
           className="document-list"
           role="list"
+          aria-busy={documentListStatus === "loading"}
           data-list-view-key={listViewKey}
           onScroll={(event) => storeDocumentListScroll(event.currentTarget)}
         >
-          {orderedDocuments.map((document) => (
+          {documentListStatus === "loading" ? <DocumentListSkeleton /> : orderedDocuments.map((document) => (
             <button
               className={`document-row${screen.kind === "document" && screen.documentId === document.id ? " selected" : ""}`}
               type="button"
@@ -2203,7 +2284,7 @@ export function App() {
               <span className="document-excerpt"><SearchHighlight text={document.excerpt || "A new note, ready for a first thought."} query={query} /></span>
             </button>
           ))}
-          {visibleDocuments.length === 0 && !listError && (
+          {documentListStatus === "loaded" && visibleDocuments.length === 0 && !listError && (
             <div className="empty-list">
               <div className="empty-list-icon"><Search size={17} /></div>
               <strong>{query ? "No matching notes" : "Nothing here yet"}</strong>
@@ -2212,7 +2293,7 @@ export function App() {
             </div>
           )}
         </div>
-        <div className="list-footer"><span>{visibleDocuments.length} {visibleDocuments.length === 1 ? "note" : "notes"}</span><span>⌘ S to save</span></div>
+        <div className="list-footer"><span>{documentListStatus === "loading" ? "Loading notes…" : documentListStatus === "error" ? "Notes unavailable" : `${visibleDocuments.length} ${visibleDocuments.length === 1 ? "note" : "notes"}`}</span><span>⌘ S to save</span></div>
       </section>
 
       <main className={`editor-pane${screen.kind === "recent" ? " recent-editor-pane" : ""}`} tabIndex={-1}>
@@ -2399,6 +2480,21 @@ export function App() {
               </div>
             </section>
           </>
+        ) : screen.kind === "document" ? (
+          documentLoadError?.documentId === screen.documentId ? (
+            <div className="document-load-error" role="alert">
+              <strong>{documentLoadError.message}</strong>
+              <button type="button" onClick={() => void ensureDocumentForRoute(screen.documentId)}><RefreshCw size={14} /> Try again</button>
+            </div>
+          ) : <WorkspaceLoadingSkeleton document />
+        ) : documentListStatus === "loading" ? (
+          <WorkspaceLoadingSkeleton />
+        ) : documentListStatus === "error" ? (
+          <div className="workspace-load-error" role="status">
+            <strong>The local library could not be loaded.</strong>
+            <span>Your notes are still stored locally.</span>
+            <button type="button" onClick={() => void refreshDocuments().catch(() => setListError("The local service is unavailable. Reconnecting…"))}><RefreshCw size={14} /> Retry</button>
+          </div>
         ) : (
           <>
           {notice && <div className={`notice-bar${saveState === "error" || saveState === "conflict" ? " warning" : ""}`} role="status"><span>{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice("")}><X size={14} /></button></div>}
