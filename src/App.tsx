@@ -1403,15 +1403,19 @@ export function App() {
       return approved;
     };
 
+    const revealDocumentList = () => setDesktopListCollapsed(false);
+
     const navigateToLibrary = async () => {
       if (screen.kind === "library") {
         closeMobileDrawer();
+        revealDocumentList();
         setQuery("");
         chooseFolder(null);
         setVisibleDocuments(documents);
         return;
       }
       if (!await confirmDraftLeave()) return;
+      revealDocumentList();
       setQuery("");
       chooseFolder(null);
       routeNavigation.push("Library", {});
@@ -1427,17 +1431,22 @@ export function App() {
     };
 
     const navigateToFolder = async (folderId: ActiveFolder) => {
-      const routeId = folderId === null ? null : folderId === "root" ? "unfiled" : folderId;
+      if (folderId === null) {
+        await navigateToLibrary();
+        return;
+      }
+      const routeId = folderId === "root" ? "unfiled" : folderId;
       if (screen.kind === "folder" && screen.folderId === routeId) {
         closeMobileDrawer();
+        revealDocumentList();
         chooseFolder(folderId);
         return;
       }
       if (!await confirmDraftLeave()) return;
+      revealDocumentList();
       chooseFolder(folderId);
       setRouteError("");
-      if (routeId === null) routeNavigation.push("Library", {});
-      else routeNavigation.push("Folder", { folderId: routeId });
+      routeNavigation.push("Folder", { folderId: routeId });
     };
 
     const resetListFilters = () => {
@@ -2412,10 +2421,20 @@ export function App() {
           {notice && <div className={`notice-bar${saveState === "error" || saveState === "conflict" ? " warning" : ""}`} role="status"><span>{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice("")}><X size={14} /></button></div>}
           <div className="welcome-state">
             <div className="welcome-art"><span className="art-paper paper-back" /><span className="art-paper paper-front"><span /><span /><span /></span><div className="art-spark spark-one">✳</div><div className="art-spark spark-two">✳</div></div>
-            <div className="welcome-kicker">A HOME FOR WHAT YOU’RE LEARNING</div>
-            <h2>Make a little room<br />for your ideas.</h2>
-            <p>Keep thoughts in Markdown, connect them with wikilinks, and pick up where you left off—on this Mac or through your agents.</p>
-            <button type="button" className="welcome-create" onClick={() => void createAndOpenNote()}><Plus size={16} /> Create your first note</button>
+            {documents.length > 0 ? (
+              <>
+                <div className="welcome-kicker">YOUR LIBRARY</div>
+                <h2>Choose a note<br />to begin.</h2>
+                <p>Your notes are in the list. Select one to read or edit, or create a new note.</p>
+              </>
+            ) : (
+              <>
+                <div className="welcome-kicker">A HOME FOR WHAT YOU’RE LEARNING</div>
+                <h2>Make a little room<br />for your ideas.</h2>
+                <p>Keep thoughts in Markdown, connect them with wikilinks, and pick up where you left off—on this Mac or through your agents.</p>
+              </>
+            )}
+            <button type="button" className="welcome-create" onClick={() => void createAndOpenNote()}><Plus size={16} /> {documents.length > 0 ? "Create a note" : "Create your first note"}</button>
             <div className="welcome-shortcut"><span>Tip</span> Type <code>[[</code> while writing to link another note.</div>
           </div>
           </>
