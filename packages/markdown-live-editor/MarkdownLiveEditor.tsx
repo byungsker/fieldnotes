@@ -149,6 +149,9 @@ export function MarkdownLiveEditor({
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const linkRangeRef = useRef<{ from: number; to: number } | null>(null);
   const richModeRef = useRef(false);
+  const composingRef = useRef(false);
+  const sourceTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const focusSourceAfterFallbackRef = useRef(false);
 
   adaptersRef.current = adapters;
   onChangeRef.current = onChange;
@@ -172,6 +175,14 @@ export function MarkdownLiveEditor({
   const [snippetShortcut, setSnippetShortcut] = useState("");
   const [editingSnippetId, setEditingSnippetId] = useState<string | null>(null);
   const [snippetError, setSnippetError] = useState("");
+
+  const switchToSource = useCallback((reason: SourceModeReason, message: string, restoreFocus = false) => {
+    focusSourceAfterFallbackRef.current = restoreFocus;
+    richModeRef.current = false;
+    setSourceReason(reason);
+    setRoundTripState("source");
+    setStatus(message);
+  }, []);
 
   const fetchMetadataAdapter = useCallback((url: string, signal: AbortSignal) => {
     const fetchMetadata = adaptersRef.current?.fetchBookmarkMetadata;
@@ -242,22 +253,18 @@ export function MarkdownLiveEditor({
       const content = stripNormalizedTerminalNewlines(markdown);
       const nextBody = restoreMarkdownLineEndings(content, lineEndingStyleRef.current || "lf") + terminalNewlineSuffixRef.current;
       const nextValue = frontmatterRef.current + nextBody;
-      emittedValueRef.current = nextValue;
-      onChangeRef.current(nextValue);
+      if (nextValue !== incomingValueRef.current) {
+        emittedValueRef.current = nextValue;
+        onChangeRef.current(nextValue);
+      }
 
-      if (!hasExactMarkdownRoundTrip(activeEditor, markdown)) {
-        richModeRef.current = false;
-        setSourceReason("roundtrip");
-        setRoundTripState("source");
-        setStatus("This Markdown needs source mode to avoid changing its syntax.");
+      if (!composingRef.current && !hasExactMarkdownRoundTrip(activeEditor, markdown)) {
+        switchToSource("roundtrip", "This Markdown needs source mode to avoid changing its syntax.", activeEditor.isFocused);
       }
     } catch {
-      richModeRef.current = false;
-      setSourceReason("roundtrip");
-      setRoundTripState("source");
-      setStatus("Markdown serialization failed. The original source remains available below.");
+      switchToSource("roundtrip", "Markdown serialization failed. The original source remains available below.", activeEditor.isFocused);
     }
-  }, []);
+  }, [switchToSource]);
 
   const editor = useEditor(
     {
@@ -272,6 +279,28 @@ export function MarkdownLiveEditor({
           "aria-label": ariaLabel,
           "aria-multiline": "true",
           spellcheck: "true",
+        },
+        handleDOMEvents: {
+          compositionstart: () => {
+            composingRef.current = true;
+            return false;
+          },
+          compositionend: () => {
+            composingRef.current = false;
+            queueMicrotask(() => {
+              const activeEditor = editorRef.current;
+              if (!activeEditor || activeEditor.isDestroyed || !richModeRef.current) return;
+              try {
+                const markdown = activeEditor.getMarkdown();
+                if (!hasExactMarkdownRoundTrip(activeEditor, markdown)) {
+                  switchToSource("roundtrip", "This Markdown needs source mode to avoid changing its syntax.", activeEditor.isFocused);
+                }
+              } catch {
+                switchToSource("roundtrip", "Markdown serialization failed. The original source remains available below.", activeEditor.isFocused);
+              }
+            });
+            return false;
+          },
         },
         handlePaste: (view, event) => {
           const imageFile = Array.from(event.clipboardData?.files || []).find((file) => file.type.startsWith("image/"));
@@ -289,11 +318,8 @@ export function MarkdownLiveEditor({
             return true;
           }
           if (!activeEditor || !hasExactMarkdownRoundTrip(activeEditor, text)) {
-            richModeRef.current = false;
-            setSourceReason("paste");
-            setRoundTripState("source");
             setPane("write");
-            setStatus("This paste is not an exact Markdown round trip. Source mode is open; paste again there to preserve it.");
+            switchToSource("paste", "This paste is not an exact Markdown round trip. Source mode is open; paste again there to preserve it.", activeEditor?.isFocused ?? false);
             return true;
           }
           activeEditor.commands.insertContent(text, { contentType: "markdown" });
@@ -309,7 +335,7 @@ export function MarkdownLiveEditor({
       },
       onUpdate: ({ editor: activeEditor }) => updateMarkdown(activeEditor),
     },
-    [extensions, updateMarkdown, ariaLabel, insertUploadedImage]
+    [extensions, updateMarkdown, ariaLabel, insertUploadedImage, switchToSource]
   );
 
   useEffect(() => {
@@ -318,12 +344,14 @@ export function MarkdownLiveEditor({
     const parts = splitLeadingFrontmatter(value);
     frontmatterRef.current = parts.frontmatter;
 
+    if (emittedValueRef.current === value) {
+      emittedValueRef.current = null;
+      incomingValueRef.current = value;
+      return;
+    }
+
     if (incomingValueRef.current !== value) {
-      if (emittedValueRef.current === value) {
-        emittedValueRef.current = null;
-      } else {
-        editor.commands.setContent(parts.body, { contentType: "markdown", emitUpdate: false });
-      }
+      editor.commands.setContent(parts.body, { contentType: "markdown", emitUpdate: false });
       incomingValueRef.current = value;
     }
 
@@ -332,6 +360,18 @@ export function MarkdownLiveEditor({
     setSourceReason(exact ? null : "roundtrip");
     setRoundTripState(exact ? "rich" : "source");
   }, [editor, value]);
+
+  useEffect(() => {
+    if (!focusSourceAfterFallbackRef.current || roundTripState !== "source") return;
+    focusSourceAfterFallbackRef.current = false;
+    const frame = window.requestAnimationFrame(() => {
+      const textarea = sourceTextareaRef.current;
+      if (!textarea) return;
+      textarea.focus({ preventScroll: true });
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [roundTripState, value]);
 
   useEffect(() => {
     if (!showPreviewTab) setPane("write");
@@ -455,6 +495,7 @@ export function MarkdownLiveEditor({
 
   const handleSourceEdit = (nextBody: string) => {
     const nextValue = frontmatter + nextBody;
+    if (nextValue === incomingValueRef.current) return;
     emittedValueRef.current = nextValue;
     onChangeRef.current(nextValue);
   };
@@ -657,6 +698,7 @@ export function MarkdownLiveEditor({
           </p>
           {frontmatter && <pre className="mle-frontmatter" aria-label="Protected frontmatter">{frontmatter}</pre>}
           <textarea
+            ref={sourceTextareaRef}
             className="mle-source-textarea"
             aria-label={ariaLabel + " source"}
             value={body}

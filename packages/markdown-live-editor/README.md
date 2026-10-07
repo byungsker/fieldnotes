@@ -41,6 +41,8 @@ All adapter functions are optional. No adapter means no upload, metadata lookup,
 
 The Markdown extension is the official `@tiptap/markdown` 3.31.4 package. It is still marked beta by its maintainers and does not promise support for every Markdown dialect. This component checks the initial body for an exact parse/serialize round trip (ignoring only terminal line breaks, which it preserves as an exact suffix) and falls back to source editing on a mismatch. Uniform LF and CRLF are supported and restored after serialization; mixed LF/CRLF and bare-CR input use source mode. A verified fallback example is `# Heading\n\n\nParagraph`: the parser collapses that internal triple newline. The rich editor supports a deliberate Markdown subset rather than claiming full Obsidian compatibility. Wikilink nodes retain the raw token while the host provides title resolution and navigation in its own preview.
 
+In controlled use, an echo of the editor's own latest value does not reset the ProseMirror document or selection. Exact-round-trip checks wait until IME composition commits, and a switch to source mode after an edit preserves keyboard focus.
+
 The `minHeight` prop accepts pixels as a number or any valid CSS length string. The stylesheet uses `.mle-*` classes and `--mle-*` custom properties so a host can override presentation without inheriting application branding.
 
 ## Local development
