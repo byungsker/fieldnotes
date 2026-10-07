@@ -14,6 +14,7 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  Eye,
   Link2,
   LoaderCircle,
   Menu,
@@ -33,6 +34,8 @@ import { ApiError, apiRequest, jsonRequest } from "./api";
 import { ActionDialog, type ActionDialogConfig, type ActionDialogResult } from "./ActionDialog";
 import type { AppViewContextValue, WorkspaceScreen } from "./AppViewContext";
 import { MarkdownBody } from "./MarkdownBody";
+import { SearchHighlight } from "./SearchHighlight";
+import { formatDocumentDate } from "./document-date";
 import { resolveMobileDrawerSwipe, resolveMobileDrawerSwipeDrag } from "./mobile-drawer-swipe";
 import type { ChangeRecord, DocumentRecord, DocumentSummary, FolderRecord } from "./types";
 import {
@@ -62,6 +65,7 @@ type BacklinksResponse = { backlinks: DocumentSummary[] };
 const LAST_SEQUENCE_KEY = "fieldnotes:last-change-sequence";
 const THEME_KEY = "fieldnotes:theme";
 const DESKTOP_SIDEBAR_KEY = "fieldnotes:desktop-sidebar-collapsed";
+const DESKTOP_LIST_KEY = "fieldnotes:desktop-list-collapsed";
 const MOBILE_DRAWER_HISTORY_KEY = "fieldnotes:mobile-drawer";
 const MobileWorkspace = lazy(() => import("./stackflow").then((module) => ({ default: module.MobileWorkspace })));
 type ActiveFolder = string | "root" | null;
@@ -98,6 +102,14 @@ function initialTheme(): ColorTheme {
 function initialDesktopSidebarCollapsed(): boolean {
   try {
     return window.localStorage.getItem(DESKTOP_SIDEBAR_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function initialDesktopListCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(DESKTOP_LIST_KEY) === "true";
   } catch {
     return false;
   }
@@ -201,18 +213,6 @@ function relativeDate(value: string): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function documentDateTime(value: string): string {
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "Unknown";
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 function operationLabel(operation: ChangeRecord["operation"]): string {
   if (operation === "created") return "created";
   if (operation === "deleted") return "deleted";
@@ -253,6 +253,7 @@ export function App() {
   const [sortOrder, setSortOrder] = useState<SortOrder>("updated-desc");
   const [theme, setTheme] = useState<ColorTheme>(initialTheme);
   const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(initialDesktopSidebarCollapsed);
+  const [desktopListCollapsed, setDesktopListCollapsed] = useState(initialDesktopListCollapsed);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [externalVersion, setExternalVersion] = useState<number | null>(null);
@@ -1249,6 +1250,14 @@ export function App() {
   }, [desktopSidebarCollapsed]);
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(DESKTOP_LIST_KEY, String(desktopListCollapsed));
+    } catch {
+      // Keep the current list state for this tab if storage is unavailable.
+    }
+  }, [desktopListCollapsed]);
+
+  useEffect(() => {
     const viewport = window.visualViewport;
     const updateAppViewport = () => {
       const visualHeight = viewport?.height ?? window.innerHeight;
@@ -1865,7 +1874,7 @@ export function App() {
     <div
       id={`fieldnotes-activity-${screen.activityId}`}
       data-fieldnotes-route={screen.kind}
-      className={`app-shell route-${screen.kind}${displayDocument ? " has-selection" : ""}${workspaceRenderer === "desktop" && desktopSidebarCollapsed ? " sidebar-collapsed" : ""}`}
+      className={`app-shell route-${screen.kind}${displayDocument ? " has-selection" : ""}${workspaceRenderer === "desktop" && desktopSidebarCollapsed ? " sidebar-collapsed" : ""}${workspaceRenderer === "desktop" && desktopListCollapsed ? " list-collapsed" : ""}`}
       onTouchStart={handleMobileTouchStart}
       onTouchMove={handleMobileTouchMove}
       onTouchEnd={handleMobileTouchEnd}
@@ -1943,6 +1952,17 @@ export function App() {
           <span className="rail-count">{documents.length}</span>
         </button>
         <button className={`rail-link${screen.kind === "recent" ? " active" : ""}`} type="button" title="Recent changes" aria-label="Recent changes" onClick={() => void navigateToRecent()}><Clock3 size={16} /><span>Recent changes</span></button>
+        {workspaceRenderer === "desktop" && desktopListCollapsed && (
+          <button
+            className="rail-link desktop-list-reopen"
+            type="button"
+            title="Show notes list"
+            aria-label="Show notes list"
+            aria-expanded={false}
+            aria-controls="fieldnotes-note-list"
+            onClick={() => setDesktopListCollapsed(false)}
+          ><PanelLeftOpen size={16} aria-hidden="true" /><span>Show notes list</span></button>
+        )}
 
         {workspaceRenderer === "mobile-stackflow" && renderFolderBrowser("drawer")}
 
@@ -1992,7 +2012,7 @@ export function App() {
         </div>
       </aside>
 
-      <section className="note-column" aria-label="Notes">
+      <section className="note-column" id="fieldnotes-note-list" aria-label="Notes">
         <div className="list-header">
           <div>
             <div className="eyebrow">YOUR LIBRARY</div>
@@ -2007,6 +2027,19 @@ export function App() {
               <Plus size={18} />
             </button>
           </div>
+          {workspaceRenderer === "desktop" && (
+            <div className="desktop-list-actions">
+              <button
+                className="icon-button desktop-list-toggle"
+                type="button"
+                aria-label="Collapse note list"
+                aria-expanded={true}
+                aria-controls="fieldnotes-note-list"
+                title="Collapse note list"
+                onClick={() => setDesktopListCollapsed(true)}
+              ><PanelLeftClose size={17} aria-hidden="true" /></button>
+            </div>
+          )}
         </div>
 
         <label className="search-box">
@@ -2014,6 +2047,7 @@ export function App() {
           <input
             ref={searchInputRef}
             type="search"
+            className="search-input"
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
             placeholder="Search your notes"
@@ -2144,9 +2178,7 @@ export function App() {
               <option value="title-desc">Title · Z to A</option>
             </select>
           </label>
-          <span className="filter-summary" aria-live="polite">
-            {query.trim() ? `Search: ${query.trim()}` : activeFolderId === "root" ? "Unfiled" : activeFolder ? folderPathById.get(activeFolder.id) : "All notes"}
-          </span>
+          <span className="visually-hidden" aria-live="polite">{visibleDocuments.length} search results</span>
           {(query.trim() || activeFolderId !== null || sortOrder !== "updated-desc") && (
             <button type="button" className="reset-filters" onClick={resetListFilters}>Reset</button>
           )}
@@ -2170,10 +2202,10 @@ export function App() {
               onClick={() => void navigateToDocument(document.id)}
             >
               <div className="document-row-top">
-                <span className="document-row-title">{document.title}</span>
-                <time dateTime={document.updatedAt}>{relativeDate(document.updatedAt)}</time>
+                <span className="document-row-title"><SearchHighlight text={document.title} query={query} /></span>
+                <time dateTime={document.updatedAt}>{formatDocumentDate(document.updatedAt)}</time>
               </div>
-              <span className="document-excerpt">{document.excerpt || "A new note, ready for a first thought."}</span>
+              <span className="document-excerpt"><SearchHighlight text={document.excerpt || "A new note, ready for a first thought."} query={query} /></span>
             </button>
           ))}
           {visibleDocuments.length === 0 && !listError && (
@@ -2238,11 +2270,11 @@ export function App() {
                   <span>{saveStateLabel(saveState)}</span>
                 </div>
                 <div className="view-switch" role="group" aria-label="Editor view">
-                  <button type="button" className={activeView === "write" ? "chosen" : ""} onClick={() => switchEditorView("write")} aria-pressed={activeView === "write"}>Write</button>
-                  <button type="button" className={activeView === "preview" ? "chosen" : ""} onClick={() => switchEditorView("preview")} aria-pressed={activeView === "preview"}>Preview</button>
+                  <button type="button" className={activeView === "write" ? "chosen" : ""} onClick={() => switchEditorView("write")} aria-label="Write" title="Write" aria-pressed={activeView === "write"}><Pencil size={15} aria-hidden="true" /><span className="toolbar-action-label">Write</span></button>
+                  <button type="button" className={activeView === "preview" ? "chosen" : ""} onClick={() => switchEditorView("preview")} aria-label="Preview" title="Preview" aria-pressed={activeView === "preview"}><Eye size={15} aria-hidden="true" /><span className="toolbar-action-label">Preview</span></button>
                 </div>
-                <button type="button" className="save-button" onClick={() => void saveDocument()} disabled={!isDirty || saveState === "saving"}>
-                  <Save size={15} /><span>Save</span>
+                <button type="button" className="save-button" onClick={() => void saveDocument()} disabled={!isDirty || saveState === "saving"} aria-label="Save changes" title="Save changes">
+                  <Save size={15} aria-hidden="true" /><span className="toolbar-action-label">Save</span>
                 </button>
                 <button className="icon-button toolbar-delete" type="button" onClick={() => void deleteAndReturn()} aria-label="Delete note" title="Delete note"><Trash2 size={16} /></button>
                 <button className="icon-button theme-toggle theme-toggle-editor" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
@@ -2282,8 +2314,7 @@ export function App() {
                 }}
                 aria-label="Note title"
               />
-              {workspaceRenderer === "mobile-stackflow" ? (
-                <div className="document-properties" aria-label="Note properties">
+              <div className="document-properties" aria-label="Note properties">
                   <div className="document-property-row">
                     <span className="document-property-icon" aria-hidden="true">
                       {saveState === "saving" ? <LoaderCircle className="spin" size={18} />
@@ -2300,7 +2331,7 @@ export function App() {
                   <div className="document-property-row">
                     <span className="document-property-icon" aria-hidden="true"><CalendarDays size={18} /></span>
                     <span className="document-property-label">Created</span>
-                    <time className="document-property-value" dateTime={displayDocument.createdAt}>{documentDateTime(displayDocument.createdAt)}</time>
+                    <time className="document-property-value" dateTime={displayDocument.createdAt}>{formatDocumentDate(displayDocument.createdAt)}</time>
                   </div>
                   <label className="document-property-row document-folder-property">
                     <span className="document-property-icon" aria-hidden="true"><Folder size={18} /></span>
@@ -2320,7 +2351,7 @@ export function App() {
                   <div className="document-property-row">
                     <span className="document-property-icon" aria-hidden="true"><Clock3 size={18} /></span>
                     <span className="document-property-label">Updated</span>
-                    <time className="document-property-value" dateTime={displayDocument.updatedAt}>{documentDateTime(displayDocument.updatedAt)}</time>
+                    <time className="document-property-value" dateTime={displayDocument.updatedAt}>{formatDocumentDate(displayDocument.updatedAt)}</time>
                   </div>
                   <div className="document-property-row">
                     <span className="document-property-icon" aria-hidden="true"><FileText size={18} /></span>
@@ -2328,24 +2359,7 @@ export function App() {
                     <span className="document-property-value">v{displayDocument.version}</span>
                   </div>
                 </div>
-              ) : (
-                <div className="document-meta">
-                  <span>Markdown note</span><span className="meta-separator">·</span><span>Edited {relativeDate(displayDocument.updatedAt)}</span><span className="meta-separator">·</span><span>v{displayDocument.version}</span>
-                  <label className="document-folder-label">
-                    Folder
-                    <select
-                      aria-label="Move note to folder"
-                      value={displayDocument.folderId ?? "root"}
-                      disabled={saveState === "saving"}
-                      onChange={(event) => void moveDocumentToFolder(event.currentTarget.value === "root" ? null : event.currentTarget.value)}
-                    >
-                      <option value="root">Unfiled</option>
-                      {folders.map((folder) => <option key={folder.id} value={folder.id}>{folderPathById.get(folder.id) ?? folder.name}</option>)}
-                    </select>
-                  </label>
-                </div>
-              )}
-              {workspaceRenderer === "mobile-stackflow" && <div className="document-divider" aria-hidden="true" />}
+              <div className="document-divider" aria-hidden="true" />
               {activeView === "write" ? (
                 <textarea
                   ref={markdownEditorRef}
