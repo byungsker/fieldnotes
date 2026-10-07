@@ -1,5 +1,6 @@
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { safeImageSource } from "../packages/markdown-live-editor";
 import { remarkWikiLinks } from "./remark-wikilinks";
 import { markdownBodyForPreview } from "./markdown-preview";
 import type { DocumentSummary } from "./types";
@@ -22,7 +23,13 @@ export function MarkdownBody({ markdown, documents, onOpenDocument }: MarkdownBo
     <div className="markdown-body">
       <ReactMarkdown
         skipHtml
-        urlTransform={(url) => url.startsWith("kb:") ? url : defaultUrlTransform(url)}
+        urlTransform={(url, _key, node) => {
+          if (node.tagName === "img") {
+            const safeImage = safeImageSource(url);
+            if (safeImage?.startsWith("data:image/")) return safeImage;
+          }
+          return url.startsWith("kb:") ? url : defaultUrlTransform(url);
+        }}
         remarkPlugins={[remarkGfm, remarkWikiLinks]}
         components={{
           a({ href, children, ...props }) {
@@ -60,8 +67,12 @@ export function MarkdownBody({ markdown, documents, onOpenDocument }: MarkdownBo
               </a>
             );
           },
-          img() {
-            return <span className="markdown-image-placeholder">Images are not imported by this MVP.</span>;
+          img({ src, alt }) {
+            const safeImage = typeof src === "string" ? safeImageSource(src) : null;
+            if (!safeImage?.startsWith("data:image/")) {
+              return <span className="markdown-image-placeholder">Image omitted: unsupported or unsafe source.</span>;
+            }
+            return <img src={safeImage} alt={alt ?? ""} loading="lazy" referrerPolicy="no-referrer" />;
           },
         }}
       >

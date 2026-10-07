@@ -34,7 +34,9 @@ import { ApiError, apiRequest, jsonRequest } from "./api";
 import { ActionDialog, type ActionDialogConfig, type ActionDialogResult } from "./ActionDialog";
 import type { AppViewContextValue, WorkspaceScreen } from "./AppViewContext";
 import { MarkdownBody } from "./MarkdownBody";
+import { MarkdownLiveEditor } from "../packages/markdown-live-editor";
 import { SearchHighlight } from "./SearchHighlight";
+import { createFieldnotesEditorAdapters } from "./editor-adapters";
 import { formatDocumentDate } from "./document-date";
 import { resolveMobileDrawerSwipe, resolveMobileDrawerSwipeDrag } from "./mobile-drawer-swipe";
 import type { ChangeRecord, DocumentRecord, DocumentSummary, FolderRecord } from "./types";
@@ -249,6 +251,7 @@ export function App() {
   const [selectedDocument, setSelectedDocument] = useState<DocumentRecord | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftBody, setDraftBody] = useState("");
+  const editorAdapters = useMemo(() => createFieldnotesEditorAdapters(), []);
   const [query, setQuery] = useState("");
   const [sortOrder, setSortOrder] = useState<SortOrder>("updated-desc");
   const [theme, setTheme] = useState<ColorTheme>(initialTheme);
@@ -268,11 +271,10 @@ export function App() {
   const [mobileDrawerSwipePreview, setMobileDrawerSwipePreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const markdownEditorRef = useRef<HTMLTextAreaElement>(null);
+  const editorHostRef = useRef<HTMLDivElement>(null);
   const notesHeadingRef = useRef<HTMLHeadingElement>(null);
   const actionDialogRef = useRef(actionDialog);
   const activeViewRef = useRef(activeView);
-  const editorSelectionRef = useRef<{ start: number; end: number; direction: "forward" | "backward" | "none" } | null>(null);
   const selectedRef = useRef<DocumentRecord | null>(null);
   const draftTitleRef = useRef("");
   const draftBodyRef = useRef("");
@@ -1298,14 +1300,6 @@ export function App() {
     if (suppressSwipeClickTimerRef.current !== null) window.clearTimeout(suppressSwipeClickTimerRef.current);
   }, []);
 
-  const rememberEditorSelection = useCallback((editor: HTMLTextAreaElement) => {
-    editorSelectionRef.current = {
-      start: editor.selectionStart,
-      end: editor.selectionEnd,
-      direction: editor.selectionDirection,
-    };
-  }, []);
-
   const keepEditorControlVisible = useCallback((control: HTMLElement) => {
     window.requestAnimationFrame(() => {
       const viewport = window.visualViewport;
@@ -1323,9 +1317,8 @@ export function App() {
     const syncRenderer = () => {
       const nextRenderer = workspaceRendererForViewport(window.innerWidth);
       if (nextRenderer === workspaceRendererRef.current) return;
-      const editor = markdownEditorRef.current;
-      editorWasFocusedBeforeResizeRef.current = Boolean(editor && document.activeElement === editor);
-      if (editor) rememberEditorSelection(editor);
+      const editor = editorHostRef.current?.querySelector<HTMLElement>(".mle-prosemirror, .mle-source-textarea");
+      editorWasFocusedBeforeResizeRef.current = Boolean(editor && (document.activeElement === editor || editor.contains(document.activeElement)));
       if (nextRenderer === "desktop" && drawerHistoryEntryRef.current) {
         pendingDrawerNavigationRef.current = null;
         window.history.back();
@@ -1340,36 +1333,29 @@ export function App() {
       mediaQuery.removeEventListener("change", syncRenderer);
       window.removeEventListener("resize", syncRenderer);
     };
-  }, [rememberEditorSelection]);
+  }, []);
 
   useEffect(() => {
     if (!editorWasFocusedBeforeResizeRef.current) return;
     editorWasFocusedBeforeResizeRef.current = false;
     if (currentRoute.kind !== "document" || activeView !== "write") return;
     const frame = window.requestAnimationFrame(() => {
-      const editor = markdownEditorRef.current;
+      const editor = editorHostRef.current?.querySelector<HTMLElement>(".mle-prosemirror, .mle-source-textarea");
       if (!editor) return;
       editor.focus({ preventScroll: true });
-      const selection = editorSelectionRef.current;
-      if (selection) editor.setSelectionRange(selection.start, selection.end, selection.direction);
     });
     return () => window.cancelAnimationFrame(frame);
   }, [activeView, currentRoute.kind, workspaceRenderer]);
 
   const switchEditorView = (nextView: "write" | "preview") => {
     if (nextView === activeViewRef.current) return;
-    if (activeViewRef.current === "write" && markdownEditorRef.current) {
-      rememberEditorSelection(markdownEditorRef.current);
-    }
     activeViewRef.current = nextView;
     setActiveView(nextView);
     if (nextView === "write") {
       window.requestAnimationFrame(() => {
-        const editor = markdownEditorRef.current;
+        const editor = editorHostRef.current?.querySelector<HTMLElement>(".mle-prosemirror, .mle-source-textarea");
         if (!editor) return;
         editor.focus({ preventScroll: true });
-        const selection = editorSelectionRef.current;
-        if (selection) editor.setSelectionRange(selection.start, selection.end, selection.direction);
       });
     }
   };
@@ -2369,28 +2355,26 @@ export function App() {
                   </div>
                 </div>
               <div className="document-divider" aria-hidden="true" />
-              {activeView === "write" ? (
-                <textarea
-                  ref={markdownEditorRef}
-                  className="markdown-editor"
+              <div ref={editorHostRef} className="fieldnotes-rich-editor" hidden={activeView !== "write"}>
+                <MarkdownLiveEditor
                   value={draftBody}
-                  onChange={(event) => {
-                    const nextBody = event.currentTarget.value;
+                  adapters={editorAdapters}
+                  ariaLabel="Markdown body"
+                  minHeight={230}
+                  showPreviewTab={false}
+                  onFocus={() => {
+                    const control = document.activeElement;
+                    if (control instanceof HTMLElement) keepEditorControlVisible(control);
+                  }}
+                  onChange={(nextBody) => {
                     setDraftBody(nextBody);
                     rememberDraft(displayDocument, draftTitle, nextBody);
                     setSaveState(externalVersion !== null || externalDelete ? "conflict" : "unsaved");
                     if (notice === "Saved to this Mac.") setNotice("");
                   }}
-                  spellCheck
-                  onFocus={(event) => keepEditorControlVisible(event.currentTarget)}
-                  onSelect={(event) => rememberEditorSelection(event.currentTarget)}
-                  onClick={(event) => rememberEditorSelection(event.currentTarget)}
-                  onKeyUp={(event) => rememberEditorSelection(event.currentTarget)}
-                  aria-label="Markdown body"
-                  placeholder="Start with a thought…\n\nUse ## for a heading, - for a list, or [[Note title]] to connect ideas."
                 />
-              ) : (
-                <div className="preview-scroll">
+              </div>
+              <div className="preview-scroll" hidden={activeView !== "preview"}>
                   <MarkdownBody markdown={draftBody} documents={documents} onOpenDocument={(id) => void navigateToDocument(id)} />
                   <section className="backlinks-panel">
                     <div className="backlinks-heading"><Link2 size={15} /><span>LINKED FROM</span><span className="backlink-count">{linkedTitles.length}</span></div>
@@ -2400,8 +2384,7 @@ export function App() {
                       </div>
                     ) : <p className="no-backlinks">No notes link here yet. Add <code>[[{draftTitle || "this note"}]]</code> to another note.</p>}
                   </section>
-                </div>
-              )}
+              </div>
               <div className="editor-status">
                 <span className="mobile-status">
                   <span className="mobile-sync-state" aria-label={connectionLabel}>
