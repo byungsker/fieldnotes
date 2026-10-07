@@ -1,27 +1,34 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, watch, type FSWatcher } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { EventEmitter } from "node:events";
 import { excerptFromMarkdown, extractWikilinkTargets, normalizeTitle } from "./markdown.js";
 import type { ChangeRecord, DocumentRecord, DocumentSummary, FolderRecord } from "./types.js";
+import { FileVault, VaultVersionConflictError } from "./vault.js";
 
 type SqlRow = Record<string, string | number | null>;
-type DatabaseOptions = { seedDemo?: boolean };
+type DatabaseOptions = { seedDemo?: boolean; vaultDir?: string };
 
 export type KnowledgeDatabase = {
   db: DatabaseSync;
   dataDir: string;
+  dbPath: string;
+  vault?: FileVault;
   changes: EventEmitter;
+  vaultIndexReady?: boolean;
+  vaultIndexedSequence?: number;
 };
 
 export class VersionConflictError extends Error {
   readonly currentVersion: number;
+  readonly currentHash?: string;
 
-  constructor(currentVersion: number) {
+  constructor(currentVersion: number, currentHash?: string) {
     super("This item changed since you opened it. Load the latest version before saving again.");
     this.name = "VersionConflictError";
     this.currentVersion = currentVersion;
+    this.currentHash = currentHash;
   }
 }
 
@@ -66,6 +73,8 @@ function mapDocument(row: SqlRow): DocumentRecord {
     id: String(row.id),
     title: String(row.title),
     folderId: row.folder_id === null || row.folder_id === undefined ? null : String(row.folder_id),
+    ...(row.file_path ? { filePath: String(row.file_path) } : {}),
+    ...(row.content_hash ? { contentHash: String(row.content_hash) } : {}),
     body,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -79,6 +88,8 @@ function mapSummary(row: SqlRow): DocumentSummary {
     id: String(row.id),
     title: String(row.title),
     folderId: row.folder_id === null || row.folder_id === undefined ? null : String(row.folder_id),
+    ...(row.file_path ? { filePath: String(row.file_path) } : {}),
+    ...(row.content_hash ? { contentHash: String(row.content_hash) } : {}),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     version: Number(row.version),
@@ -91,6 +102,7 @@ function mapFolder(row: SqlRow): FolderRecord {
     id: String(row.id),
     name: String(row.name),
     parentId: row.parent_id === null || row.parent_id === undefined ? null : String(row.parent_id),
+    ...(row.file_path ? { filePath: String(row.file_path) } : {}),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     version: Number(row.version),
@@ -114,8 +126,8 @@ function mapChange(row: SqlRow): ChangeRecord {
 
 function migrate(db: DatabaseSync): void {
   const row = db.prepare("PRAGMA user_version").get() as SqlRow | undefined;
-  const version = Number(row?.user_version ?? 0);
-  if (version > 2) throw new Error(`Database schema ${version} is newer than this app supports.`);
+  let version = Number(row?.user_version ?? 0);
+  if (version > 3) throw new Error(`Database schema ${version} is newer than this app supports.`);
   if (version === 0) {
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -145,6 +157,7 @@ function migrate(db: DatabaseSync): void {
         PRAGMA user_version = 1;
       `);
       db.exec("COMMIT");
+      version = 1;
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;
@@ -170,6 +183,22 @@ function migrate(db: DatabaseSync): void {
         ALTER TABLE changes ADD COLUMN entity_type TEXT NOT NULL DEFAULT 'document'
           CHECK(entity_type IN ('document', 'folder'));
         PRAGMA user_version = 2;
+      `);
+      db.exec("COMMIT");
+      version = 2;
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  if (version === 2) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(`
+        ALTER TABLE documents ADD COLUMN file_path TEXT NOT NULL DEFAULT '';
+        ALTER TABLE documents ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';
+        ALTER TABLE folders ADD COLUMN file_path TEXT NOT NULL DEFAULT '';
+        PRAGMA user_version = 3;
       `);
       db.exec("COMMIT");
     } catch (error) {
@@ -267,17 +296,149 @@ function seedDatabase(database: KnowledgeDatabase, seedDemo: boolean): void {
   for (const change of changes) publishSafely(database.changes, change);
 }
 
+function rebuildVaultIndex(database: KnowledgeDatabase): void {
+  if (!database.vault) return;
+  const snapshot = database.vault.snapshot();
+  const previousSequence = database.vaultIndexedSequence ?? 0;
+  const shouldPublish = Boolean(database.vaultIndexReady);
+  const { db } = database;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const folders = [...snapshot.folders].sort((left, right) => (left.filePath?.split("/").length ?? 0) - (right.filePath?.split("/").length ?? 0));
+    db.exec("DELETE FROM documents;");
+    const removeFolder = db.prepare("DELETE FROM folders WHERE id = ?");
+    for (const folder of [...folders].reverse()) removeFolder.run(folder.id);
+    db.exec("DELETE FROM changes;");
+    const insertFolder = db.prepare("INSERT INTO folders (id, name, parent_id, created_at, updated_at, version, file_path) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    for (const folder of folders) insertFolder.run(folder.id, folder.name, folder.parentId, folder.createdAt, folder.updatedAt, folder.version, folder.filePath ?? "");
+    const insertDocument = db.prepare("INSERT INTO documents (id, title, body, created_at, updated_at, version, folder_id, file_path, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    for (const document of snapshot.documents) {
+      insertDocument.run(document.id, document.title, document.body, document.createdAt, document.updatedAt, document.version, document.folderId, document.filePath ?? "", document.contentHash ?? "");
+    }
+    const insertChange = db.prepare("INSERT INTO changes (seq, document_id, title, operation, version, created_at, entity_type) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    for (const change of snapshot.changes) {
+      insertChange.run(change.seq, change.entityType === "folder" ? change.folderId ?? null : change.documentId ?? null, change.title, change.operation, change.version, change.createdAt, change.entityType);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    database.vaultIndexReady = false;
+    throw error;
+  }
+  database.vaultIndexReady = true;
+  database.vaultIndexedSequence = snapshot.sequence;
+  if (shouldPublish) {
+    for (const change of snapshot.changes) {
+      if (change.seq > previousSequence) publishSafely(database.changes, change);
+    }
+  }
+}
+
+export function reconcileVault(database: KnowledgeDatabase): void {
+  if (!database.vault) return;
+  const result = database.vault.reconcile();
+  if (result.changed || result.changes.length > 0 || !database.vaultIndexReady || database.vaultIndexedSequence !== database.vault.sequence) {
+    rebuildVaultIndex(database);
+  }
+}
+
+export function startVaultMonitor(database: KnowledgeDatabase): () => void {
+  if (!database.vault) return () => {};
+  let busy = false;
+  let debounce: NodeJS.Timeout | undefined;
+  const reconcile = () => {
+    if (busy) return;
+    busy = true;
+    try {
+      reconcileVault(database);
+    } catch (error) {
+      console.error("Vault reconciliation failed; files were left untouched:", error);
+    } finally {
+      busy = false;
+    }
+  };
+  let watcher: FSWatcher | undefined;
+  try {
+    watcher = watch(database.vault.rootDir, { recursive: true }, (_event, filename) => {
+      const name = filename?.toString() ?? "";
+      if (name === ".fieldnotes" || name.startsWith(`.fieldnotes${path.sep}`) || name.includes(".fieldnotes-tmp-")) return;
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(reconcile, 100);
+      debounce.unref();
+    });
+  } catch {
+    // The periodic full scan remains the correctness path when recursive watching is unavailable.
+  }
+  const timer = setInterval(reconcile, 2_000);
+  timer.unref();
+  return () => {
+    if (timer) clearInterval(timer);
+    if (debounce) clearTimeout(debounce);
+    watcher?.close();
+  };
+}
+
+function assertVaultPathWithinDataDir(dataDir: string, vaultDir: string): void {
+  const relative = path.relative(dataDir, vaultDir);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error("KB_VAULT_DIR must be a separate directory inside KB_DATA_DIR.");
+  }
+  let current = dataDir;
+  for (const segment of relative.split(path.sep)) {
+    current = path.join(current, segment);
+    try {
+      if (lstatSync(current).isSymbolicLink()) {
+        throw new Error("KB_VAULT_DIR cannot pass through a symbolic link inside KB_DATA_DIR.");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") break;
+      throw error;
+    }
+  }
+}
+
 export function openDatabase(dataDir: string, options: DatabaseOptions = {}): KnowledgeDatabase {
   const resolvedDir = path.resolve(dataDir);
   mkdirSync(resolvedDir, { recursive: true, mode: 0o700 });
-  const db = new DatabaseSync(path.join(resolvedDir, "knowledge.sqlite"));
+  const configuredVault = options.vaultDir ?? process.env.KB_VAULT_DIR;
+  const vaultDir = configuredVault ? path.resolve(configuredVault) : undefined;
+  if (vaultDir) assertVaultPathWithinDataDir(resolvedDir, vaultDir);
+  const dbPath = path.join(resolvedDir, vaultDir ? "vault-index.sqlite" : "knowledge.sqlite");
+  const db = new DatabaseSync(dbPath);
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA synchronous = FULL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec("PRAGMA busy_timeout = 5000;");
   migrate(db);
-  const database: KnowledgeDatabase = { db, dataDir: resolvedDir, changes: new EventEmitter() };
-  seedDatabase(database, options.seedDemo ?? process.env.KB_SEED_DEMO_DATA !== "false");
+  const database: KnowledgeDatabase = { db, dataDir: resolvedDir, dbPath, changes: new EventEmitter() };
+  if (vaultDir) {
+    if (!FileVault.hasState(vaultDir)) {
+      const legacyPath = path.join(resolvedDir, "knowledge.sqlite");
+      if (legacyPath !== dbPath && existsSync(legacyPath)) {
+        const legacy = new DatabaseSync(legacyPath, { readOnly: true });
+        try {
+          const count = Number((legacy.prepare("SELECT COUNT(*) AS count FROM documents").get() as { count: number }).count);
+          if (count > 0) {
+            db.close();
+            throw new Error("KB_VAULT_DIR is set but the vault has no Fieldnotes manifest while the legacy SQLite library contains notes. Run the offline vault migration first.");
+          }
+        } finally {
+          legacy.close();
+        }
+      }
+    }
+    database.vault = new FileVault(vaultDir);
+    database.vaultIndexReady = false;
+    database.vaultIndexedSequence = 0;
+    const result = database.vault.reconcile();
+    rebuildVaultIndex(database);
+    if (result.changes.length && database.vaultIndexReady) {
+      // Startup reconciliation is reflected in the index and is replayable from the
+      // durable manifest. There are no SSE clients yet, so no initial broadcast is needed.
+    }
+  } else {
+    seedDatabase(database, options.seedDemo ?? process.env.KB_SEED_DEMO_DATA !== "false");
+  }
   return database;
 }
 
@@ -322,6 +483,11 @@ function hasSiblingName(db: DatabaseSync, parentId: string | null, name: string,
 }
 
 export function createFolder(database: KnowledgeDatabase, name: string, parentId: string | null): FolderRecord {
+  if (database.vault) {
+    const result = database.vault.createFolder(name, parentId);
+    rebuildVaultIndex(database);
+    return getFolder(database.db, result.folder.id) ?? result.folder;
+  }
   const id = randomUUID();
   const timestamp = new Date().toISOString();
   return transact(database, () => {
@@ -341,6 +507,11 @@ export function updateFolder(
   expectedVersion: number,
   changes: { name?: string; parentId?: string | null },
 ): FolderRecord {
+  if (database.vault) {
+    const result = database.vault.updateFolder(id, expectedVersion, changes);
+    rebuildVaultIndex(database);
+    return getFolder(database.db, id) ?? result.folder;
+  }
   return transact(database, () => {
     const current = requireFolder(database.db, id);
     if (current.version !== expectedVersion) throw new VersionConflictError(current.version);
@@ -370,6 +541,11 @@ export function updateFolder(
 }
 
 export function deleteFolder(database: KnowledgeDatabase, id: string, expectedVersion: number): void {
+  if (database.vault) {
+    database.vault.deleteFolder(id, expectedVersion);
+    rebuildVaultIndex(database);
+    return;
+  }
   transact(database, () => {
     const current = requireFolder(database.db, id);
     if (current.version !== expectedVersion) throw new VersionConflictError(current.version);
@@ -399,7 +575,7 @@ export function listDocuments(db: DatabaseSync, query = "", folderId?: string | 
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const rows = db
-    .prepare(`SELECT id, title, folder_id, created_at, updated_at, version, body AS excerpt_source FROM documents ${where} ORDER BY updated_at DESC, title COLLATE NOCASE ASC`)
+    .prepare(`SELECT id, title, folder_id, file_path, content_hash, created_at, updated_at, version, body AS excerpt_source FROM documents ${where} ORDER BY updated_at DESC, title COLLATE NOCASE ASC`)
     .all(...parameters) as SqlRow[];
   return rows.map((row) =>
     mapSummary({ ...row, excerpt: excerptFromMarkdown(String(row.excerpt_source ?? ""), 150, value) }),
@@ -417,6 +593,11 @@ export function createDocument(
   body: string,
   folderId: string | null = null,
 ): DocumentRecord {
+  if (database.vault) {
+    const result = database.vault.createDocument(title, body, folderId);
+    rebuildVaultIndex(database);
+    return getDocument(database.db, result.document.id) ?? result.document;
+  }
   const id = randomUUID();
   const timestamp = new Date().toISOString();
   return transact(database, () => {
@@ -436,7 +617,23 @@ export function updateDocument(
   title: string,
   body: string,
   folderId?: string | null,
+  expectedHash?: string,
 ): DocumentRecord {
+  if (database.vault) {
+    const current = getDocument(database.db, id);
+    if (!current) throw new MissingDocumentError();
+    if (current.version !== expectedVersion || (expectedHash && current.contentHash && expectedHash !== current.contentHash)) {
+      throw new VersionConflictError(current.version, current.contentHash);
+    }
+    try {
+      const result = database.vault.updateDocument(id, expectedVersion, expectedHash, title, body, folderId);
+      rebuildVaultIndex(database);
+      return getDocument(database.db, id) ?? result.document;
+    } catch (error) {
+      if (error instanceof VaultVersionConflictError) throw new VersionConflictError(error.currentVersion, error.currentHash);
+      throw error;
+    }
+  }
   return transact(database, () => {
     const current = getDocument(database.db, id);
     if (!current) throw new MissingDocumentError();
@@ -453,7 +650,22 @@ export function updateDocument(
   });
 }
 
-export function deleteDocument(database: KnowledgeDatabase, id: string, expectedVersion: number): void {
+export function deleteDocument(database: KnowledgeDatabase, id: string, expectedVersion: number, expectedHash?: string): void {
+  if (database.vault) {
+    const current = getDocument(database.db, id);
+    if (!current) throw new MissingDocumentError();
+    if (current.version !== expectedVersion || (expectedHash && current.contentHash && expectedHash !== current.contentHash)) {
+      throw new VersionConflictError(current.version, current.contentHash);
+    }
+    try {
+      database.vault.deleteDocument(id, expectedVersion, expectedHash);
+      rebuildVaultIndex(database);
+      return;
+    } catch (error) {
+      if (error instanceof VaultVersionConflictError) throw new VersionConflictError(error.currentVersion, error.currentHash);
+      throw error;
+    }
+  }
   transact(database, () => {
     const current = getDocument(database.db, id);
     if (!current) throw new MissingDocumentError();
@@ -468,6 +680,11 @@ export function deleteDocument(database: KnowledgeDatabase, id: string, expected
 export type ImportedDocument = { title: string; body: string; folderId?: string | null };
 
 export function importDocuments(database: KnowledgeDatabase, documents: ImportedDocument[]): DocumentRecord[] {
+  if (database.vault) {
+    const result = database.vault.importDocuments(documents);
+    rebuildVaultIndex(database);
+    return result.map((document) => getDocument(database.db, document.id) ?? document);
+  }
   return transact(database, () => {
     const result: DocumentRecord[] = [];
     const changes: ChangeRecord[] = [];

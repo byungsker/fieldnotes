@@ -2,6 +2,8 @@ export type DocumentSummary = {
   id: string;
   title: string;
   folderId: string | null;
+  filePath?: string;
+  contentHash?: string;
   createdAt: string;
   updatedAt: string;
   version: number;
@@ -14,6 +16,7 @@ export type FolderRecord = {
   id: string;
   name: string;
   parentId: string | null;
+  filePath?: string;
   createdAt: string;
   updatedAt: string;
   version: number;
@@ -31,4 +34,4 @@ export type ChangeRecord = {
   createdAt: string;
 };
 
-export type ApiErrorBody = { error?: string; message?: string; currentVersion?: number };
+export type ApiErrorBody = { error?: string; message?: string; currentVersion?: number; currentHash?: string };

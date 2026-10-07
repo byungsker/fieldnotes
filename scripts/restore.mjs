@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { copyFileSync, existsSync, mkdirSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, unlinkSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, unlinkSync, chmodSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
@@ -17,7 +17,7 @@ function checkDatabase(database, label) {
   const result = database.prepare("PRAGMA quick_check").get();
   if (result?.quick_check !== "ok") throw new Error(`${label} failed SQLite quick_check.`);
   const version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 2) throw new Error(`${label} schema ${version} is newer than this app supports.`);
+  if (version > 3) throw new Error(`${label} schema ${version} is newer than this app supports.`);
 }
 
 function assertNoServerLock() {
@@ -76,6 +76,7 @@ if (existsSync(destination)) {
   try {
     checkDatabase(current, "Current database");
     current.exec(`VACUUM INTO ${quotedPath(safetyBackup)}`);
+    chmodSync(safetyBackup, 0o600);
   } finally {
     current.close();
   }
@@ -84,6 +85,7 @@ if (existsSync(destination)) {
 const temporary = path.join(dataDir, `.restore-${randomUUID()}.sqlite`);
 try {
   copyFileSync(backup, temporary);
+  chmodSync(temporary, 0o600);
   const restored = new DatabaseSync(temporary, { readOnly: true });
   try {
     checkDatabase(restored, "Staged restore");

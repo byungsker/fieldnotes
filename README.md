@@ -1,6 +1,6 @@
 # Fieldnotes — personal knowledge base
 
-Fieldnotes is a local-first Markdown notebook with a React + TypeScript interface, a Node API, and SQLite as the authoritative store. It is meant to be useful to both a person and local coding agents through the same version-checked API.
+Fieldnotes is a local-first Markdown notebook with a React + TypeScript interface and a Node API. SQLite is authoritative in the default setup. When `KB_VAULT_DIR` is configured, Markdown files become authoritative and SQLite is a rebuildable search/change index. People and coding agents use the same version-checked API in either mode.
 
 ## Run locally
 
@@ -14,7 +14,7 @@ npm run dev
 
 Open [http://127.0.0.1:4177](http://127.0.0.1:4177). The Vite UI proxies `/api` to the local Node API. For a production-style local run, use `npm run build` and then `npm start`; it serves the built UI and API from the same local origin.
 
-The first database gets three clearly labeled demo notes. They contain no imported user data. Demo seeding runs once; deleting all notes later does not recreate them. `.env` is optional and contains no secrets. The default API port is 4178 during development and 4177 for `npm start`; leave `KB_PORT` unset for these defaults. If you change ports, update `KB_API_ORIGIN` for the Vite proxy and set `KB_BASE_URL` to the local API origin for the CLI.
+The first SQLite database gets three clearly labeled demo notes. They contain no imported user data. Demo seeding runs once; deleting all notes later does not recreate them. `.env` is optional and contains no secrets. The default API port is 4178 during development and 4177 for `npm start`; leave `KB_PORT` unset for these defaults. If you change ports, update `KB_API_ORIGIN` for the Vite proxy and set `KB_BASE_URL` to the local API origin for the CLI.
 
 ## Use the app
 
@@ -26,7 +26,7 @@ The first database gets three clearly labeled demo notes. They contain no import
 - Notes open directly in the rich Markdown editor. Supported Markdown renders as editable text, headings, lists, links, code blocks, bookmark cards, and images; syntax that cannot round-trip exactly falls back to source editing rather than being silently rewritten. A closed YAML frontmatter block is protected and shown with a “Frontmatter preserved” badge. The stored Markdown remains unchanged until you save.
 - Dark theme is the first-use default regardless of OS appearance. The sun/moon control switches themes and stores the explicit choice for future visits.
 - Write `[[Note title]]` to link a note. Links resolve by case-insensitive title; backlinks appear below the editor. Unresolved links remain visible.
-- See saved activity and live changes from other browser tabs or agents. Each saved change is committed to SQLite before success is returned and then published through SSE. Reconnecting clients replay the durable change log and refresh current notes.
+- See saved activity and live changes from other browser tabs or agents. SQLite mode commits each change transactionally before success. Vault mode durably writes the Markdown file and its `.fieldnotes` operation log before success, then refreshes the rebuildable SQLite index. Both modes publish through SSE and replay saved changes after reconnect.
 - If a note changes while you have a draft open, Fieldnotes keeps your text in the editor and marks the conflict. Load the latest version to replace the draft, or save after resolving it.
 - Import one or more `.md` or `.markdown` files without changing their text. Export the whole library as a versioned JSON file. This is generic Markdown import; front matter and Markdown remain text, but Obsidian plugins, attachments, embeds, and all vault-specific syntax are not promised to work.
 
@@ -50,13 +50,13 @@ npm run kb -- folder delete FOLDER_ID --version 3
 npm run kb -- delete NOTE_ID --version 4
 ```
 
-`update` and `delete` require the version seen on the last read. A stale version returns a conflict and makes no change. For direct clients, see [API.md](./API.md). Set `KB_BASE_URL` for a different local/private API origin; the default is `http://127.0.0.1:4177`.
+`update` and `delete` require the version seen on the last read. In vault mode the CLI also sends the Markdown SHA-256 it read; a stale version or file hash returns a conflict and makes no change. `npm run kb -- vault status` reports the active storage mode. For direct clients, see [API.md](./API.md). Set `KB_BASE_URL` for a different local/private API origin; the default is `http://127.0.0.1:4177`.
 
 `folder list` prints the hierarchy and each folder's version. Folder rename, move, and delete require `--version` from the latest folder list/read. Empty folders are first-class records. Folder names cannot contain `/`, `\\`, control characters, `.` or `..`; duplicate sibling names and cyclic moves are rejected. There is no configured depth or folder-count cap, subject to available storage and runtime limits.
 
 ## Data, backup, and restore
 
-The default database is `./data/knowledge.sqlite`, separate from source code and ignored by Git. Change its location with `KB_DATA_DIR` in `.env`; use an absolute path to keep data outside the project directory. Each save uses a SQLite transaction, WAL journal mode, and `synchronous=FULL`.
+Persistent data lives under `KB_DATA_DIR` and is ignored by Git. The default SQLite database is `./data/knowledge.sqlite`; use an absolute `KB_DATA_DIR` to keep data outside the source tree. SQLite uses WAL mode and `synchronous=FULL`.
 
 Create and verify a safe SQLite snapshot while Fieldnotes is running:
 
@@ -64,7 +64,7 @@ Create and verify a safe SQLite snapshot while Fieldnotes is running:
 npm run db:backup -- /path/to/backups/fieldnotes-YYYY-MM-DD.sqlite
 ```
 
-This uses SQLite `VACUUM INTO`, so the snapshot includes committed WAL data. It does not copy the live database file directly. The app also offers a versioned JSON export from the UI and `/api/export`; exports include the folder hierarchy and each note's folder ID.
+This uses SQLite `VACUUM INTO`, so the snapshot includes committed WAL data. It does not copy a live database file directly. In filesystem mode the command snapshots `vault-index.sqlite`, which contains the current indexed state and can be used for a SQLite rollback. The app also offers a versioned JSON export from the UI and `/api/export`.
 
 To restore, stop Fieldnotes first. The restore script requires `--server-stopped`, checks the server lock and SQLite integrity, stages the replacement in the data directory, and creates a `pre-restore-*.sqlite` snapshot of current data before replacing it:
 
@@ -72,12 +72,21 @@ To restore, stop Fieldnotes first. The restore script requires `--server-stopped
 npm run db:restore -- /path/to/fieldnotes-backup.sqlite --server-stopped
 ```
 
-The folder hierarchy uses SQLite schema version 2. The app migrates version 1 databases forward on startup. Before an explicit migration, stop Fieldnotes, make a verified backup, review the migration in `server/database.ts`, then run `npm run db:migrate`; the script refuses to run while a server lock exists. If it reports a stale lock, verify that no Fieldnotes process is using that data directory, remove only the stale `server.lock`, and retry. Restore accepts schema versions supported by this app and the next start applies pending forward migrations. Keep the code version and data backup together when moving machines.
+The database schema is version 3; startup migrates older SQLite databases forward. `db:restore` accepts supported versions and applies pending migrations at the next start. Keep the code version and its data backup together when moving machines.
+
+For filesystem mode, stop Fieldnotes before making a complete vault backup. It includes Markdown files and `.fieldnotes/state.json`; the SQLite index can be rebuilt from that metadata and the files:
+
+```sh
+npm run vault:backup -- --server-stopped
+npm run vault:restore -- --backup-dir /path/to/fieldnotes-vault-backup --vault-dir ./data/vaults/restored --server-stopped
+```
+
+Restore creates a new directory and refuses to overwrite an existing vault. Review the restored copy, then point `KB_VAULT_DIR` at it. For exact offline SQLite-to-Markdown conversion, see [docs/vault-storage.md](./docs/vault-storage.md).
 
 ## Moving to another Mac
 
-Transfer the project source, `package.json`, `package-lock.json`, and `.env.example`; do not transfer `node_modules`. On the target Mac, install Node.js 22.13+, run `npm ci`, choose a persistent `KB_DATA_DIR`, and run `npm run build` then `npm start`. Restore a verified SQLite backup using the offline procedure above. Import only content you intend to store in this app.
+Transfer the project source, `package.json`, `package-lock.json`, and `.env.example`; do not transfer `node_modules`. On the target Mac, install Node.js 22.13+, run `npm ci`, choose a persistent `KB_DATA_DIR`, restore a verified vault or SQLite backup, then run `npm run build` and `npm start`. Import only content you intend to store in this app.
 
 ## Remote access
 
-The server refuses non-loopback `KB_HOST` values. For private Tailscale Serve use, set `KB_ALLOWED_TAILSCALE_LOGIN` to the exact permitted tailnet login and `KB_PUBLIC_ORIGIN` to the Serve HTTPS origin, for example `https://machine.tailnet.ts.net:8443`; the app refuses to start if only one is configured. The API requires the matching `Tailscale-User-Login` header on every route and accepts it only from a loopback connection. Tailscale Serve strips client-supplied identity headers and injects the authenticated user's identity; keep Fieldnotes bound to `127.0.0.1` and do not enable Express proxy trust. Restrict Tailscale access to the same user rather than all tailnet members. Set `KB_BASE_URL` for agent CLI clients to the Serve HTTPS origin so their requests pass through that proxy. `KB_PUBLIC_ORIGIN` is an origin/CSRF check, not authentication. This project does not configure Serve, tailnet policy, credentials, firewall, or autostart; test the complete path before enabling it.
+The server refuses non-loopback `KB_HOST` values. For private Tailscale Serve use, set `KB_ALLOWED_TAILSCALE_LOGIN` to the exact permitted tailnet login and `KB_PUBLIC_ORIGIN` to the Serve HTTPS origin, for example `https://your-machine.example.invalid:8443`; the app refuses to start if only one is configured. The API requires the matching `Tailscale-User-Login` header on every route and accepts it only from a loopback connection. Tailscale Serve strips client-supplied identity headers and injects the authenticated user's identity; keep Fieldnotes bound to `127.0.0.1` and do not enable Express proxy trust. Restrict Tailscale access to the same user rather than all tailnet members. Set `KB_BASE_URL` for agent CLI clients to the Serve HTTPS origin so their requests pass through that proxy. `KB_PUBLIC_ORIGIN` is an origin/CSRF check, not authentication. This project does not configure Serve, tailnet policy, credentials, firewall, or autostart; test the complete path before enabling it.

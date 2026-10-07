@@ -19,6 +19,7 @@ import {
   importDocuments,
   listDocuments,
   listFolders,
+  reconcileVault,
   DuplicateFolderNameError,
   FolderCycleError,
   FolderNotEmptyError,
@@ -30,6 +31,7 @@ import {
   type ImportedDocument,
   type KnowledgeDatabase,
 } from "./database.js";
+import { VaultStorageError } from "./vault.js";
 
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_TITLE_LENGTH = 160;
@@ -87,14 +89,17 @@ function validateFolderName(value: unknown): string {
   if (name.length > MAX_FOLDER_NAME_LENGTH) {
     throw new RequestValidationError(`Folder name must be ${MAX_FOLDER_NAME_LENGTH} characters or fewer.`);
   }
+  if (Buffer.byteLength(name, "utf8") > 200) throw new RequestValidationError("Folder names must fit within 200 UTF-8 bytes on disk.");
   const hasControlCharacter = [...name].some((character) => {
     const codePoint = character.codePointAt(0) ?? 0;
     return codePoint < 32 || codePoint === 127;
   });
-  if (name === "." || name === ".." || name.includes("/") || name.includes("\\") || hasControlCharacter) {
+  const normalizedName = name.normalize("NFC");
+  const portableNameKey = normalizedName.normalize("NFD").toLowerCase();
+  if (name === "." || name === ".." || portableNameKey === ".fieldnotes" || portableNameKey.startsWith(".fieldnotes-tmp-") || name.endsWith(".") || name.endsWith(" ") || name.includes("/") || name.includes("\\") || hasControlCharacter) {
     throw new RequestValidationError("Folder names cannot contain path separators or control characters.");
   }
-  return name;
+  return normalizedName;
 }
 
 function validateFolderParent(value: unknown): string | null {
@@ -122,6 +127,14 @@ function validateVersion(value: unknown): number {
     throw new RequestValidationError("expectedVersion must be a positive integer.");
   }
   return version;
+}
+
+function validateHash(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/i.test(value)) {
+    throw new RequestValidationError("expectedHash must be a SHA-256 hex digest.");
+  }
+  return value.toLowerCase();
 }
 
 function validateSequence(value: unknown, label: string): number {
@@ -232,8 +245,34 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
 
   app.use(express.json({ limit: "8mb", strict: true }));
 
+  app.use("/api", (request, response, next) => {
+    try {
+      reconcileVault(database);
+      next();
+    } catch (error) {
+      if (error instanceof VaultStorageError) {
+        sendError(response, error.status, error.code, error.message);
+        return;
+      }
+      next(error);
+    }
+  });
+
   app.get("/api/health", (_request, response) => {
-    response.json({ ok: true, schemaVersion: Number((database.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) });
+    response.json({
+      ok: true,
+      schemaVersion: Number((database.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version),
+      storageMode: database.vault ? "filesystem" : "sqlite",
+    });
+  });
+
+  app.get("/api/vault/status", (_request, response) => {
+    if (!database.vault) {
+      response.json({ mode: "sqlite", documentCount: Number((database.db.prepare("SELECT COUNT(*) AS count FROM documents").get() as { count: number }).count) });
+      return;
+    }
+    const snapshot = database.vault.snapshot();
+    response.json({ mode: "filesystem", vaultId: snapshot.vaultId, documentCount: snapshot.documents.length, folderCount: snapshot.folders.length, sequence: snapshot.sequence });
   });
 
   app.get("/api/bookmarks/metadata", async (request, response) => {
@@ -269,17 +308,19 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
     const expectedVersion = validateVersion(request.body?.expectedVersion);
     const title = validateTitle(request.body?.title);
     const body = validateBody(request.body?.body);
+    const expectedHash = validateHash(request.body?.expectedHash);
     const folderId = Object.hasOwn(request.body ?? {}, "folderId")
       ? validateFolderParent(request.body.folderId)
       : undefined;
-    const document = updateDocument(database, id, expectedVersion, title, body, folderId);
+    const document = updateDocument(database, id, expectedVersion, title, body, folderId, expectedHash);
     response.json({ document });
   });
 
   app.delete("/api/documents/:id", (request, response) => {
     const id = requestDocumentId(request);
     const expectedVersion = validateVersion(request.body?.expectedVersion);
-    deleteDocument(database, id, expectedVersion);
+    const expectedHash = validateHash(request.body?.expectedHash);
+    deleteDocument(database, id, expectedVersion, expectedHash);
     response.status(204).end();
   });
 
@@ -375,7 +416,7 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
   app.get("/api/export", (_request, response) => {
     const exportedAt = new Date().toISOString();
     response.setHeader("Content-Disposition", `attachment; filename="fieldnotes-${exportedAt.slice(0, 10)}.json"`);
-    response.json({ format: "fieldnotes-export", schemaVersion: 2, exportedAt, folders: listFolders(database.db), documents: exportDocuments(database.db) });
+    response.json({ format: "fieldnotes-export", schemaVersion: 3, exportedAt, folders: listFolders(database.db), documents: exportDocuments(database.db) });
   });
 
   app.use("/api", (_request, response) => {
@@ -413,7 +454,14 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
       return;
     }
     if (error instanceof VersionConflictError) {
-      sendError(response, 409, "version_conflict", error.message, { currentVersion: error.currentVersion });
+      sendError(response, 409, "version_conflict", error.message, {
+        currentVersion: error.currentVersion,
+        ...(error.currentHash ? { currentHash: error.currentHash } : {}),
+      });
+      return;
+    }
+    if (error instanceof VaultStorageError) {
+      sendError(response, error.status, error.code, error.message);
       return;
     }
     if (error instanceof MissingDocumentError) {

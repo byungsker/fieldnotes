@@ -444,7 +444,7 @@ test("nested and empty folders support safe CRUD, document moves, search, and fo
   assert.equal(replay.entityType, "folder");
   assert.ok(replay.folderId);
   const exportResponse = await json("/api/export");
-  assert.equal(exportResponse.body.schemaVersion, 2);
+  assert.equal(exportResponse.body.schemaVersion, 3);
   assert.ok(Array.isArray(exportResponse.body.folders));
   assert.ok(exportResponse.body.documents.some((document: { id: string }) => document.id === note.id));
 });
@@ -484,8 +484,8 @@ test("CLI forwards optional bearer tokens over HTTPS or loopback only", async ()
 test("Tailscale Serve mode rejects missing or unauthorized identities and checks the exact origin", async () => {
   const previousLogin = process.env.KB_ALLOWED_TAILSCALE_LOGIN;
   const previousOrigin = process.env.KB_PUBLIC_ORIGIN;
-  process.env.KB_ALLOWED_TAILSCALE_LOGIN = "extreme0728@gmail.com";
-  process.env.KB_PUBLIC_ORIGIN = "https://byungsker-mackbook.tail990faf.ts.net:8443";
+  process.env.KB_ALLOWED_TAILSCALE_LOGIN = "owner@example.invalid";
+  process.env.KB_PUBLIC_ORIGIN = "https://fieldnotes.example.invalid:8443";
   const authDatabase = openDatabase(path.join(temporaryRoot, "identity-data"), { seedDemo: false });
   let authServer: ReturnType<ReturnType<typeof createApp>["listen"]> | undefined;
   try {
@@ -507,20 +507,20 @@ test("Tailscale Serve mode rejects missing or unauthorized identities and checks
     assert.equal((await missingIdentity.json()).error, "identity_required");
 
     const unauthorizedIdentity = await fetch(`${authBaseUrl}/api/documents`, {
-      headers: { "Tailscale-User-Login": "another-user@example.com" },
+      headers: { "Tailscale-User-Login": "other@example.invalid" },
     });
     assert.equal(unauthorizedIdentity.status, 403);
     assert.equal((await unauthorizedIdentity.json()).error, "identity_rejected");
 
     const correctIdentity = await fetch(`${authBaseUrl}/api/documents`, {
-      headers: { "Tailscale-User-Login": "EXTREME0728@gmail.com" },
+      headers: { "Tailscale-User-Login": "OWNER@EXAMPLE.INVALID" },
     });
     assert.equal(correctIdentity.status, 200);
     assert.deepEqual((await correctIdentity.json()).documents, []);
 
     const badOrigin = await fetch(`${authBaseUrl}/api/documents`, {
       headers: {
-        "Tailscale-User-Login": "extreme0728@gmail.com",
+        "Tailscale-User-Login": "owner@example.invalid",
         Origin: "https://attacker.example",
       },
     });
@@ -528,15 +528,15 @@ test("Tailscale Serve mode rejects missing or unauthorized identities and checks
     assert.equal((await badOrigin.json()).error, "origin_rejected");
 
     for (const malformedOrigin of [
-      "http://byungsker-mackbook.tail990faf.ts.net:8443",
-      "https://byungsker-mackbook.tail990faf.ts.net:8443/path",
+      "http://fieldnotes.example.invalid:8443",
+      "https://fieldnotes.example.invalid:8443/path",
       "not-an-origin",
     ]) {
       process.env.KB_PUBLIC_ORIGIN = malformedOrigin;
       assert.throws(() => createApp(authDatabase), /KB_PUBLIC_ORIGIN/);
     }
 
-    process.env.KB_PUBLIC_ORIGIN = "https://byungsker-mackbook.tail990faf.ts.net:8443";
+    process.env.KB_PUBLIC_ORIGIN = "https://fieldnotes.example.invalid:8443";
     assert.throws(
       () => {
         delete process.env.KB_ALLOWED_TAILSCALE_LOGIN;
@@ -590,7 +590,7 @@ test("schema v1 migrates forward without changing existing note IDs, Markdown, o
 
   const upgraded = openDatabase(legacyDirectory, { seedDemo: false });
   try {
-    assert.equal(Number(upgraded.db.prepare("PRAGMA user_version").get()?.user_version), 2);
+    assert.equal(Number(upgraded.db.prepare("PRAGMA user_version").get()?.user_version), 3);
     const existing = upgraded.db.prepare("SELECT id, title, body, version, folder_id FROM documents WHERE id = ?").get(legacyId) as Record<string, unknown>;
     assert.equal(existing.id, legacyId);
     assert.equal(existing.title, "Existing note");

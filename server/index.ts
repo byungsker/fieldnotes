@@ -1,7 +1,7 @@
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { closeDatabase, openDatabase } from "./database.js";
+import { closeDatabase, openDatabase, startVaultMonitor } from "./database.js";
 import { createApp } from "./api.js";
 
 const isDevelopment = process.argv.includes("--dev");
@@ -49,12 +49,14 @@ try {
 }
 const staticDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../client");
 const app = createApp(database, isDevelopment ? undefined : staticDirectory);
+const stopVaultMonitor = startVaultMonitor(database);
 const server = app.listen(port, host, () => {
   console.log(`Fieldnotes API listening on http://${host}:${port}`);
-  console.log(`SQLite data directory: ${dataDir}`);
+  console.log(database.vault ? `Markdown vault: ${database.vault.rootDir}` : `SQLite data directory: ${dataDir}`);
 });
 
 server.on("error", (error) => {
+  stopVaultMonitor();
   closeDatabase(database);
   if (existsSync(lockPath)) unlinkSync(lockPath);
   console.error("Could not start Fieldnotes:", error);
@@ -65,6 +67,7 @@ let shuttingDown = false;
 function shutdown(): void {
   if (shuttingDown) return;
   shuttingDown = true;
+  stopVaultMonitor();
   server.close(() => {
     closeDatabase(database);
     if (existsSync(lockPath)) unlinkSync(lockPath);

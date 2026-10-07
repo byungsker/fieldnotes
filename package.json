@@ -1,7 +1,7 @@
 {
   "name": "personal-knowledge-base",
   "version": "1.0.0",
-  "description": "Local-first Markdown knowledge base with a React UI, Node API, and SQLite storage.",
+  "description": "Local-first Markdown knowledge base with a React UI, Node API, and SQLite or filesystem storage.",
   "private": true,
   "type": "module",
   "engines": {
@@ -19,7 +19,10 @@
     "kb": "node --env-file-if-exists=.env scripts/kb.mjs",
     "db:migrate": "node --env-file-if-exists=.env --import tsx/esm scripts/migrate.ts",
     "db:backup": "node --env-file-if-exists=.env scripts/backup.mjs",
-    "db:restore": "node --env-file-if-exists=.env scripts/restore.mjs"
+    "db:restore": "node --env-file-if-exists=.env scripts/restore.mjs",
+    "vault:migrate": "node --env-file-if-exists=.env --import tsx/esm scripts/vault-migrate.ts",
+    "vault:backup": "node --env-file-if-exists=.env --import tsx/esm scripts/vault-files.ts backup",
+    "vault:restore": "node --env-file-if-exists=.env --import tsx/esm scripts/vault-files.ts restore"
   },
   "keywords": [
     "markdown",

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync, chmodSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const dataDir = path.resolve(process.env.KB_DATA_DIR ?? "./data");
-const source = path.join(dataDir, "knowledge.sqlite");
+const source = path.join(dataDir, process.env.KB_VAULT_DIR ? "vault-index.sqlite" : "knowledge.sqlite");
 const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 const destination = path.resolve(process.argv[2] ?? path.join(dataDir, "..", "backups", `fieldnotes-${timestamp}.sqlite`));
 
@@ -27,6 +27,7 @@ try {
   checkDatabase(database, "Live database");
   // VACUUM INTO reads a consistent SQLite snapshot and includes committed WAL data.
   database.exec(`VACUUM INTO ${quotedPath(destination)}`);
+  chmodSync(destination, 0o600);
 } finally {
   database.close();
 }
