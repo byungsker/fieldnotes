@@ -150,7 +150,7 @@ export const BookmarkCard = Node.create<BookmarkCardOptions>({
 
   renderMarkdown: (node) => {
     const url = typeof node.attrs?.url === "string" ? safeHttpUrl(node.attrs.url) : null;
-    return url ? url + "\n\n" : "";
+    return url || "";
   },
 
   addProseMirrorPlugins() {
