@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Markdown, MarkdownManager } from "@tiptap/markdown";
+import StarterKit from "@tiptap/starter-kit";
+import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
+import Link from "@tiptap/extension-link";
+import Image from "@tiptap/extension-image";
+import { common, createLowlight } from "lowlight";
+import type { JSONContent } from "@tiptap/core";
+import { BookmarkCard } from "./BookmarkCardExtension.tsx";
+import { WikiLink } from "./WikiLinkExtension.tsx";
 import { hasContentPreservingMarkdownRoundTrip, type MarkdownSerializationApi } from "./markdown-roundtrip.ts";
 import { splitLeadingFrontmatter } from "./markdown-safety.ts";
 
@@ -27,6 +36,26 @@ function sourceApi(serialize: (markdown: string) => string): MarkdownSerializati
   return {
     parse: (markdown) => ({ source: markdown }),
     serialize: (document) => serialize((document as { source: string }).source),
+  };
+}
+
+function createTiptapMarkdownApi(): MarkdownSerializationApi {
+  const lowlight = createLowlight(common);
+  const manager = new MarkdownManager({
+    extensions: [
+      StarterKit.configure({ codeBlock: false, link: false }),
+      CodeBlockLowlight.configure({ lowlight, defaultLanguage: "plaintext" }),
+      Link.configure({ openOnClick: false, autolink: true, linkOnPaste: false, protocols: ["http", "https"] }),
+      Image.configure({ inline: false, allowBase64: false }),
+      WikiLink,
+      BookmarkCard,
+      Markdown.configure({ markedOptions: { gfm: true, breaks: false } }),
+    ],
+    markedOptions: { gfm: true, breaks: false },
+  });
+  return {
+    parse: (markdown) => manager.parse(markdown),
+    serialize: (document) => manager.serialize(document as JSONContent),
   };
 }
 
@@ -84,6 +113,27 @@ test("keeps frontmatter byte-for-byte outside the rich-editor body", () => {
   assert.equal(parts.frontmatter, "---\r\ntitle:  A title\r\ntags:\r\n  - one\r\n---\r\n");
   assert.equal(parts.body, "## heading\r\nparagraph");
   assert.equal(parts.frontmatter + parts.body, source);
+});
+
+test("protects the frontmatter separator so the rich editor sees the first Markdown block", () => {
+  const source = "---\ntitle: Fixture\n---\n\n## Heading\nParagraph";
+  const parts = splitLeadingFrontmatter(source);
+  assert.equal(parts.frontmatter, "---\ntitle: Fixture\n---\n\n");
+  assert.equal(parts.body, "## Heading\nParagraph");
+  assert.equal(parts.frontmatter + parts.body, source);
+  assert.equal(hasContentPreservingMarkdownRoundTrip(blockMarkdown, parts.body), true);
+  assert.equal(hasContentPreservingMarkdownRoundTrip(blockMarkdown, `\n${parts.body}`), false);
+});
+
+test("frontmatter plus its separator do not duplicate or change after actual TipTap serialization", () => {
+  const source = "\uFEFF---\ntitle:  Fixture\n---\n\n  \n## Heading\n\n---\n\n## Next";
+  const parts = splitLeadingFrontmatter(source);
+  const markdownApi = createTiptapMarkdownApi();
+  const serializedBody = markdownApi.serialize(markdownApi.parse(parts.body));
+  assert.equal(parts.frontmatter, "\uFEFF---\ntitle:  Fixture\n---\n\n  \n");
+  assert.equal(parts.body, "## Heading\n\n---\n\n## Next");
+  assert.equal(hasContentPreservingMarkdownRoundTrip(markdownApi, parts.body), true);
+  assert.equal(parts.frontmatter + serializedBody, source);
 });
 
 test("rejects serialization that drops parsed content", () => {

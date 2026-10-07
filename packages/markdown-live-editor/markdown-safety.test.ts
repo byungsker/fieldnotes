@@ -16,6 +16,22 @@ test("frontmatter is split without changing delimiters, BOM, or CRLF bytes", () 
   assert.equal(parts.frontmatter + parts.body, source);
 });
 
+test("frontmatter keeps following blank separator lines byte-for-byte in its protected prefix", () => {
+  const source = "\uFEFF---\r\ntitle: Notes\r\n---\r\n\r\n  \r\n# Body\r\n";
+  const parts = splitLeadingFrontmatter(source);
+  assert.equal(parts.frontmatter, "\uFEFF---\r\ntitle: Notes\r\n---\r\n\r\n  \r\n");
+  assert.equal(parts.body, "# Body\r\n");
+  assert.equal(parts.frontmatter + parts.body, source);
+});
+
+test("frontmatter separation stops before leading whitespace on the first body line", () => {
+  const source = "---\ntitle: Fixture\n---\n\n  indented body\n";
+  const parts = splitLeadingFrontmatter(source);
+  assert.equal(parts.frontmatter, "---\ntitle: Fixture\n---\n\n");
+  assert.equal(parts.body, "  indented body\n");
+  assert.equal(parts.frontmatter + parts.body, source);
+});
+
 test("unclosed or non-leading frontmatter remains ordinary Markdown", () => {
   for (const source of ["---\ntitle: Notes\n", "# Heading\n---\ntitle: Notes\n---\n"]) {
     assert.deepEqual(splitLeadingFrontmatter(source), { frontmatter: "", body: source });
