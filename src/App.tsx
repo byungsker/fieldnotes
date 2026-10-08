@@ -37,6 +37,7 @@ import { SearchHighlight } from "./SearchHighlight";
 import { createFieldnotesEditorAdapters } from "./editor-adapters";
 import { formatDocumentDate } from "./document-date";
 import { resolveMobileDrawerSwipe, resolveMobileDrawerSwipeDrag } from "./mobile-drawer-swipe";
+import { isSidebarToggleShortcut } from "./keyboard-shortcuts";
 import type { ChangeRecord, DocumentRecord, DocumentSummary, FolderRecord } from "./types";
 import {
   mergeWorkspaceHistoryState,
@@ -311,6 +312,8 @@ export function App() {
   const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(initialDesktopSidebarCollapsed);
   const [desktopListCollapsed, setDesktopListCollapsed] = useState(initialDesktopListCollapsed);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
+  const [reconciliationError, setReconciliationError] = useState(false);
+  const [markdownSafeToSave, setMarkdownSafeToSave] = useState(true);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [externalVersion, setExternalVersion] = useState<number | null>(null);
   const [externalDelete, setExternalDelete] = useState(false);
@@ -334,6 +337,9 @@ export function App() {
   const activeFolderRef = useRef<ActiveFolder>(null);
   const sequenceRef = useRef(initialSequence());
   const reconcilingRef = useRef(false);
+  const reconcileChangesRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const reconcileRetryRef = useRef<number | null>(null);
+  const markdownSafeToSaveRef = useRef(true);
   const searchRequestRef = useRef(0);
   const documentsLoadedRef = useRef(false);
   const folderTreeInitializedRef = useRef(false);
@@ -767,6 +773,8 @@ export function App() {
     setExternalVersion(versionChanged ? document.version : null);
     setExternalDelete(false);
     setBacklinks([]);
+    markdownSafeToSaveRef.current = true;
+    setMarkdownSafeToSave(true);
     setNotice(versionChanged
       ? "A newer version was saved elsewhere. Your draft is still here."
       : cachedDraft ? "Unsaved draft restored in this tab." : "");
@@ -865,13 +873,30 @@ export function App() {
         more = response.changes.length === 500 && sequenceRef.current < response.highWatermark;
       }
       await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
-      setConnection("connected");
-    } catch {
-      setConnection("reconnecting");
+      if (reconcileRetryRef.current !== null) {
+        window.clearTimeout(reconcileRetryRef.current);
+        reconcileRetryRef.current = null;
+      }
+      setReconciliationError(false);
+    } catch (error) {
+      setReconciliationError(true);
+      const diagnostic = error instanceof ApiError
+        ? { httpStatus: error.status, errorCode: error.code }
+        : { errorName: error instanceof Error ? error.name : "unknown" };
+      console.warn("[Fieldnotes sync] Change reconciliation failed; the EventSource connection state is unchanged.", diagnostic);
+      if (reconcileRetryRef.current === null) {
+        reconcileRetryRef.current = window.setTimeout(() => {
+          reconcileRetryRef.current = null;
+          void reconcileChangesRef.current();
+        }, 2_000);
+      }
     } finally {
       reconcilingRef.current = false;
     }
   }, [applyIncomingChange, refreshDocuments, refreshFolders, refreshRecent]);
+  useEffect(() => {
+    reconcileChangesRef.current = reconcileChanges;
+  }, [reconcileChanges]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial list loads synchronize the UI with the API.
@@ -882,18 +907,34 @@ export function App() {
     const source = new EventSource(`/api/events?after=${sequenceRef.current}`);
     source.onopen = () => {
       setConnection("connected");
+      console.info("[Fieldnotes sync] EventSource opened.");
       void reconcileChanges();
     };
-    source.onerror = () => setConnection("reconnecting");
+    source.onerror = () => {
+      setConnection("reconnecting");
+      console.warn("[Fieldnotes sync] EventSource transport error.", { readyState: source.readyState });
+    };
     source.addEventListener("change", (event) => {
       try {
-        void applyIncomingChange(JSON.parse((event as MessageEvent<string>).data) as ChangeRecord);
+        void applyIncomingChange(JSON.parse((event as MessageEvent<string>).data) as ChangeRecord).catch(() => {
+          setReconciliationError(true);
+          console.warn("[Fieldnotes sync] Applying an SSE change failed; starting catch-up reconciliation.");
+          void reconcileChanges();
+        });
       } catch {
-        setConnection("reconnecting");
+        setReconciliationError(true);
+        console.warn("[Fieldnotes sync] An SSE change payload could not be parsed.");
+        void reconcileChanges();
       }
     });
     source.addEventListener("ready", () => setConnection("connected"));
-    return () => source.close();
+    return () => {
+      source.close();
+      if (reconcileRetryRef.current !== null) {
+        window.clearTimeout(reconcileRetryRef.current);
+        reconcileRetryRef.current = null;
+      }
+    };
   }, [applyIncomingChange, reconcileChanges, refreshDocuments, refreshFolders, refreshRecent]);
 
   useEffect(() => {
@@ -906,6 +947,14 @@ export function App() {
       if (event.isComposing || event.keyCode === 229 || actionDialogRef.current) return;
       const target = event.target instanceof HTMLElement ? event.target : null;
       if (target?.closest("dialog[open], [role='dialog']")) return;
+      const isSidebarShortcut = isSidebarToggleShortcut(event);
+      if (isSidebarShortcut && workspaceRendererRef.current === "desktop") {
+        event.preventDefault();
+        if (!event.repeat) {
+          setDesktopSidebarCollapsed((collapsed) => !collapsed);
+        }
+        return;
+      }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
         void saveDocument();
@@ -924,6 +973,10 @@ export function App() {
   async function saveDocument() {
     const selected = selectedRef.current;
     if (!selected) return;
+    if (!markdownSafeToSaveRef.current) {
+      setNotice("Review this draft in Markdown source mode before saving.");
+      return;
+    }
     const title = draftTitleRef.current.trim();
     const body = draftBodyRef.current;
     if (!title) {
@@ -1295,7 +1348,13 @@ export function App() {
     return documents.filter((document) => ids.has(document.id));
   }, [backlinks, documents]);
 
-  const connectionLabel = connection === "connected" ? "Live sync on" : connection === "connecting" ? "Connecting" : "Reconnecting";
+  const connectionLabel = connection === "connected"
+    ? reconciliationError ? "Live stream connected; saved changes need reconciliation" : "Live sync on"
+    : connection === "connecting" ? "Connecting" : "Reconnecting";
+  const handleMarkdownRoundTripChange = useCallback((safe: boolean) => {
+    markdownSafeToSaveRef.current = safe;
+    setMarkdownSafeToSave(safe);
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -1984,9 +2043,10 @@ export function App() {
             <button
               type="button"
               className="desktop-sidebar-toggle"
-              aria-label={desktopSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-label={desktopSidebarCollapsed ? "Expand sidebar (⌘+|)" : "Collapse sidebar (⌘+|)"}
+              aria-keyshortcuts="Meta+Shift+Backslash"
               aria-expanded={!desktopSidebarCollapsed}
-              title={desktopSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              title={desktopSidebarCollapsed ? "Expand sidebar (⌘+|)" : "Collapse sidebar (⌘+|)"}
               onClick={() => setDesktopSidebarCollapsed((collapsed) => !collapsed)}
             >
               {desktopSidebarCollapsed ? <PanelLeftOpen size={16} aria-hidden="true" /> : <PanelLeftClose size={16} aria-hidden="true" />}
@@ -2319,7 +2379,7 @@ export function App() {
                   {saveState === "saving" ? <LoaderCircle className="spin" size={14} /> : saveState === "saved" ? <Check size={14} /> : saveState === "conflict" ? <RefreshCw size={13} /> : <span className="unsaved-dot" />}
                   <span>{saveStateLabel(saveState)}</span>
                 </div>
-                <button type="button" className="save-button" onClick={() => void saveDocument()} disabled={!isDirty || saveState === "saving"} aria-label="Save changes" title="Save changes">
+                <button type="button" className="save-button" onClick={() => void saveDocument()} disabled={!isDirty || saveState === "saving" || !markdownSafeToSave} aria-label="Save changes" title={markdownSafeToSave ? "Save changes" : "Open Markdown source to review this draft before saving"}>
                   <Save size={15} aria-hidden="true" /><span className="toolbar-action-label">Save</span>
                 </button>
                 <button className="icon-button toolbar-delete" type="button" onClick={() => void deleteAndReturn()} aria-label="Delete note" title="Delete note"><Trash2 size={16} /></button>
@@ -2330,7 +2390,7 @@ export function App() {
             </header>
 
             {notice && <div className={`notice-bar${saveState === "error" || saveState === "conflict" ? " warning" : ""}`} role="status"><span>{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice("")}><X size={14} /></button></div>}
-            {connection !== "connected" && <div className="sync-banner"><span className="connection-dot reconnecting" />Reconnecting to the local service. Drafts stay in this window.</div>}
+            {(connection !== "connected" || reconciliationError) && <div className="sync-banner"><span className={`connection-dot ${connection === "connected" ? "connected" : "reconnecting"}`} />{connection !== "connected" ? "Reconnecting to the local service. Drafts stay in this window." : "The live stream is connected, but saved changes still need reconciliation."}{connection === "connected" && <button type="button" onClick={() => void reconcileChanges()}>Retry sync</button>}</div>}
             {externalVersion !== null && !externalDelete && (
               <div className="conflict-banner" role="alert">
                 <div><strong>A newer version is available</strong><span>Your draft is preserved. The latest saved version is v{externalVersion}.</span></div>
@@ -2423,6 +2483,7 @@ export function App() {
                     setSaveState(externalVersion !== null || externalDelete ? "conflict" : "unsaved");
                     if (notice === "Saved to this Mac.") setNotice("");
                   }}
+                  onRoundTripChange={handleMarkdownRoundTripChange}
                 />
               </div>
               <section className="backlinks-panel">

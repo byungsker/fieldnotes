@@ -189,6 +189,7 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
   const configuredPublicOrigin = process.env.KB_PUBLIC_ORIGIN?.trim().replace(/\/$/, "") || undefined;
   const activeResponses = new Set<Promise<void>>();
   const eventStreams = new Set<() => void>();
+  let nextEventStreamId = 1;
   let draining = false;
   let drainPromise: Promise<void> | undefined;
 
@@ -414,6 +415,9 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
   app.get("/api/events", (request, response) => {
     const headerValue = request.get("last-event-id");
     const after = validateSequence(headerValue ?? request.query.after ?? 0, "after");
+    const streamId = nextEventStreamId++;
+    const startedAt = Date.now();
+    let heartbeatCount = 0;
     response.status(200);
     response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     response.setHeader("Cache-Control", "no-cache, no-transform");
@@ -436,31 +440,45 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
     response.write(`event: ready\ndata: ${JSON.stringify({ highWatermark: getLatestChangeSequence(database.db) })}\n\n`);
 
     const heartbeat = setInterval(() => {
-      if (!response.writableEnded && !response.destroyed) response.write(": keep-alive\n\n");
+      if (!response.writableEnded && !response.destroyed) {
+        response.write(": keep-alive\n\n");
+        heartbeatCount += 1;
+      }
     }, 20_000);
     heartbeat.unref();
     let cleaned = false;
+    let shutdownInitiated = false;
     let closeForShutdown: () => void = () => undefined;
-    const cleanup = () => {
+    const cleanup = (reason: "server_shutdown" | "finished" | "client_closed") => {
       if (cleaned) return;
       cleaned = true;
       clearInterval(heartbeat);
       database.changes.off("change", onChange);
       eventStreams.delete(closeForShutdown);
+      console.info("[Fieldnotes SSE] stream closed", JSON.stringify({
+        streamId,
+        reason,
+        durationMs: Date.now() - startedAt,
+        lastSequence: lastSent,
+        heartbeatCount,
+        activeStreams: eventStreams.size,
+      }));
     };
     closeForShutdown = () => {
+      shutdownInitiated = true;
       try {
         if (!response.writableEnded && !response.destroyed) {
           response.write("event: server_shutdown\ndata: {\"reconnect\":true}\n\n");
           response.end();
         }
       } finally {
-        cleanup();
+        cleanup("server_shutdown");
       }
     };
     eventStreams.add(closeForShutdown);
-    response.once("finish", cleanup);
-    response.once("close", cleanup);
+    console.info("[Fieldnotes SSE] stream opened", JSON.stringify({ streamId, cursor: after, activeStreams: eventStreams.size }));
+    response.once("finish", () => cleanup(shutdownInitiated ? "server_shutdown" : "finished"));
+    response.once("close", () => cleanup(shutdownInitiated ? "server_shutdown" : "client_closed"));
   });
 
   app.post("/api/import", (request, response) => {

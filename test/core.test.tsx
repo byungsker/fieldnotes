@@ -209,6 +209,44 @@ test("changes survive a disconnect and replay from the last SSE event id", async
   assert.equal(reconciliation.body.highWatermark, reconciliation.body.changes[0].seq);
 });
 
+test("repeated SSE reconnects release their listeners and the next reconnect replays new writes", async () => {
+  const originalInfo = console.info;
+  console.info = () => undefined;
+  try {
+    const cursorResult = await json("/api/changes?after=0");
+    const cursor = cursorResult.body.highWatermark as number;
+    const listenerCountBefore = database.changes.listenerCount("change");
+
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const response = await fetch(`${baseUrl}/api/events?after=${cursor}`, { signal: AbortSignal.timeout(5_000) });
+      assert.equal(response.status, 200);
+      const reader = response.body?.getReader();
+      assert.ok(reader);
+      const decoder = new TextDecoder();
+      let receivedReady = false;
+      while (!receivedReady) {
+        const chunk = await reader.read();
+        assert.equal(chunk.done, false);
+        receivedReady = decoder.decode(chunk.value, { stream: true }).includes("event: ready");
+      }
+      await reader.cancel();
+    }
+
+    const deadline = Date.now() + 1_000;
+    while (database.changes.listenerCount("change") !== listenerCountBefore && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(database.changes.listenerCount("change"), listenerCountBefore);
+
+    const created = await json("/api/documents", postJson("POST", { title: "Reconnect after churn", body: "Replayed from a synthetic test database." }));
+    const replayed = await nextChange(0, cursor);
+    assert.equal(replayed.documentId, created.body.document.id);
+    assert.ok(replayed.seq > cursor);
+  } finally {
+    console.info = originalInfo;
+  }
+});
+
 test("generic Markdown import/export preserves content and path-like inputs cannot reach files", async () => {
   const markdown = "---\ntags: [demo]\n---\n\n# Imported\n\nRaw HTML stays inert: <script>window.compromised = true</script>\n\n[bad](javascript:alert(1))";
   const imported = await json("/api/import", postJson("POST", {
