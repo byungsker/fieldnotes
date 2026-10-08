@@ -875,7 +875,11 @@ export function App() {
         for (const change of response.changes) await applyIncomingChange(change, false);
         more = response.changes.length === 500 && sequenceRef.current < response.highWatermark;
       }
-      await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
+      let refreshedSequence: number;
+      do {
+        refreshedSequence = sequenceRef.current;
+        await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
+      } while (sequenceRef.current !== refreshedSequence);
       if (reconcileRetryRef.current !== null) {
         window.clearTimeout(reconcileRetryRef.current);
         reconcileRetryRef.current = null;
@@ -919,7 +923,9 @@ export function App() {
     };
     source.addEventListener("change", (event) => {
       try {
-        void applyIncomingChange(JSON.parse((event as MessageEvent<string>).data) as ChangeRecord).catch(() => {
+        const change = JSON.parse((event as MessageEvent<string>).data) as ChangeRecord;
+        // EventSource replays history on reconnect; let reconciliation refresh collections once for the batch.
+        void applyIncomingChange(change, !reconcilingRef.current).catch(() => {
           setReconciliationError(true);
           console.warn("[Fieldnotes sync] Applying an SSE change failed; starting catch-up reconciliation.");
           void reconcileChanges();
