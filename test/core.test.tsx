@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
@@ -154,6 +155,24 @@ test("human API and agent CLI create, read, search, update, and delete the same 
   assert.equal(deleteResult.status, 0, deleteResult.stderr);
   const missing = await json(`/api/documents/${note.id}`);
   assert.equal(missing.response.status, 404);
+});
+
+test("client-keyed note creation is idempotent across an uncertain retry", async () => {
+  const id = randomUUID();
+  const payload = { id, title: "One autosaved draft", body: "First local source.", folderId: null };
+  const created = await json("/api/documents", postJson("POST", payload));
+  assert.equal(created.response.status, 201);
+  assert.equal(created.body.document.id, id);
+
+  const replay = await json("/api/documents", postJson("POST", { ...payload, body: "A retry from the same local draft." }));
+  assert.equal(replay.response.status, 201);
+  assert.equal(replay.body.document.id, id);
+  assert.equal(replay.body.document.body, "First local source.");
+
+  const listed = await json("/api/documents");
+  assert.equal(listed.body.documents.filter((document: { id: string }) => document.id === id).length, 1);
+  const changes = await json("/api/changes?after=0");
+  assert.equal(changes.body.changes.filter((change: { documentId?: string; operation: string }) => change.documentId === id && change.operation === "created").length, 1);
 });
 
 test("bookmark metadata API rejects private targets before attempting a request", async () => {

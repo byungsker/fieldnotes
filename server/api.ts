@@ -330,7 +330,8 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
     const title = validateTitle(request.body?.title);
     const body = validateBody(request.body?.body ?? "");
     const folderId = request.body?.folderId === undefined ? null : validateFolderParent(request.body.folderId);
-    const document = createDocument(database, title, body, folderId);
+    const requestedId = request.body?.id === undefined ? undefined : validateDocumentId(request.body.id);
+    const document = createDocument(database, title, body, folderId, requestedId);
     response.status(201).json({ document });
   });
 

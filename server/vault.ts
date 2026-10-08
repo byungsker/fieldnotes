@@ -1092,10 +1092,19 @@ export class FileVault {
     return pending.change;
   }
 
-  createDocument(title: string, body: string, folderId: string | null): { document: DocumentRecord; change: ChangeRecord } {
+  createDocument(title: string, body: string, folderId: string | null, requestedId?: string): { document: DocumentRecord; change: ChangeRecord } {
     if (body.length > 250_000) throw new VaultStorageError("Markdown body is too large (250 KB maximum).", "vault_file_too_large", 400);
     if (folderId !== null && !this.getFolderMeta(folderId)) throw new VaultStorageError("Folder not found.", "not_found", 404);
-    const id = randomUUID();
+    const id = requestedId ?? randomUUID();
+    const existingMeta = this.getDocumentMeta(id);
+    if (existingMeta) {
+      const document = this.snapshot().documents.find((entry) => entry.id === id);
+      const change = [...this.state.changes].reverse().find((entry) => entry.documentId === id && entry.operation === "created");
+      if (document && change) return { document, change };
+    }
+    if (requestedId && this.state.changes.some((entry) => entry.documentId === id && entry.operation === "created")) {
+      throw new VaultStorageError("This draft id was already used and its note is no longer available.", "idempotency_key_reused", 409);
+    }
     const now = new Date().toISOString();
     const relativePath = this.notePath(title, id, folderId);
     const bytes = Buffer.from(body, "utf8");
