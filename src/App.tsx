@@ -983,7 +983,7 @@ export function App() {
     const selected = selectedRef.current;
     if (!selected) return;
     if (!markdownSafeToSaveRef.current) {
-      setNotice("Review this draft in Markdown source mode before saving.");
+      setNotice("The editor could not serialize this draft safely. It has not been saved.");
       return;
     }
     const title = draftTitleRef.current.trim();
@@ -1360,7 +1360,7 @@ export function App() {
   const connectionLabel = connection === "connected"
     ? reconciliationError ? "Live stream connected; saved changes need reconciliation" : "Live sync on"
     : connection === "connecting" ? "Connecting" : "Reconnecting";
-  const handleMarkdownRoundTripChange = useCallback((safe: boolean) => {
+  const handleMarkdownSerializationSafetyChange = useCallback((safe: boolean) => {
     markdownSafeToSaveRef.current = safe;
     setMarkdownSafeToSave(safe);
   }, []);
@@ -1452,7 +1452,7 @@ export function App() {
     const syncRenderer = () => {
       const nextRenderer = workspaceRendererForViewport(window.innerWidth);
       if (nextRenderer === workspaceRendererRef.current) return;
-      const editor = editorHostRef.current?.querySelector<HTMLElement>(".mle-prosemirror, .mle-source-textarea");
+      const editor = editorHostRef.current?.querySelector<HTMLElement>(".mle-prosemirror");
       editorWasFocusedBeforeResizeRef.current = Boolean(editor && (document.activeElement === editor || editor.contains(document.activeElement)));
       if (nextRenderer === "desktop" && drawerHistoryEntryRef.current) {
         pendingDrawerNavigationRef.current = null;
@@ -1475,7 +1475,7 @@ export function App() {
     editorWasFocusedBeforeResizeRef.current = false;
     if (currentRoute.kind !== "document") return;
     const frame = window.requestAnimationFrame(() => {
-      const editor = editorHostRef.current?.querySelector<HTMLElement>(".mle-prosemirror, .mle-source-textarea");
+      const editor = editorHostRef.current?.querySelector<HTMLElement>(".mle-prosemirror");
       if (!editor) return;
       editor.focus({ preventScroll: true });
     });
@@ -1683,7 +1683,6 @@ export function App() {
                   className={"folder-nav-item folder-tree-button" + (activeFolderId === folder.id ? " active" : "")}
                   onClick={() => void navigateToFolder(folder.id)}
                   aria-current={activeFolderId === folder.id ? "page" : undefined}
-                  title={folderPathById.get(folder.id)}
                 >
                   {activeFolderId === folder.id ? <FolderOpen size={14} /> : <Folder size={14} />}
                   <span>{folder.name}</span><span className="folder-count">{folder.documentCount}</span>
@@ -1692,7 +1691,6 @@ export function App() {
                   type="button"
                   className="folder-row-action"
                   aria-label={"Rename " + folder.name}
-                  title={"Rename " + folder.name}
                   onClick={() => void renameFolder(folder.id)}
                 ><Pencil size={13} /></button>
               </div>
@@ -1760,7 +1758,6 @@ export function App() {
           type="button"
           className={"text-tool" + (surface === "drawer" ? " drawer-tool" : "")}
           onClick={() => void exportNotes()}
-          title="Download a JSON export"
         >
           <ArrowDownToLine size={14} />
           <span className={surface === "drawer" ? "drawer-tool-label" : undefined}>
@@ -2055,7 +2052,6 @@ export function App() {
               aria-label={desktopSidebarCollapsed ? "Expand sidebar (⌘+|)" : "Collapse sidebar (⌘+|)"}
               aria-keyshortcuts="Meta+Shift+Backslash"
               aria-expanded={!desktopSidebarCollapsed}
-              title={desktopSidebarCollapsed ? "Expand sidebar (⌘+|)" : "Collapse sidebar (⌘+|)"}
               onClick={() => setDesktopSidebarCollapsed((collapsed) => !collapsed)}
             >
               {desktopSidebarCollapsed ? <PanelLeftOpen size={16} aria-hidden="true" /> : <PanelLeftClose size={16} aria-hidden="true" />}
@@ -2064,17 +2060,16 @@ export function App() {
         </div>
 
         <div className="rail-section-label">YOUR SPACE</div>
-        <button className={`rail-link${screen.kind === "library" ? " active" : ""}`} type="button" title="All notes" aria-label="All notes" onClick={() => void navigateToLibrary()}>
+        <button className={`rail-link${screen.kind === "library" ? " active" : ""}`} type="button" aria-label="All notes" onClick={() => void navigateToLibrary()}>
           <FileText size={16} />
           <span>All notes</span>
           <span className="rail-count">{documentListStatus === "loaded" ? documents.length : <span className="count-skeleton" role="status" aria-label="Loading note count" />}</span>
         </button>
-        <button className={`rail-link${screen.kind === "recent" ? " active" : ""}`} type="button" title="Recent changes" aria-label="Recent changes" onClick={() => void navigateToRecent()}><Clock3 size={16} /><span>Recent changes</span></button>
+        <button className={`rail-link${screen.kind === "recent" ? " active" : ""}`} type="button" aria-label="Recent changes" onClick={() => void navigateToRecent()}><Clock3 size={16} /><span>Recent changes</span></button>
         {workspaceRenderer === "desktop" && desktopListCollapsed && (
           <button
             className="rail-link desktop-list-reopen"
             type="button"
-            title="Show notes list"
             aria-label="Show notes list"
             aria-expanded={false}
             aria-controls="fieldnotes-note-list"
@@ -2096,7 +2091,6 @@ export function App() {
               type="button"
               onClick={() => openChange(change)}
               disabled={change.operation === "deleted"}
-              title={`${operationLabel(change.operation)} ${change.entityType} ${change.title}`}
             >
               <span className={`activity-indicator ${change.operation}`} aria-hidden="true" />
               <span className="activity-copy">
@@ -2137,11 +2131,11 @@ export function App() {
           <div className="list-title-row"><h1 ref={notesHeadingRef} tabIndex={-1}>{activeFolderId === "root" ? "Unfiled" : activeFolder?.name ?? "Notes"}</h1><span className="total-count">{documentListStatus === "loaded" ? activeFolderId === null ? documents.length : visibleDocuments.length : <span className="count-skeleton" role="status" aria-label="Loading note count" />}</span></div>
           </div>
           <div className="mobile-list-actions">
-            <button className="icon-button theme-toggle theme-toggle-list" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
+            <button className="icon-button theme-toggle theme-toggle-list" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
               {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
             </button>
-            <button className="mobile-recent-button" type="button" onClick={() => void navigateToRecent()} aria-label="Recent changes" title="Recent changes"><Clock3 size={18} /></button>
-            <button className="icon-button add-note-button" type="button" onClick={() => void createAndOpenNote()} aria-label="Create a note" title="Create a note">
+            <button className="mobile-recent-button" type="button" onClick={() => void navigateToRecent()} aria-label="Recent changes"><Clock3 size={18} /></button>
+            <button className="icon-button add-note-button" type="button" onClick={() => void createAndOpenNote()} aria-label="Create a note">
               <Plus size={18} />
             </button>
           </div>
@@ -2153,7 +2147,6 @@ export function App() {
                 aria-label="Collapse note list"
                 aria-expanded={true}
                 aria-controls="fieldnotes-note-list"
-                title="Collapse note list"
                 onClick={() => setDesktopListCollapsed(true)}
               ><PanelLeftClose size={17} aria-hidden="true" /></button>
             </div>
@@ -2224,7 +2217,6 @@ export function App() {
                   className={`folder-nav-item folder-tree-button${activeFolderId === folder.id ? " active" : ""}`}
                   onClick={() => void navigateToFolder(folder.id)}
                   aria-current={activeFolderId === folder.id ? "page" : undefined}
-                  title={folderPathById.get(folder.id)}
                 >
                   {activeFolderId === folder.id ? <FolderOpen size={14} /> : <Folder size={14} />}
                   <span>{folder.name}</span><span className="folder-count">{folder.documentCount}</span>
@@ -2233,7 +2225,6 @@ export function App() {
                   type="button"
                   className="folder-row-action"
                   aria-label={`Rename ${folder.name}`}
-                  title={`Rename ${folder.name}`}
                   onClick={() => void renameFolder(folder.id)}
                 ><Pencil size={13} /></button>
               </div>
@@ -2388,11 +2379,11 @@ export function App() {
                   {saveState === "saving" ? <LoaderCircle className="spin" size={14} /> : saveState === "saved" ? <Check size={14} /> : saveState === "conflict" ? <RefreshCw size={13} /> : <span className="unsaved-dot" />}
                   <span>{saveStateLabel(saveState)}</span>
                 </div>
-                <button type="button" className="save-button" onClick={() => void saveDocument()} disabled={!isDirty || saveState === "saving" || !markdownSafeToSave} aria-label="Save changes" title={markdownSafeToSave ? "Save changes" : "Open Markdown source to review this draft before saving"}>
+                <button type="button" className="save-button" onClick={() => void saveDocument()} disabled={!isDirty || saveState === "saving" || !markdownSafeToSave} aria-label="Save changes">
                   <Save size={15} aria-hidden="true" /><span className="toolbar-action-label">Save</span>
                 </button>
-                <button className="icon-button toolbar-delete" type="button" onClick={() => void deleteAndReturn()} aria-label="Delete note" title="Delete note"><Trash2 size={16} /></button>
-                <button className="icon-button theme-toggle theme-toggle-editor" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
+                <button className="icon-button toolbar-delete" type="button" onClick={() => void deleteAndReturn()} aria-label="Delete note"><Trash2 size={16} /></button>
+                <button className="icon-button theme-toggle theme-toggle-editor" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
                   {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
                 </button>
               </div>
@@ -2481,7 +2472,6 @@ export function App() {
                   adapters={editorAdapters}
                   ariaLabel="Markdown body"
                   minHeight={230}
-                  showPreviewTab={false}
                   onFocus={() => {
                     const control = document.activeElement;
                     if (control instanceof HTMLElement) keepEditorControlVisible(control);
@@ -2492,7 +2482,7 @@ export function App() {
                     setSaveState(externalVersion !== null || externalDelete ? "conflict" : "unsaved");
                     if (notice === "Saved to this Mac.") setNotice("");
                   }}
-                  onRoundTripChange={handleMarkdownRoundTripChange}
+                  onSerializationSafetyChange={handleMarkdownSerializationSafetyChange}
                 />
               </div>
               <section className="backlinks-panel">

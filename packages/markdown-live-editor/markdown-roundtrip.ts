@@ -3,9 +3,9 @@ import {
   stripNormalizedTerminalNewlines,
 } from "./markdown-line-endings.ts";
 
-export interface MarkdownSerializationApi {
-  parse: (markdown: string) => unknown;
-  serialize: (document: unknown) => string;
+export interface MarkdownSerializationApi<Document = unknown> {
+  parse: (markdown: string) => Document;
+  serialize: (document: Document) => string;
 }
 
 function isAtxHeading(line: string): boolean {
@@ -109,11 +109,11 @@ function normalizeAtxHeadingBlockSpacing(markdown: string): string {
 /**
  * Check that Markdown serialization preserves source text and parsed structure.
  * The serializer may change the count of consecutive line breaks (for example,
- * between a standalone heading and a plain block), but other source changes
- * require source mode.
+ * between a standalone heading and a plain block). Callers must preserve any
+ * block that fails this check instead of exposing a lossy rich-text view.
  */
-export function hasContentPreservingMarkdownRoundTrip(
-  markdownApi: MarkdownSerializationApi,
+export function hasContentPreservingMarkdownRoundTrip<Document>(
+  markdownApi: MarkdownSerializationApi<Document>,
   markdown: string,
   retainTerminalNewlines = false,
 ): boolean {

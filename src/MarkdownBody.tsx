@@ -43,7 +43,7 @@ export function MarkdownBody({ markdown, documents, onOpenDocument }: MarkdownBo
               const target = byTitle.get(normalizeTitle(title));
               if (!target) {
                 return (
-                  <span className="wiki-missing" title={`No note titled “${title}” yet`}>
+                  <span className="wiki-missing">
                     {children}
                   </span>
                 );
