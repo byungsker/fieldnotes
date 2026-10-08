@@ -1256,7 +1256,8 @@ html[data-theme="dark"] select:focus-visible { outline-color: rgba(164, 211, 171
   }
 
   .mobile-drawer-secondary > .rail-section-label { padding: 0 8px; font-size: 11px; }
-.left-rail.mobile-navigation-drawer .drawer-folder-browser.explorer-browser { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 300px; max-height: none; overflow: visible; padding: 12px 0 10px; margin: 0 0 8px; border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
+.left-rail.mobile-navigation-drawer .drawer-folder-browser.explorer-browser { display: flex; flex: 0 0 auto; flex-direction: column; min-height: 300px; max-height: none; overflow: visible; padding: 12px 0 10px; margin: 0 0 8px; border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
+.left-rail.mobile-navigation-drawer .activity-list { flex: 0 0 auto; }
 .left-rail.mobile-navigation-drawer .explorer-search-tools { gap: 8px; margin-bottom: 8px; }
 .left-rail.mobile-navigation-drawer .explorer-search-box { height: 44px; margin: 0; }
 .left-rail.mobile-navigation-drawer .explorer-create-actions button { min-height: 44px; font-size: 13px; }
