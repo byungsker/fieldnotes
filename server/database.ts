@@ -592,13 +592,22 @@ export function createDocument(
   title: string,
   body: string,
   folderId: string | null = null,
+  requestedId?: string,
 ): DocumentRecord {
+  const id = requestedId ?? randomUUID();
+  if (requestedId) {
+    const existing = getDocument(database.db, id);
+    if (existing) return existing;
+    const priorCreate = database.db.prepare(
+      "SELECT 1 AS present FROM changes WHERE document_id = ? AND entity_type = 'document' AND operation = 'created' LIMIT 1",
+    ).get(id);
+    if (priorCreate) throw new MissingDocumentError();
+  }
   if (database.vault) {
-    const result = database.vault.createDocument(title, body, folderId);
+    const result = database.vault.createDocument(title, body, folderId, id);
     rebuildVaultIndex(database);
     return getDocument(database.db, result.document.id) ?? result.document;
   }
-  const id = randomUUID();
   const timestamp = new Date().toISOString();
   return transact(database, () => {
     if (folderId !== null) requireFolder(database.db, folderId);

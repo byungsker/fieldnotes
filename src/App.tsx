@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowDownUp,
@@ -24,7 +24,6 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Save,
   Sun,
   Trash2,
   X,
@@ -38,6 +37,16 @@ import { createFieldnotesEditorAdapters } from "./editor-adapters";
 import { formatDocumentDate } from "./document-date";
 import { resolveMobileDrawerSwipe, resolveMobileDrawerSwipeDrag } from "./mobile-drawer-swipe";
 import { isSidebarToggleShortcut } from "./keyboard-shortcuts";
+import {
+  AUTOSAVE_DELAY_MS,
+  clearLocalDraft,
+  draftMatchesDocument,
+  isMeaningfulNewDraft,
+  readLocalDraft,
+  rebaseDraft,
+  writeLocalDraft,
+  type LocalDraftSnapshot,
+} from "./autosave";
 import type { ChangeRecord, DocumentRecord, DocumentSummary, FolderRecord } from "./types";
 import {
   mergeWorkspaceHistoryState,
@@ -67,11 +76,12 @@ type BacklinksResponse = { backlinks: DocumentSummary[] };
 const LAST_SEQUENCE_KEY = "fieldnotes:last-change-sequence";
 const THEME_KEY = "fieldnotes:theme";
 const DESKTOP_SIDEBAR_KEY = "fieldnotes:desktop-sidebar-collapsed";
-const DESKTOP_LIST_KEY = "fieldnotes:desktop-list-collapsed";
 const MOBILE_DRAWER_HISTORY_KEY = "fieldnotes:mobile-drawer";
+const UNFILED_TREE_ID = "__fieldnotes_unfiled__";
 const MobileWorkspace = lazy(() => import("./stackflow").then((module) => ({ default: module.MobileWorkspace })));
 type ActiveFolder = string | "root" | null;
-type DraftSnapshot = { title: string; body: string; baseVersion: number };
+type DraftSnapshot = LocalDraftSnapshot;
+type DraftValues = { title: string; body: string; folderId: string | null; revision: number };
 type SortOrder = "updated-desc" | "updated-asc" | "title-asc" | "title-desc";
 type ColorTheme = "dark" | "light";
 type DocumentListScrollSnapshot = { documentId: string | null; itemOffset: number; scrollTop: number };
@@ -87,6 +97,14 @@ type MobileDrawerTouchStart = {
   direction: "open" | "close" | null;
   previewActive: boolean;
 };
+
+function readBrowserDraft(documentId: string): DraftSnapshot | null {
+  try {
+    return readLocalDraft(documentId, window.localStorage);
+  } catch {
+    return null;
+  }
+}
 
 function hasMobileDrawerHistoryState(state: unknown): boolean {
   return typeof state === "object" && state !== null && !Array.isArray(state) &&
@@ -109,16 +127,18 @@ function initialDesktopSidebarCollapsed(): boolean {
   }
 }
 
-function initialDesktopListCollapsed(): boolean {
-  try {
-    return window.localStorage.getItem(DESKTOP_LIST_KEY) === "true";
-  } catch {
-    return false;
-  }
+function hasDraftChanged(
+  document: DocumentRecord | null,
+  title: string,
+  body: string,
+  folderId = document?.folderId ?? null,
+): boolean {
+  return Boolean(document && (title !== document.title || body !== document.body || folderId !== document.folderId));
 }
 
-function hasDraftChanged(document: DocumentRecord | null, title: string, body: string): boolean {
-  return Boolean(document && (title !== document.title || body !== document.body));
+function pendingDocument(id: string, folderId: string | null, title = "Untitled note", body = ""): DocumentRecord {
+  const now = new Date().toISOString();
+  return { id, title, body, folderId, createdAt: now, updatedAt: now, version: 0, excerpt: "", contentHash: "" };
 }
 
 function documentListPath(query: string, folderId: ActiveFolder): string {
@@ -149,36 +169,6 @@ function folderPaths(folders: FolderRecord[]): Map<string, string> {
     }
   }
   return paths;
-}
-
-function folderTreeRows(folders: FolderRecord[], expanded: Set<string>) {
-  const byId = new Map(folders.map((folder) => [folder.id, folder]));
-  const children = new Map<string | null, FolderRecord[]>();
-  for (const folder of folders) {
-    const siblings = children.get(folder.parentId) ?? [];
-    siblings.push(folder);
-    children.set(folder.parentId, siblings);
-  }
-  for (const siblings of children.values()) siblings.sort((left, right) => left.name.localeCompare(right.name));
-
-  const roots = [...(children.get(null) ?? [])];
-  for (const folder of folders) {
-    if (folder.parentId && !byId.has(folder.parentId)) roots.push(folder);
-  }
-  const stack = roots.reverse().map((folder) => ({ folder, depth: 0 }));
-  const rows: Array<{ folder: FolderRecord; depth: number; hasChildren: boolean }> = [];
-  const visited = new Set<string>();
-  while (stack.length) {
-    const current = stack.pop() as { folder: FolderRecord; depth: number };
-    if (visited.has(current.folder.id)) continue;
-    visited.add(current.folder.id);
-    const nested = children.get(current.folder.id) ?? [];
-    rows.push({ folder: current.folder, depth: current.depth, hasChildren: nested.length > 0 });
-    if (expanded.has(current.folder.id)) {
-      for (const folder of [...nested].reverse()) stack.push({ folder, depth: current.depth + 1 });
-    }
-  }
-  return rows;
 }
 
 function descendantIds(folders: FolderRecord[], id: string): Set<string> {
@@ -294,6 +284,7 @@ export function App() {
   const [workspaceRenderer, setWorkspaceRenderer] = useState(() => workspaceRendererForViewport(window.innerWidth));
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [visibleDocuments, setVisibleDocuments] = useState<DocumentSummary[]>([]);
+  const [treeDocuments, setTreeDocuments] = useState<DocumentSummary[]>([]);
   const [documentListStatus, setDocumentListStatus] = useState<DocumentListStatus>("loading");
   const [folders, setFolders] = useState<FolderRecord[]>([]);
   const [activeFolderId, setActiveFolderId] = useState<ActiveFolder>(null);
@@ -305,12 +296,14 @@ export function App() {
   const [selectedDocument, setSelectedDocument] = useState<DocumentRecord | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftBody, setDraftBody] = useState("");
+  const [draftFolderId, setDraftFolderId] = useState<string | null>(null);
+  const [isComposing, setIsComposing] = useState(false);
+  const [draftRecoveryAvailable, setDraftRecoveryAvailable] = useState(true);
   const editorAdapters = useMemo(() => createFieldnotesEditorAdapters(), []);
   const [query, setQuery] = useState("");
   const [sortOrder, setSortOrder] = useState<SortOrder>("updated-desc");
   const [theme, setTheme] = useState<ColorTheme>(initialTheme);
   const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(initialDesktopSidebarCollapsed);
-  const [desktopListCollapsed, setDesktopListCollapsed] = useState(initialDesktopListCollapsed);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [reconciliationError, setReconciliationError] = useState(false);
   const [markdownSafeToSave, setMarkdownSafeToSave] = useState(true);
@@ -327,12 +320,15 @@ export function App() {
   const [mobileDrawerSwipePreview, setMobileDrawerSwipePreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const drawerSearchInputRef = useRef<HTMLInputElement>(null);
   const editorHostRef = useRef<HTMLDivElement>(null);
   const notesHeadingRef = useRef<HTMLHeadingElement>(null);
   const actionDialogRef = useRef(actionDialog);
   const selectedRef = useRef<DocumentRecord | null>(null);
   const draftTitleRef = useRef("");
   const draftBodyRef = useRef("");
+  const draftFolderIdRef = useRef<string | null>(null);
+  const composingRef = useRef(false);
   const queryRef = useRef("");
   const activeFolderRef = useRef<ActiveFolder>(null);
   const sequenceRef = useRef(initialSequence());
@@ -341,13 +337,23 @@ export function App() {
   const reconcileRetryRef = useRef<number | null>(null);
   const markdownSafeToSaveRef = useRef(true);
   const searchRequestRef = useRef(0);
+  const treeSearchRequestRef = useRef(0);
   const documentsLoadedRef = useRef(false);
   const folderTreeInitializedRef = useRef(false);
   const draftsRef = useRef(new Map<string, DraftSnapshot>());
+  const latestDraftValuesRef = useRef(new Map<string, DraftValues>());
+  const documentBasesRef = useRef(new Map<string, DocumentRecord>());
+  const pendingCreateRef = useRef(new Set<string>());
+  const pendingWritesRef = useRef(new Map<string, DraftSnapshot>());
+  const activeWritesRef = useRef(new Set<string>());
+  const activeWriteSnapshotsRef = useRef(new Map<string, DraftSnapshot>());
+  const conflictedNotesRef = useRef(new Set<string>());
+  const saveTimersRef = useRef(new Map<string, number>());
   const dialogResolverRef = useRef<((result: ActionDialogResult) => void) | null>(null);
   const navigationPendingRef = useRef(false);
   const historyIndexRef = useRef(initialHistoryIndex);
   const currentRouteRef = useRef(currentRoute);
+  const previousRouteRef = useRef(currentRoute);
   const workspaceRendererRef = useRef(workspaceRenderer);
   const activeActivityIdRef = useRef("desktop");
   const editorWasFocusedBeforeResizeRef = useRef(false);
@@ -367,6 +373,7 @@ export function App() {
   selectedRef.current = selectedDocument;
   draftTitleRef.current = draftTitle;
   draftBodyRef.current = draftBody;
+  draftFolderIdRef.current = draftFolderId;
   queryRef.current = query;
   activeFolderRef.current = activeFolderId;
   actionDialogRef.current = actionDialog;
@@ -622,18 +629,52 @@ export function App() {
     setActionDialog(null);
     resolve?.(result);
   }, []);
-  const rememberDraft = useCallback((document: DocumentRecord | null, title: string, body: string) => {
-    if (!document) return;
-    if (!hasDraftChanged(document, title, body)) {
+  const rememberDraft = useCallback((document: DocumentRecord | null, title: string, body: string, folderId: string | null) => {
+    if (!document) return null;
+    const baseline = documentBasesRef.current.get(document.id) ?? document;
+    const pendingCreate = pendingCreateRef.current.has(document.id);
+    const previous = draftsRef.current.get(document.id);
+    const previousValues = latestDraftValuesRef.current.get(document.id);
+    const revision = Math.max(previous?.revision ?? 0, previousValues?.revision ?? 0) + 1;
+    latestDraftValuesRef.current.set(document.id, { title, body, folderId, revision });
+    const initialFolderId = previous ? previous.initialFolderId : document.folderId;
+    const changed = pendingCreate
+      ? isMeaningfulNewDraft({ title, body, folderId, initialFolderId })
+      : hasDraftChanged(baseline, title, body, folderId);
+    if (!changed) {
       draftsRef.current.delete(document.id);
-      return;
+      pendingWritesRef.current.delete(document.id);
+      try {
+        clearLocalDraft(document.id, window.localStorage);
+        setDraftRecoveryAvailable(true);
+      } catch {
+        setDraftRecoveryAvailable(false);
+      }
+      return null;
     }
-    draftsRef.current.set(document.id, { title, body, baseVersion: document.version });
+    const snapshot: DraftSnapshot = {
+      documentId: document.id,
+      title,
+      body,
+      folderId,
+      baseVersion: baseline.version,
+      baseHash: baseline.contentHash ?? "",
+      revision,
+      pendingCreate,
+      initialFolderId,
+    };
+    draftsRef.current.set(document.id, snapshot);
+    try {
+      setDraftRecoveryAvailable(writeLocalDraft(snapshot, window.localStorage));
+    } catch {
+      setDraftRecoveryAvailable(false);
+    }
+    return snapshot;
   }, []);
 
   const isDirty = Boolean(
     selectedDocument &&
-      (draftTitle !== selectedDocument.title || draftBody !== selectedDocument.body),
+      (draftTitle !== selectedDocument.title || draftBody !== selectedDocument.body || draftFolderId !== selectedDocument.folderId),
   );
   const folderPathById = useMemo(() => folderPaths(folders), [folders]);
   const orderedDocuments = useMemo(() => {
@@ -648,6 +689,18 @@ export function App() {
       return collator.compare(left.title, right.title) || left.id.localeCompare(right.id);
     });
   }, [sortOrder, visibleDocuments]);
+  const orderedTreeDocuments = useMemo(() => {
+    const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+    return [...treeDocuments].sort((left, right) => {
+      if (sortOrder === "title-asc" || sortOrder === "title-desc") {
+        const titleOrder = collator.compare(left.title, right.title);
+        return (sortOrder === "title-asc" ? titleOrder : -titleOrder) || left.id.localeCompare(right.id);
+      }
+      const updatedOrder = Date.parse(left.updatedAt) - Date.parse(right.updatedAt);
+      if (updatedOrder !== 0) return sortOrder === "updated-asc" ? updatedOrder : -updatedOrder;
+      return collator.compare(left.title, right.title) || left.id.localeCompare(right.id);
+    });
+  }, [sortOrder, treeDocuments]);
 
   useEffect(() => {
     if (workspaceRenderer !== "mobile-stackflow") return;
@@ -669,10 +722,6 @@ export function App() {
     };
   }, [activeFolderId, currentListViewKey, currentRoute, orderedDocuments, restoreDocumentListScroll, sortOrder, workspaceRenderer]);
 
-  const visibleFolderRows = useMemo(
-    () => folderTreeRows(folders, expandedFolderIds),
-    [expandedFolderIds, folders],
-  );
   const activeFolder = activeFolderId && activeFolderId !== "root"
     ? folders.find((folder) => folder.id === activeFolderId) ?? null
     : null;
@@ -690,6 +739,7 @@ export function App() {
     try {
       const response = await apiRequest<DocumentListResponse>("/api/documents");
       setDocuments(response.documents);
+      setTreeDocuments(response.documents);
       const currentQuery = queryRef.current;
       const currentFolder = activeFolderRef.current;
       if (!currentQuery.trim() && currentFolder === null) {
@@ -712,7 +762,7 @@ export function App() {
     setFolders(response.folders);
     if (!folderTreeInitializedRef.current) {
       folderTreeInitializedRef.current = true;
-      setExpandedFolderIds(new Set(response.folders.filter((folder) => folder.parentId === null).map((folder) => folder.id)));
+      setExpandedFolderIds(new Set([...response.folders.filter((folder) => folder.parentId === null).map((folder) => folder.id), UNFILED_TREE_ID]));
     }
     if (activeFolderRef.current !== null && activeFolderRef.current !== "root" &&
       !response.folders.some((folder) => folder.id === activeFolderRef.current)) {
@@ -743,6 +793,27 @@ export function App() {
     }
   }, [documents]);
 
+  const refreshExplorerSearch = useCallback(async (value: string) => {
+    if (!documentsLoadedRef.current) return;
+    const requestId = ++treeSearchRequestRef.current;
+    if (!value.trim()) {
+      setTreeDocuments(documents);
+      setListError("");
+      return;
+    }
+    try {
+      const response = await apiRequest<DocumentListResponse>(documentListPath(value, null));
+      if (requestId === treeSearchRequestRef.current) {
+        setTreeDocuments(response.documents);
+        setListError("");
+      }
+    } catch (error) {
+      if (requestId === treeSearchRequestRef.current) {
+        setListError(error instanceof Error ? error.message : "Search is unavailable.");
+      }
+    }
+  }, [documents]);
+
   const refreshRecent = useCallback(async () => {
     const response = await apiRequest<RecentResponse>("/api/changes/recent?limit=18");
     setRecentChanges(response.changes);
@@ -761,23 +832,101 @@ export function App() {
     document: DocumentRecord,
     restoreDraft = true,
   ) => {
+    const knownBase = documentBasesRef.current.get(document.id);
+    if (knownBase && knownBase.version > document.version) return;
     setDocumentLoadError(null);
-    const cachedDraft = restoreDraft ? draftsRef.current.get(document.id) : undefined;
-    if (!restoreDraft) draftsRef.current.delete(document.id);
+    documentBasesRef.current.set(document.id, document);
+    let cachedDraft = restoreDraft
+      ? draftsRef.current.get(document.id) ?? readBrowserDraft(document.id) ?? undefined
+      : undefined;
+    if (!restoreDraft) {
+      draftsRef.current.delete(document.id);
+      pendingWritesRef.current.delete(document.id);
+      conflictedNotesRef.current.delete(document.id);
+      try { clearLocalDraft(document.id, window.localStorage); } catch { /* storage may be unavailable */ }
+    }
+    let versionChanged = false;
+    if (cachedDraft?.pendingCreate) {
+      cachedDraft = rebaseDraft(cachedDraft, document);
+      pendingCreateRef.current.delete(document.id);
+      if (draftMatchesDocument(cachedDraft, document)) {
+        cachedDraft = undefined;
+        draftsRef.current.delete(document.id);
+        try { clearLocalDraft(document.id, window.localStorage); } catch { /* storage may be unavailable */ }
+      } else {
+        draftsRef.current.set(document.id, cachedDraft);
+        try { writeLocalDraft(cachedDraft, window.localStorage); } catch { /* storage may be unavailable */ }
+      }
+    } else if (cachedDraft) {
+      versionChanged = cachedDraft.baseVersion !== document.version ||
+        Boolean(cachedDraft.baseHash && document.contentHash && cachedDraft.baseHash !== document.contentHash);
+      if (draftMatchesDocument(cachedDraft, document)) {
+        cachedDraft = undefined;
+        draftsRef.current.delete(document.id);
+        try { clearLocalDraft(document.id, window.localStorage); } catch { /* storage may be unavailable */ }
+      } else {
+        draftsRef.current.set(document.id, cachedDraft);
+      }
+    }
+    if (versionChanged) conflictedNotesRef.current.add(document.id);
+    else conflictedNotesRef.current.delete(document.id);
+    latestDraftValuesRef.current.set(document.id, {
+      title: cachedDraft?.title ?? document.title,
+      body: cachedDraft?.body ?? document.body,
+      folderId: cachedDraft ? cachedDraft.folderId : document.folderId,
+      revision: cachedDraft?.revision ?? latestDraftValuesRef.current.get(document.id)?.revision ?? 0,
+    });
     selectedRef.current = document;
     setSelectedDocument(document);
     setDraftTitle(cachedDraft?.title ?? document.title);
     setDraftBody(cachedDraft?.body ?? document.body);
-    const versionChanged = Boolean(cachedDraft && cachedDraft.baseVersion !== document.version);
-    setSaveState(versionChanged ? "conflict" : cachedDraft ? "unsaved" : "saved");
+    setDraftFolderId(cachedDraft ? cachedDraft.folderId : document.folderId);
+    const hasRestoredDraft = Boolean(cachedDraft && !draftMatchesDocument(cachedDraft, document));
+    setSaveState(versionChanged ? "conflict" : hasRestoredDraft ? "unsaved" : "saved");
     setExternalVersion(versionChanged ? document.version : null);
     setExternalDelete(false);
     setBacklinks([]);
     markdownSafeToSaveRef.current = true;
     setMarkdownSafeToSave(true);
+    try {
+      void window.localStorage.length;
+      setDraftRecoveryAvailable(true);
+    } catch {
+      setDraftRecoveryAvailable(false);
+    }
     setNotice(versionChanged
       ? "A newer version was saved elsewhere. Your draft is still here."
-      : cachedDraft ? "Unsaved draft restored in this tab." : "");
+      : hasRestoredDraft ? "Unsynced draft restored on this device." : "");
+  }, []);
+
+  const restoreLocalDraft = useCallback((id: string): boolean => {
+    const cachedDraft = draftsRef.current.get(id) ?? readBrowserDraft(id);
+    if (!cachedDraft) return false;
+    const baseline = pendingDocument(id, cachedDraft.folderId, cachedDraft.title, cachedDraft.body);
+    baseline.version = cachedDraft.baseVersion;
+    baseline.contentHash = cachedDraft.baseHash;
+    documentBasesRef.current.set(id, baseline);
+    draftsRef.current.set(id, cachedDraft);
+    latestDraftValuesRef.current.set(id, {
+      title: cachedDraft.title,
+      body: cachedDraft.body,
+      folderId: cachedDraft.folderId,
+      revision: cachedDraft.revision,
+    });
+    if (cachedDraft.pendingCreate) pendingCreateRef.current.add(id);
+    else pendingCreateRef.current.delete(id);
+    selectedRef.current = baseline;
+    setSelectedDocument(baseline);
+    setDraftTitle(cachedDraft.title);
+    setDraftBody(cachedDraft.body);
+    setDraftFolderId(cachedDraft.folderId);
+    setSaveState("error");
+    setExternalVersion(null);
+    setExternalDelete(false);
+    setBacklinks([]);
+    setDraftRecoveryAvailable(true);
+    setNotice("Local draft restored. The saved version could not be checked; retry sync when connected.");
+    return true;
   }, []);
 
   const ensureDocumentForRoute = useCallback(async (id: string) => {
@@ -794,12 +943,17 @@ export function App() {
       setRouteError("");
       acceptDocument(response.document);
       void refreshBacklinks(response.document.id);
-    } catch {
+    } catch (error) {
       if (currentRouteRef.current.kind === "document" && currentRouteRef.current.documentId === id) {
-        setDocumentLoadError({ documentId: id, message: "This note could not be found. It may have been deleted." });
+        if (restoreLocalDraft(id)) return;
+        const missing = error instanceof ApiError && error.status === 404;
+        setDocumentLoadError({
+          documentId: id,
+          message: missing ? "This note could not be found. It may have been deleted." : "The local service is unavailable. Reconnect and retry loading this note.",
+        });
       }
     }
-  }, [acceptDocument, refreshBacklinks]);
+  }, [acceptDocument, refreshBacklinks, restoreLocalDraft]);
 
   const applyIncomingChange = useCallback(async (change: ChangeRecord, refreshCollections = true) => {
     if (change.seq <= sequenceRef.current) return;
@@ -821,12 +975,16 @@ export function App() {
     }
     if (!change.documentId) return;
 
+    const knownBase = documentBasesRef.current.get(change.documentId);
+    if (change.operation !== "deleted" && knownBase && change.version <= knownBase.version) return;
+
     const selected = selectedRef.current;
     if (!selected || selected.id !== change.documentId) return;
 
     if (change.operation === "deleted") {
-      const dirty = draftTitleRef.current !== selected.title || draftBodyRef.current !== selected.body;
+      const dirty = hasDraftChanged(selected, draftTitleRef.current, draftBodyRef.current, draftFolderIdRef.current) || draftsRef.current.has(selected.id);
       if (dirty) {
+        conflictedNotesRef.current.add(selected.id);
         setExternalDelete(true);
         setSaveState("conflict");
         setNotice("This note was deleted on another client. Your draft is still here.");
@@ -842,10 +1000,19 @@ export function App() {
 
     try {
       const response = await apiRequest<DocumentResponse>(`/api/documents/${change.documentId}`);
+      const activeWrite = activeWriteSnapshotsRef.current.get(change.documentId);
+      if (activeWrite && draftMatchesDocument(activeWrite, response.document)) {
+        documentBasesRef.current.set(change.documentId, response.document);
+        selectedRef.current = response.document;
+        if (selectedRef.current?.id === change.documentId) setSelectedDocument(response.document);
+        return;
+      }
       const current = selectedRef.current;
       if (!current || current.id !== change.documentId) return;
-      const dirty = draftTitleRef.current !== current.title || draftBodyRef.current !== current.body;
+      const dirty = hasDraftChanged(current, draftTitleRef.current, draftBodyRef.current, draftFolderIdRef.current) || draftsRef.current.has(current.id);
       if (dirty) {
+        documentBasesRef.current.set(change.documentId, response.document);
+        conflictedNotesRef.current.add(change.documentId);
         setExternalVersion(response.document.version);
         setSaveState("conflict");
         setNotice("A newer version was saved elsewhere. Your draft is still here.");
@@ -952,6 +1119,305 @@ export function App() {
   }, [activeFolderId, query, refreshSearch]);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => void refreshExplorerSearch(query), 180);
+    return () => window.clearTimeout(timer);
+  }, [query, refreshExplorerSearch]);
+
+  useEffect(() => {
+    const previous = previousRouteRef.current;
+    const leftDocument = previous.kind === "document" &&
+      !(currentRoute.kind === "document" && currentRoute.documentId === previous.documentId);
+    previousRouteRef.current = currentRoute;
+    if (!leftDocument) return;
+    const active = selectedRef.current;
+    if (!active || active.id !== previous.documentId) return;
+    const snapshot = draftsRef.current.get(active.id) ?? rememberDraft(active, draftTitleRef.current, draftBodyRef.current, draftFolderIdRef.current);
+    if (snapshot && !conflictedNotesRef.current.has(active.id)) queueAutosave(snapshot, true);
+    // These event helpers read current draft values from refs; the effect should run only on route changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRoute]);
+
+  useEffect(() => {
+    const active = selectedDocument;
+    if (!active || !isDirty || isComposing || !markdownSafeToSave || externalVersion !== null || externalDelete || saveState === "error" || saveState === "conflict") return;
+    const snapshot = draftsRef.current.get(active.id);
+    if (!snapshot || conflictedNotesRef.current.has(active.id)) return;
+    const saveTimers = saveTimersRef.current;
+    const timer = window.setTimeout(() => {
+      saveTimers.delete(active.id);
+      queueAutosave(snapshot, true);
+    }, AUTOSAVE_DELAY_MS);
+    saveTimers.set(active.id, timer);
+    return () => {
+      window.clearTimeout(timer);
+      if (saveTimers.get(active.id) === timer) saveTimers.delete(active.id);
+    };
+    // queueAutosave uses ref-backed snapshots and is invoked only for the current render's changed draft.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDocument, draftTitle, draftBody, draftFolderId, isDirty, isComposing, markdownSafeToSave, externalVersion, externalDelete, saveState]);
+
+  useEffect(() => {
+    const warnBeforeClose = (event: BeforeUnloadEvent) => {
+      if (draftsRef.current.size === 0 && pendingWritesRef.current.size === 0 && activeWritesRef.current.size === 0) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeClose);
+    return () => window.removeEventListener("beforeunload", warnBeforeClose);
+  }, []);
+
+  function queueAutosave(snapshot: DraftSnapshot, immediate = false) {
+    if (conflictedNotesRef.current.has(snapshot.documentId)) return;
+    pendingWritesRef.current.set(snapshot.documentId, snapshot);
+    const priorTimer = saveTimersRef.current.get(snapshot.documentId);
+    if (priorTimer !== undefined) window.clearTimeout(priorTimer);
+    saveTimersRef.current.delete(snapshot.documentId);
+    if (immediate) {
+      void runAutosaveQueue(snapshot.documentId);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      saveTimersRef.current.delete(snapshot.documentId);
+      void runAutosaveQueue(snapshot.documentId);
+    }, AUTOSAVE_DELAY_MS);
+    saveTimersRef.current.set(snapshot.documentId, timer);
+  }
+
+  async function runAutosaveQueue(documentId: string): Promise<void> {
+    if (activeWritesRef.current.has(documentId)) return;
+    activeWritesRef.current.add(documentId);
+    try {
+      while (pendingWritesRef.current.has(documentId)) {
+        const snapshot = pendingWritesRef.current.get(documentId) as DraftSnapshot;
+        pendingWritesRef.current.delete(documentId);
+        if (conflictedNotesRef.current.has(documentId)) return;
+        if (composingRef.current && selectedRef.current?.id === documentId) {
+          pendingWritesRef.current.set(documentId, snapshot);
+          return;
+        }
+        if (selectedRef.current?.id === documentId && !markdownSafeToSaveRef.current) {
+          pendingWritesRef.current.set(documentId, snapshot);
+          setSaveState("error");
+          setNotice("This Markdown draft could not be serialized safely. It is kept locally and has not been synced.");
+          return;
+        }
+        if (!snapshot.title.trim()) {
+          pendingWritesRef.current.set(documentId, snapshot);
+          if (selectedRef.current?.id === documentId) {
+            setSaveState("error");
+            setNotice("Add a title to sync this draft. It remains saved in this browser.");
+          }
+          return;
+        }
+        if (snapshot.pendingCreate && !isMeaningfulNewDraft(snapshot)) continue;
+        const base = documentBasesRef.current.get(documentId);
+        if (!snapshot.pendingCreate && !base) {
+          pendingWritesRef.current.set(documentId, snapshot);
+          if (selectedRef.current?.id === documentId) {
+            setSaveState("error");
+            setNotice("The saved version is not available yet. Your local draft is preserved.");
+          }
+          return;
+        }
+
+        if (selectedRef.current?.id === documentId) {
+          setSaveState("saving");
+          setNotice("");
+        }
+        activeWriteSnapshotsRef.current.set(documentId, snapshot);
+        try {
+          const response = snapshot.pendingCreate
+            ? await apiRequest<DocumentResponse>("/api/documents", jsonRequest("POST", {
+                id: documentId,
+                title: snapshot.title.trim(),
+                body: snapshot.body,
+                folderId: snapshot.folderId,
+              }))
+            : await apiRequest<DocumentResponse>(
+                `/api/documents/${documentId}`,
+                jsonRequest("PUT", {
+                  expectedVersion: snapshot.baseVersion,
+                  expectedHash: snapshot.baseHash || undefined,
+                  title: snapshot.title.trim(),
+                  body: snapshot.body,
+                  folderId: snapshot.folderId,
+                }),
+              );
+          const newerObservedVersion = documentBasesRef.current.get(documentId);
+          if (newerObservedVersion && newerObservedVersion.version > response.document.version) {
+            activeWriteSnapshotsRef.current.delete(documentId);
+            const preservedDraft = draftsRef.current.get(documentId) ?? snapshot;
+            draftsRef.current.set(documentId, preservedDraft);
+            pendingWritesRef.current.delete(documentId);
+            conflictedNotesRef.current.add(documentId);
+            if (selectedRef.current?.id === documentId) {
+              setExternalVersion(newerObservedVersion.version);
+              setSaveState("conflict");
+              setNotice("A newer version arrived while sync was finishing. Your draft is still here and was not replaced.");
+            }
+            return;
+          }
+          documentBasesRef.current.set(documentId, response.document);
+          pendingCreateRef.current.delete(documentId);
+          activeWriteSnapshotsRef.current.delete(documentId);
+          const isActive = selectedRef.current?.id === documentId;
+          if (isActive) {
+            selectedRef.current = response.document;
+            setSelectedDocument(response.document);
+          }
+
+          const latestValues = latestDraftValuesRef.current.get(documentId);
+          const currentDraft = draftsRef.current.get(documentId);
+          const editedAfterRequest = Boolean(latestValues && latestValues.revision > snapshot.revision);
+          if (editedAfterRequest && latestValues && !draftMatchesDocument(latestValues, response.document)) {
+            const rebased: DraftSnapshot = {
+              ...snapshot,
+              title: latestValues.title,
+              body: latestValues.body,
+              folderId: latestValues.folderId,
+              baseVersion: response.document.version,
+              baseHash: response.document.contentHash ?? "",
+              revision: latestValues.revision,
+              pendingCreate: false,
+            };
+            draftsRef.current.set(documentId, rebased);
+            try { setDraftRecoveryAvailable(writeLocalDraft(rebased, window.localStorage)); } catch { setDraftRecoveryAvailable(false); }
+            pendingWritesRef.current.set(documentId, rebased);
+            if (isActive) setSaveState("unsaved");
+          } else {
+            if (currentDraft && currentDraft.revision <= snapshot.revision) draftsRef.current.delete(documentId);
+            pendingWritesRef.current.delete(documentId);
+            latestDraftValuesRef.current.set(documentId, {
+              title: response.document.title,
+              body: response.document.body,
+              folderId: response.document.folderId,
+              revision: latestValues?.revision ?? snapshot.revision,
+            });
+            try {
+              clearLocalDraft(documentId, window.localStorage);
+              if (isActive) setDraftRecoveryAvailable(true);
+            } catch { if (isActive) setDraftRecoveryAvailable(false); }
+            if (isActive) {
+              setDraftTitle(response.document.title);
+              setDraftBody(response.document.body);
+              setDraftFolderId(response.document.folderId);
+              setSaveState("saved");
+              setNotice("");
+            }
+          }
+          void Promise.all([refreshDocuments(), refreshFolders(), refreshRecent(), refreshBacklinks(documentId)]).catch(() => undefined);
+        } catch (error) {
+          activeWriteSnapshotsRef.current.delete(documentId);
+          if (error instanceof ApiError && error.code === "version_conflict") {
+            conflictedNotesRef.current.add(documentId);
+            pendingWritesRef.current.delete(documentId);
+            if (selectedRef.current?.id === documentId) {
+              setSaveState("conflict");
+              setExternalVersion(error.currentVersion ?? null);
+              setNotice("A newer version exists. Your draft is preserved and was not synced over it.");
+            }
+          } else {
+            const latestDraft = draftsRef.current.get(documentId) ?? snapshot;
+            pendingWritesRef.current.set(documentId, latestDraft);
+            if (selectedRef.current?.id === documentId) {
+              setSaveState("error");
+              setNotice("Changes are kept on this device. Retry sync when the service is available.");
+            }
+          }
+          return;
+        }
+      }
+    } finally {
+      activeWritesRef.current.delete(documentId);
+    }
+  }
+
+  async function saveDocument() {
+    const selected = selectedRef.current;
+    if (!selected) return;
+    if (!markdownSafeToSaveRef.current) {
+      setNotice("This Markdown draft could not be serialized safely. It has not been synced.");
+      return;
+    }
+    if (composingRef.current) {
+      setNotice("Finish text composition before syncing this draft.");
+      return;
+    }
+    const snapshot = draftsRef.current.get(selected.id) ?? rememberDraft(
+      selected,
+      draftTitleRef.current,
+      draftBodyRef.current,
+      draftFolderIdRef.current,
+    );
+    if (!snapshot) return;
+    if (conflictedNotesRef.current.has(selected.id)) return;
+    queueAutosave(snapshot, true);
+    await runAutosaveQueue(selected.id);
+  }
+
+  async function retrySave() {
+    const selected = selectedRef.current;
+    if (!selected || conflictedNotesRef.current.has(selected.id)) return;
+    let snapshot = draftsRef.current.get(selected.id);
+    if (!snapshot) {
+      snapshot = rememberDraft(selected, draftTitleRef.current, draftBodyRef.current, draftFolderIdRef.current) ?? undefined;
+    }
+    if (!snapshot) return;
+    if (!snapshot.pendingCreate) {
+      try {
+        const latest = await apiRequest<DocumentResponse>(`/api/documents/${selected.id}`);
+        if (latest.document.version !== snapshot.baseVersion || (snapshot.baseHash && latest.document.contentHash !== snapshot.baseHash)) {
+          if (draftMatchesDocument(snapshot, latest.document)) {
+            acceptDocument(latest.document, false);
+            setNotice("The last sync completed before its reply arrived. The current version is loaded.");
+          } else {
+            documentBasesRef.current.set(selected.id, latest.document);
+            conflictedNotesRef.current.add(selected.id);
+            setExternalVersion(latest.document.version);
+            setSaveState("conflict");
+            setNotice("A newer version exists. Review it before syncing your preserved draft.");
+          }
+          return;
+        }
+      } catch {
+        // The write below remains guarded by its expected version and hash.
+      }
+    }
+    setSaveState("unsaved");
+    queueAutosave(snapshot, true);
+    await runAutosaveQueue(selected.id);
+  }
+
+  async function overwriteLatestWithDraft() {
+    const selected = selectedRef.current;
+    if (!selected || externalDelete) return;
+    if (!await requestConfirm({
+      title: "Replace the newer version?",
+      description: "This will write your preserved draft over the latest saved note. The other client’s version will remain in its history.",
+      confirmLabel: "Replace with my draft",
+      destructive: true,
+    })) return;
+    try {
+      const latest = await apiRequest<DocumentResponse>(`/api/documents/${selected.id}`);
+      const currentDraft = draftsRef.current.get(selected.id) ?? rememberDraft(selected, draftTitleRef.current, draftBodyRef.current, draftFolderIdRef.current);
+      if (!currentDraft) return;
+      documentBasesRef.current.set(selected.id, latest.document);
+      selectedRef.current = latest.document;
+      setSelectedDocument(latest.document);
+      const rebased = rebaseDraft(currentDraft, latest.document);
+      draftsRef.current.set(selected.id, rebased);
+      try { writeLocalDraft(rebased, window.localStorage); } catch { setDraftRecoveryAvailable(false); }
+      conflictedNotesRef.current.delete(selected.id);
+      setExternalVersion(null);
+      setSaveState("unsaved");
+      setNotice("");
+      queueAutosave(rebased, true);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not load the latest version for an explicit replacement.");
+    }
+  }
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.isComposing || event.keyCode === 229 || actionDialogRef.current) return;
       const target = event.target instanceof HTMLElement ? event.target : null;
@@ -970,7 +1436,10 @@ export function App() {
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        searchInputRef.current?.focus();
+        const searchTarget = workspaceRendererRef.current === "mobile-stackflow" && drawerWasOpenRef.current
+          ? drawerSearchInputRef.current
+          : searchInputRef.current;
+        searchTarget?.focus();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -979,74 +1448,37 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function saveDocument() {
-    const selected = selectedRef.current;
-    if (!selected) return;
-    if (!markdownSafeToSaveRef.current) {
-      setNotice("The editor could not serialize this draft safely. It has not been saved.");
-      return;
-    }
-    const title = draftTitleRef.current.trim();
-    const body = draftBodyRef.current;
-    if (!title) {
-      setSaveState("error");
-      setNotice("Give this note a title before saving.");
-      return;
-    }
-    setSaveState("saving");
-    setNotice("");
-    try {
-      const response = await apiRequest<DocumentResponse>(
-        `/api/documents/${selected.id}`,
-        jsonRequest("PUT", { expectedVersion: selected.version, expectedHash: selected.contentHash, title, body }),
-      );
-      acceptDocument(response.document, false);
-      await Promise.all([refreshDocuments(), refreshRecent(), refreshBacklinks(response.document.id)]);
-      setNotice("Saved to this Mac.");
-    } catch (error) {
-      if (error instanceof ApiError && error.code === "version_conflict") {
-        setSaveState("conflict");
-        setExternalVersion(error.currentVersion ?? null);
-        setNotice("This note changed on another client. Your draft is still here.");
-      } else {
-        setSaveState("error");
-        setNotice(error instanceof Error ? error.message : "Could not save this note.");
-      }
-    }
-  }
-
   const createNote = async (): Promise<DocumentRecord | null> => {
-    if (isDirty && !await requestConfirm({
-      title: "Discard this draft?",
-      description: "The unsaved changes in this note will be discarded when the new note opens.",
-      confirmLabel: "Discard draft",
-      destructive: true,
-    })) return null;
-    if (isDirty && selectedDocument) draftsRef.current.delete(selectedDocument.id);
-    try {
-      const folderId = activeFolderId && activeFolderId !== "root" ? activeFolderId : null;
-      const response = await apiRequest<DocumentResponse>("/api/documents", jsonRequest("POST", { title: "Untitled note", body: "", folderId }));
-      acceptDocument(response.document);
-      await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
-      void refreshBacklinks(response.document.id);
-      return response.document;
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Could not create a note.");
-      return null;
+    const previous = selectedRef.current;
+    if (previous) {
+      const snapshot = draftsRef.current.get(previous.id) ?? rememberDraft(previous, draftTitleRef.current, draftBodyRef.current, draftFolderIdRef.current);
+      if (snapshot && !conflictedNotesRef.current.has(previous.id)) queueAutosave(snapshot, true);
     }
+    const folderId = activeFolderRef.current && activeFolderRef.current !== "root" ? activeFolderRef.current : null;
+    const draft = pendingDocument(window.crypto.randomUUID(), folderId);
+    pendingCreateRef.current.add(draft.id);
+    latestDraftValuesRef.current.set(draft.id, { title: draft.title, body: draft.body, folderId, revision: 0 });
+    selectedRef.current = draft;
+    setSelectedDocument(draft);
+    setDraftTitle(draft.title);
+    setDraftBody("");
+    setDraftFolderId(folderId);
+    setSaveState("unsaved");
+    setExternalVersion(null);
+    setExternalDelete(false);
+    setBacklinks([]);
+    setDraftRecoveryAvailable(true);
+    setNotice("This note stays a local draft until you start writing.");
+    return draft;
   };
 
   const openDocument = async (id: string): Promise<boolean> => {
     const selected = selectedRef.current;
     if (selected?.id === id) return true;
-    const dirty = hasDraftChanged(selected, draftTitleRef.current, draftBodyRef.current);
-    if (dirty && !await requestConfirm({
-      title: "Discard this draft?",
-      description: "The unsaved changes in this note will be discarded when the other note opens.",
-      confirmLabel: "Discard draft",
-      destructive: true,
-    })) return false;
-    if (dirty && selected) draftsRef.current.delete(selected.id);
+    if (selected) {
+      const snapshot = draftsRef.current.get(selected.id) ?? rememberDraft(selected, draftTitleRef.current, draftBodyRef.current, draftFolderIdRef.current);
+      if (snapshot && !conflictedNotesRef.current.has(selected.id)) queueAutosave(snapshot, true);
+    }
     try {
       const response = await apiRequest<DocumentResponse>(`/api/documents/${id}`);
       acceptDocument(response.document);
@@ -1067,9 +1499,25 @@ export function App() {
       confirmLabel: "Delete note",
       destructive: true,
     })) return false;
+    if (pendingCreateRef.current.has(selected.id)) {
+      draftsRef.current.delete(selected.id);
+      pendingCreateRef.current.delete(selected.id);
+      pendingWritesRef.current.delete(selected.id);
+      try { clearLocalDraft(selected.id, window.localStorage); } catch { /* storage may be unavailable */ }
+      selectedRef.current = null;
+      setSelectedDocument(null);
+      setBacklinks([]);
+      setNotice("The local new-note draft was discarded.");
+      return true;
+    }
     try {
       await apiRequest<void>(`/api/documents/${selected.id}`, jsonRequest("DELETE", { expectedVersion: selected.version, expectedHash: selected.contentHash }));
       draftsRef.current.delete(selected.id);
+      pendingWritesRef.current.delete(selected.id);
+      conflictedNotesRef.current.delete(selected.id);
+      documentBasesRef.current.delete(selected.id);
+      latestDraftValuesRef.current.delete(selected.id);
+      try { clearLocalDraft(selected.id, window.localStorage); } catch { /* storage may be unavailable */ }
       selectedRef.current = null;
       setSelectedDocument(null);
       setBacklinks([]);
@@ -1078,6 +1526,7 @@ export function App() {
       return true;
     } catch (error) {
       if (error instanceof ApiError && error.code === "version_conflict") {
+        conflictedNotesRef.current.add(selected.id);
         setSaveState("conflict");
         setExternalVersion(error.currentVersion ?? null);
         setNotice("This note changed elsewhere and was not deleted. Load the latest version first.");
@@ -1114,13 +1563,15 @@ export function App() {
     const files = Array.from(event.currentTarget.files ?? []);
     event.currentTarget.value = "";
     if (!files.length) return;
-    if (isDirty && !await requestConfirm({
-      title: "Discard this draft and import?",
-      description: "The imported Markdown notes will open after the current unsaved changes are discarded.",
-      confirmLabel: "Discard and import",
-      destructive: true,
-    })) return;
-    if (isDirty && selectedDocument) draftsRef.current.delete(selectedDocument.id);
+    if (selectedDocument) {
+      const snapshot = draftsRef.current.get(selectedDocument.id) ?? rememberDraft(
+        selectedDocument,
+        draftTitleRef.current,
+        draftBodyRef.current,
+        draftFolderIdRef.current,
+      );
+      if (snapshot && !conflictedNotesRef.current.has(selectedDocument.id)) queueAutosave(snapshot, true);
+    }
     setImporting(true);
     setNotice("");
     try {
@@ -1316,36 +1767,15 @@ export function App() {
   const moveDocumentToFolder = async (folderId: string | null) => {
     const selected = selectedRef.current;
     if (!selected) return;
-    if (isDirty) {
-      setNotice("Save the current draft before moving this note.");
+    if (folderId === draftFolderIdRef.current) return;
+    setDraftFolderId(folderId);
+    rememberDraft(selected, draftTitleRef.current, draftBodyRef.current, folderId);
+    if (externalVersion !== null || externalDelete) {
+      setSaveState("conflict");
       return;
     }
-    if (folderId === selected.folderId) return;
-    setSaveState("saving");
-    try {
-      const response = await apiRequest<DocumentResponse>(
-        `/api/documents/${selected.id}`,
-        jsonRequest("PUT", {
-          expectedVersion: selected.version,
-          expectedHash: selected.contentHash,
-          title: selected.title,
-          body: selected.body,
-          folderId,
-        }),
-      );
-      acceptDocument(response.document);
-      await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
-      setNotice("Note moved.");
-    } catch (error) {
-      if (error instanceof ApiError && error.code === "version_conflict") {
-        setSaveState("conflict");
-        setExternalVersion(error.currentVersion ?? null);
-        setNotice("This note changed elsewhere and was not moved. Load the latest version first.");
-      } else {
-        setSaveState("error");
-        setNotice(error instanceof Error ? error.message : "Could not move the note.");
-      }
-    }
+    setSaveState("unsaved");
+    setNotice("Folder change queued with this note’s title and Markdown.");
   };
 
   const selectedWordCount = useMemo(() => {
@@ -1385,14 +1815,6 @@ export function App() {
       // Keep the current sidebar state for this tab if storage is unavailable.
     }
   }, [desktopSidebarCollapsed]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(DESKTOP_LIST_KEY, String(desktopListCollapsed));
-    } catch {
-      // Keep the current list state for this tab if storage is unavailable.
-    }
-  }, [desktopListCollapsed]);
 
   useEffect(() => {
     const viewport = window.visualViewport;
@@ -1500,18 +1922,19 @@ export function App() {
 
     const confirmDraftLeave = async () => {
       const selected = selectedRef.current;
-      if (!hasDraftChanged(selected, draftTitleRef.current, draftBodyRef.current)) return true;
-      const approved = await requestConfirm({
-        title: "Discard this draft?",
-        description: "The unsaved changes in this note will be discarded if you continue.",
-        confirmLabel: "Discard draft",
-        destructive: true,
-      });
-      if (approved && selected) draftsRef.current.delete(selected.id);
-      return approved;
+      if (!selected) return true;
+      const snapshot = draftsRef.current.get(selected.id) ?? rememberDraft(
+        selected,
+        draftTitleRef.current,
+        draftBodyRef.current,
+        draftFolderIdRef.current,
+      );
+      if (snapshot && !conflictedNotesRef.current.has(selected.id)) queueAutosave(snapshot, true);
+      if (snapshot) setNotice("Your draft is kept on this device while you continue browsing.");
+      return true;
     };
 
-    const revealDocumentList = () => setDesktopListCollapsed(false);
+    const revealDocumentList = () => setDesktopSidebarCollapsed(false);
 
     const navigateToLibrary = async () => {
       if (screen.kind === "library") {
@@ -1591,8 +2014,16 @@ export function App() {
     };
 
     const backFromDocument = () => {
-      if (hasDraftChanged(selectedRef.current, draftTitleRef.current, draftBodyRef.current)) {
-        setNotice("Your draft is kept in this tab. Reopen this note to continue editing.");
+      const selected = selectedRef.current;
+      if (selected) {
+        const snapshot = draftsRef.current.get(selected.id) ?? rememberDraft(
+          selected,
+          draftTitleRef.current,
+          draftBodyRef.current,
+          draftFolderIdRef.current,
+        );
+        if (snapshot && !conflictedNotesRef.current.has(selected.id)) queueAutosave(snapshot, true);
+        if (snapshot) setNotice("Your draft is kept on this device while you continue browsing.");
       }
       navigateBack();
     };
@@ -1629,110 +2060,271 @@ export function App() {
       if (change.documentId) void navigateToDocument(change.documentId);
     };
 
-    const renderFolderBrowser = (surface: "list" | "drawer") => {
+    const moveExplorerDocument = async (documentId: string, folderId: string | null) => {
+      if (selectedRef.current?.id === documentId) {
+        await moveDocumentToFolder(folderId);
+        return;
+      }
+      let localDraft: DraftSnapshot | null = draftsRef.current.get(documentId) ?? null;
+      if (!localDraft) {
+        try { localDraft = readLocalDraft(documentId, window.localStorage); } catch { /* storage may be unavailable */ }
+      }
+      if (localDraft) {
+        setNotice("This note has a local draft. Open it and resolve its sync state before moving it.");
+        return;
+      }
+      try {
+        const current = await apiRequest<DocumentResponse>(`/api/documents/${documentId}`);
+        await apiRequest<DocumentResponse>(`/api/documents/${documentId}`, jsonRequest("PUT", {
+          expectedVersion: current.document.version,
+          expectedHash: current.document.contentHash,
+          title: current.document.title,
+          body: current.document.body,
+          folderId,
+        }));
+        await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Could not move this note.");
+      }
+    };
+
+    const renameExplorerDocument = async (documentId: string) => {
+      await navigateToDocument(documentId);
+      window.requestAnimationFrame(() => {
+        const activeRoot = document.getElementById("fieldnotes-activity-" + activeActivityIdRef.current);
+        const titleInput = activeRoot?.querySelector<HTMLInputElement>(".title-input");
+        titleInput?.focus({ preventScroll: true });
+        titleInput?.select();
+      });
+    };
+
+    const promptMoveExplorerDocument = async (note: DocumentSummary) => {
+      const currentPath = note.folderId ? folderPathById.get(note.folderId) ?? "" : "Unfiled";
+      const destination = await requestText({
+        title: `Move “${note.title}”`,
+        description: "Enter a folder path, or choose Unfiled.",
+        label: "Destination folder",
+        initialValue: currentPath,
+        submitLabel: "Move note",
+        maxLength: 240,
+      });
+      if (destination === null) return;
+      const normalized = destination.trim().toLocaleLowerCase();
+      if (!normalized || normalized === "unfiled") {
+        await moveExplorerDocument(note.id, null);
+        return;
+      }
+      const target = folders.find((folder) => folderPathById.get(folder.id)?.toLocaleLowerCase() === normalized);
+      if (!target) {
+        setNotice("No folder matches that path. Choose the exact path shown in the tree.");
+        return;
+      }
+      await moveExplorerDocument(note.id, target.id);
+    };
+
+    const renderFolderBrowser = (surface: "sidebar" | "drawer") => {
       const folderInputId = "new-folder-name-" + screen.activityId + "-" + surface;
-      return (
-        <nav
-          className={"folder-browser " + (surface === "drawer" ? "drawer-folder-browser" : "list-folder-browser")}
-          aria-label="Folder navigation"
-        >
-          <div className="folder-browser-header">
-            <span>FOLDERS</span>
-            <button type="button" className="folder-create-trigger" onClick={() => beginFolderCreate(null)}>
-              <FolderPlus size={13} /> New folder
+      const queryText = query.trim().toLocaleLowerCase();
+      const childrenByParent = new Map<string | null, FolderRecord[]>();
+      const documentsByFolder = new Map<string | null, DocumentSummary[]>();
+      for (const folder of folders) {
+        const siblings = childrenByParent.get(folder.parentId) ?? [];
+        siblings.push(folder);
+        childrenByParent.set(folder.parentId, siblings);
+      }
+      for (const children of childrenByParent.values()) children.sort((left, right) => left.name.localeCompare(right.name));
+      for (const document of orderedTreeDocuments) {
+        const siblings = documentsByFolder.get(document.folderId) ?? [];
+        siblings.push(document);
+        documentsByFolder.set(document.folderId, siblings);
+      }
+      const visibleFolderIds = new Set<string>();
+      const searchExpanded = new Set(expandedFolderIds);
+      const addFolderAndAncestors = (folderId: string | null) => {
+        let cursor = folderId ? folders.find((folder) => folder.id === folderId) : undefined;
+        while (cursor && !visibleFolderIds.has(cursor.id)) {
+          visibleFolderIds.add(cursor.id);
+          searchExpanded.add(cursor.id);
+          if (cursor.parentId) searchExpanded.add(cursor.parentId);
+          cursor = cursor.parentId ? folders.find((folder) => folder.id === cursor?.parentId) : undefined;
+        }
+      };
+      if (!queryText) {
+        for (const folder of folders) visibleFolderIds.add(folder.id);
+      } else {
+        for (const folder of folders) if (folder.name.toLocaleLowerCase().includes(queryText)) addFolderAndAncestors(folder.id);
+        for (const document of orderedTreeDocuments) addFolderAndAncestors(document.folderId);
+      }
+      const visibleChildren = (parentId: string | null) => (childrenByParent.get(parentId) ?? [])
+        .filter((folder) => visibleFolderIds.has(folder.id));
+      const unfiledOpen = queryText ? true : expandedFolderIds.has(UNFILED_TREE_ID);
+      const inputRef = surface === "drawer" ? drawerSearchInputRef : searchInputRef;
+
+      const renderFileRows = (parentId: string | null, depth: number, includeUnfiled = false): React.ReactNode[] => {
+        if (parentId === null && !includeUnfiled) return [];
+        return (documentsByFolder.get(parentId) ?? []).map((note) => (
+          <div className="explorer-tree-row explorer-file-row" key={note.id} style={{ "--tree-depth": depth } as React.CSSProperties}>
+            <button
+              type="button"
+              role="treeitem"
+              className={`explorer-file${screen.kind === "document" && screen.documentId === note.id ? " selected" : ""}`}
+              data-document-id={note.id}
+              aria-current={screen.kind === "document" && screen.documentId === note.id ? "page" : undefined}
+              draggable
+              title={note.title}
+              onDragStart={(event) => {
+                event.dataTransfer.setData("application/x-fieldnotes-document", note.id);
+                event.dataTransfer.effectAllowed = "move";
+              }}
+              onClick={() => void navigateToDocument(note.id)}
+            >
+              <FileText size={14} aria-hidden="true" />
+              <span className="explorer-file-copy"><span className="explorer-file-title"><SearchHighlight text={note.title} query={query} /></span><span className="explorer-file-date">{relativeDate(note.updatedAt)}</span></span>
             </button>
+            <div className="explorer-file-actions">
+              <button type="button" aria-label={`Rename ${note.title}`} title="Rename" onClick={(event) => { event.stopPropagation(); void renameExplorerDocument(note.id); }}><Pencil size={13} /></button>
+              <button type="button" aria-label={`Move ${note.title}`} title="Move" onClick={(event) => { event.stopPropagation(); void promptMoveExplorerDocument(note); }}><FolderOpen size={13} /></button>
+            </div>
           </div>
-          <button
-            type="button"
-            className={"folder-nav-item" + (activeFolderId === null ? " active" : "")}
-            onClick={() => void navigateToFolder(null)}
-            aria-current={activeFolderId === null ? "page" : undefined}
-          >
-            <FileText size={14} /><span>All notes</span><span className="folder-count">{documentListStatus === "loaded" ? documents.length : <span className="count-skeleton" role="status" aria-label="Loading note count" />}</span>
-          </button>
-          <button
-            type="button"
-            className={"folder-nav-item" + (activeFolderId === "root" ? " active" : "")}
-            onClick={() => void navigateToFolder("root")}
-            aria-current={activeFolderId === "root" ? "page" : undefined}
-          >
-            <Folder size={14} /><span>Unfiled</span><span className="folder-count">{documents.filter((document) => document.folderId === null).length}</span>
-          </button>
-          <div className="folder-tree-list">
-            {visibleFolderRows.map(({ folder, depth, hasChildren }) => (
-              <div className="folder-tree-row" key={folder.id}>
-                <span className="folder-depth-space" style={{ width: (depth * 13) + "px" }} aria-hidden="true" />
+        ));
+      };
+
+      const renderBranches = (parentId: string | null, depth: number): React.ReactNode[] => {
+        const folderRows = visibleChildren(parentId).map((folder) => {
+          const nestedFolders = visibleChildren(folder.id);
+          const nestedDocuments = documentsByFolder.get(folder.id) ?? [];
+          const hasChildren = nestedFolders.length > 0 || nestedDocuments.length > 0;
+          const expanded = queryText ? searchExpanded.has(folder.id) : expandedFolderIds.has(folder.id);
+          return (
+            <Fragment key={folder.id}>
+              <div
+                className="folder-tree-row explorer-folder-row"
+                style={{ "--tree-depth": depth } as React.CSSProperties}
+                onDragOver={(event) => {
+                  if (event.dataTransfer.types.includes("application/x-fieldnotes-document")) event.preventDefault();
+                }}
+                onDrop={(event) => {
+                  const documentId = event.dataTransfer.getData("application/x-fieldnotes-document");
+                  if (!documentId) return;
+                  event.preventDefault();
+                  void moveExplorerDocument(documentId, folder.id);
+                }}
+              >
                 {hasChildren ? (
                   <button
                     type="button"
                     className="folder-disclosure"
-                    aria-label={(expandedFolderIds.has(folder.id) ? "Collapse " : "Expand ") + folder.name}
-                    aria-expanded={expandedFolderIds.has(folder.id)}
+                    aria-label={`${expanded ? "Collapse" : "Expand"} ${folder.name}`}
+                    aria-expanded={expanded}
                     onClick={() => setExpandedFolderIds((current) => {
                       const next = new Set(current);
                       if (next.has(folder.id)) next.delete(folder.id);
                       else next.add(folder.id);
                       return next;
                     })}
-                  >
-                    {expandedFolderIds.has(folder.id) ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                  </button>
+                  >{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
                 ) : <span className="folder-disclosure-spacer" aria-hidden="true" />}
                 <button
                   type="button"
-                  className={"folder-nav-item folder-tree-button" + (activeFolderId === folder.id ? " active" : "")}
-                  onClick={() => void navigateToFolder(folder.id)}
+                  role="treeitem"
+                  aria-expanded={hasChildren ? expanded : undefined}
                   aria-current={activeFolderId === folder.id ? "page" : undefined}
+                  className={`folder-nav-item folder-tree-button${activeFolderId === folder.id ? " active" : ""}`}
+                  onClick={() => void navigateToFolder(folder.id)}
                 >
-                  {activeFolderId === folder.id ? <FolderOpen size={14} /> : <Folder size={14} />}
+                  {activeFolderId === folder.id ? <FolderOpen size={15} /> : <Folder size={15} />}
                   <span>{folder.name}</span><span className="folder-count">{folder.documentCount}</span>
                 </button>
-                <button
-                  type="button"
-                  className="folder-row-action"
-                  aria-label={"Rename " + folder.name}
-                  onClick={() => void renameFolder(folder.id)}
-                ><Pencil size={13} /></button>
+                <button type="button" className="folder-row-action" aria-label={`Rename ${folder.name}`} onClick={() => void renameFolder(folder.id)}><Pencil size={14} /></button>
               </div>
-            ))}
+              {expanded && <div role="group" className="explorer-children">{renderBranches(folder.id, depth + 1)}</div>}
+            </Fragment>
+          );
+        });
+        return [...folderRows, ...renderFileRows(parentId, depth)];
+      };
+
+      return (
+        <nav className={`folder-browser explorer-browser ${surface === "drawer" ? "drawer-folder-browser" : "sidebar-folder-browser"}`} aria-label="Vault files">
+          <div className="explorer-search-tools">
+            <label className="search-box explorer-search-box">
+              <Search size={16} aria-hidden="true" />
+              <input
+                ref={inputRef}
+                type="search"
+                className="search-input"
+                value={query}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+                placeholder="Search notes"
+                aria-label="Search all notes"
+              />
+              {query && <button type="button" className="clear-search" aria-label="Clear search" onClick={() => setQuery("")}><X size={14} /></button>}
+              {!query && <kbd>⌘ K</kbd>}
+            </label>
+            <div className="explorer-create-actions">
+              <button type="button" className="explorer-new-note" onClick={() => void createAndOpenNote()}><Plus size={15} /> New note</button>
+              <button type="button" className="explorer-new-folder" onClick={() => beginFolderCreate(null)}><FolderPlus size={15} /> New folder</button>
+            </div>
+          </div>
+          <div className="folder-browser-header explorer-browser-header">
+            <span>VAULT</span>
+            <label className="explorer-sort-control"><ArrowDownUp size={13} aria-hidden="true" /><select aria-label="Sort notes" value={sortOrder} onChange={(event) => setSortOrder(event.currentTarget.value as SortOrder)}>
+              <option value="updated-desc">Newest</option>
+              <option value="updated-asc">Oldest</option>
+              <option value="title-asc">A to Z</option>
+              <option value="title-desc">Z to A</option>
+            </select></label>
+          </div>
+          {listError && <div className="explorer-search-error" role="status"><span>{listError}</span><button type="button" aria-label="Retry search" onClick={() => void refreshExplorerSearch(query)}><RefreshCw size={13} /></button></div>}
+          <div className="explorer-tree" role="tree" aria-label="Folders and notes" aria-busy={documentListStatus === "loading"}>
+            <button type="button" role="treeitem" className={`explorer-root-row${screen.kind === "library" ? " selected" : ""}`} aria-current={screen.kind === "library" ? "page" : undefined} onClick={() => void navigateToLibrary()}>
+              <BookOpen size={15} /><span>All notes</span><span className="folder-count">{documents.length}</span>
+            </button>
+            <div
+              className="folder-tree-row explorer-folder-row explorer-unfiled-row"
+              onDragOver={(event) => {
+                if (event.dataTransfer.types.includes("application/x-fieldnotes-document")) event.preventDefault();
+              }}
+              onDrop={(event) => {
+                const documentId = event.dataTransfer.getData("application/x-fieldnotes-document");
+                if (!documentId) return;
+                event.preventDefault();
+                void moveExplorerDocument(documentId, null);
+              }}
+            >
+              <button type="button" className="folder-disclosure" aria-label={`${unfiledOpen ? "Collapse" : "Expand"} Unfiled`} aria-expanded={unfiledOpen} onClick={() => setExpandedFolderIds((current) => {
+                const next = new Set(current);
+                if (next.has(UNFILED_TREE_ID)) next.delete(UNFILED_TREE_ID);
+                else next.add(UNFILED_TREE_ID);
+                return next;
+              })}>{unfiledOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
+              <button type="button" role="treeitem" aria-expanded={unfiledOpen} className={`folder-nav-item folder-tree-button${activeFolderId === "root" ? " active" : ""}`} onClick={() => void navigateToFolder("root")}>
+                <Folder size={15} /><span>Unfiled</span><span className="folder-count">{documents.filter((document) => document.folderId === null).length}</span>
+              </button>
+            </div>
+            {unfiledOpen && <div role="group" className="explorer-children">{renderFileRows(null, 1, true)}</div>}
+            {renderBranches(null, 0)}
+            {documentListStatus === "loaded" && orderedTreeDocuments.length === 0 && queryText && <p className="explorer-empty">No matching notes.</p>}
+            {documentListStatus === "loaded" && documents.length === 0 && !queryText && <p className="explorer-empty">No notes yet. Create one to begin.</p>}
           </div>
           {creatingFolderParent !== undefined && (
             <form className="folder-create-form" onSubmit={(event) => void createFolderAndOpen(event)}>
-              <label htmlFor={folderInputId}>
-                New {creatingFolderParent ? "subfolder in " + (folderPathById.get(creatingFolderParent) ?? "folder") : "top-level folder"}
-              </label>
-              <input
-                id={folderInputId}
-                value={newFolderName}
-                onChange={(event) => setNewFolderName(event.currentTarget.value)}
-                maxLength={120}
-                autoFocus={surface === "drawer" ? showDrawer : true}
-                required
-              />
-              <div>
-                <button type="submit">Create</button>
-                <button type="button" onClick={() => setCreatingFolderParent(undefined)}>Cancel</button>
-              </div>
+              <label htmlFor={folderInputId}>{creatingFolderParent ? `New subfolder in ${folderPathById.get(creatingFolderParent) ?? "folder"}` : "New top-level folder"}</label>
+              <input id={folderInputId} value={newFolderName} onChange={(event) => setNewFolderName(event.currentTarget.value)} maxLength={120} autoFocus={surface === "drawer" ? showDrawer : true} required />
+              <div><button type="submit">Create</button><button type="button" onClick={() => setCreatingFolderParent(undefined)}>Cancel</button></div>
             </form>
           )}
           {activeFolder && (
-            <div className="folder-admin" aria-label={activeFolder.name + " folder actions"}>
+            <div className="folder-admin" aria-label={`${activeFolder.name} folder actions`}>
               <div className="folder-admin-actions">
                 <button type="button" onClick={() => beginFolderCreate(activeFolder.id)}><FolderPlus size={13} /> Subfolder</button>
                 <button type="button" onClick={() => void renameActiveFolder()}>Rename</button>
                 <button type="button" onClick={() => void deleteFolderAndReturn()}>Delete empty</button>
               </div>
-              <label className="folder-move-label">
-                Move folder
-                <select
-                  value={activeFolder.parentId ?? "root"}
-                  onChange={(event) => void moveActiveFolder(event.currentTarget.value)}
-                  aria-label={"Move " + activeFolder.name + " to parent folder"}
-                >
+              <label className="folder-move-label">Move folder
+                <select value={activeFolder.parentId ?? "root"} onChange={(event) => void moveActiveFolder(event.currentTarget.value)} aria-label={`Move ${activeFolder.name} to parent folder`}>
                   <option value="root">Top level</option>
-                  {folders.filter((folder) => !excludedFolderParents.has(folder.id)).map((folder) => (
-                    <option key={folder.id} value={folder.id}>{folderPathById.get(folder.id) ?? folder.name}</option>
-                  ))}
+                  {folders.filter((folder) => !excludedFolderParents.has(folder.id)).map((folder) => <option key={folder.id} value={folder.id}>{folderPathById.get(folder.id) ?? folder.name}</option>)}
                 </select>
               </label>
             </div>
@@ -1988,7 +2580,7 @@ export function App() {
     <div
       id={`fieldnotes-activity-${screen.activityId}`}
       data-fieldnotes-route={screen.kind}
-      className={`app-shell route-${screen.kind}${displayDocument ? " has-selection" : ""}${workspaceRenderer === "desktop" && desktopSidebarCollapsed ? " sidebar-collapsed" : ""}${workspaceRenderer === "desktop" && desktopListCollapsed ? " list-collapsed" : ""}`}
+      className={`app-shell route-${screen.kind}${displayDocument ? " has-selection" : ""}${workspaceRenderer === "desktop" ? " sidebar-explorer-layout" : ""}${workspaceRenderer === "desktop" && desktopSidebarCollapsed ? " sidebar-collapsed" : ""}`}
       onTouchStart={handleMobileTouchStart}
       onTouchMove={handleMobileTouchMove}
       onTouchEnd={handleMobileTouchEnd}
@@ -2059,25 +2651,18 @@ export function App() {
           )}
         </div>
 
-        <div className="rail-section-label">YOUR SPACE</div>
-        <button className={`rail-link${screen.kind === "library" ? " active" : ""}`} type="button" aria-label="All notes" onClick={() => void navigateToLibrary()}>
-          <FileText size={16} />
-          <span>All notes</span>
-          <span className="rail-count">{documentListStatus === "loaded" ? documents.length : <span className="count-skeleton" role="status" aria-label="Loading note count" />}</span>
-        </button>
-        <button className={`rail-link${screen.kind === "recent" ? " active" : ""}`} type="button" aria-label="Recent changes" onClick={() => void navigateToRecent()}><Clock3 size={16} /><span>Recent changes</span></button>
-        {workspaceRenderer === "desktop" && desktopListCollapsed && (
-          <button
-            className="rail-link desktop-list-reopen"
-            type="button"
-            aria-label="Show notes list"
-            aria-expanded={false}
-            aria-controls="fieldnotes-note-list"
-            onClick={() => setDesktopListCollapsed(false)}
-          ><PanelLeftOpen size={16} aria-hidden="true" /><span>Show notes list</span></button>
-        )}
-
-        {workspaceRenderer === "mobile-stackflow" && renderFolderBrowser("drawer")}
+        {workspaceRenderer === "desktop" && renderFolderBrowser("sidebar")}
+        {workspaceRenderer === "desktop" && <div className="sidebar-data-actions">{renderListTools("desktop")}</div>}
+        {workspaceRenderer === "desktop" && <button className={`rail-link${screen.kind === "recent" ? " active" : ""}`} type="button" aria-label="Recent changes" onClick={() => void navigateToRecent()}><Clock3 size={16} /><span>Recent changes</span></button>}
+        {workspaceRenderer === "mobile-stackflow" && <>
+          <div className="rail-section-label">YOUR SPACE</div>
+          <button className={`rail-link${screen.kind === "library" ? " active" : ""}`} type="button" aria-label="All notes" onClick={() => void navigateToLibrary()}>
+            <FileText size={16} /><span>All notes</span>
+            <span className="rail-count">{documentListStatus === "loaded" ? documents.length : <span className="count-skeleton" role="status" aria-label="Loading note count" />}</span>
+          </button>
+          <button className={`rail-link${screen.kind === "recent" ? " active" : ""}`} type="button" aria-label="Recent changes" onClick={() => void navigateToRecent()}><Clock3 size={16} /><span>Recent changes</span></button>
+          {renderFolderBrowser("drawer")}
+        </>}
 
         <div className="recent-heading">
           <span className="rail-section-label">RECENT ACTIVITY</span>
@@ -2139,18 +2724,6 @@ export function App() {
               <Plus size={18} />
             </button>
           </div>
-          {workspaceRenderer === "desktop" && (
-            <div className="desktop-list-actions">
-              <button
-                className="icon-button desktop-list-toggle"
-                type="button"
-                aria-label="Collapse note list"
-                aria-expanded={true}
-                aria-controls="fieldnotes-note-list"
-                onClick={() => setDesktopListCollapsed(true)}
-              ><PanelLeftClose size={17} aria-hidden="true" /></button>
-            </div>
-          )}
         </div>
 
         <label className="search-box">
@@ -2168,113 +2741,8 @@ export function App() {
           {!query && <kbd>⌘ K</kbd>}
         </label>
 
-        {workspaceRenderer === "desktop" && (
-        <nav className="folder-browser list-folder-browser" aria-label="Folder navigation">
-          <div className="folder-browser-header">
-            <span>FOLDERS</span>
-            <button type="button" className="folder-create-trigger" onClick={() => beginFolderCreate(null)}>
-              <FolderPlus size={13} /> New folder
-            </button>
-          </div>
-          <button
-            type="button"
-            className={`folder-nav-item${activeFolderId === null ? " active" : ""}`}
-            onClick={() => void navigateToFolder(null)}
-            aria-current={activeFolderId === null ? "page" : undefined}
-          >
-            <FileText size={14} /><span>All notes</span><span className="folder-count">{documentListStatus === "loaded" ? documents.length : <span className="count-skeleton" role="status" aria-label="Loading note count" />}</span>
-          </button>
-          <button
-            type="button"
-            className={`folder-nav-item${activeFolderId === "root" ? " active" : ""}`}
-            onClick={() => void navigateToFolder("root")}
-            aria-current={activeFolderId === "root" ? "page" : undefined}
-          >
-            <Folder size={14} /><span>Unfiled</span><span className="folder-count">{documents.filter((document) => document.folderId === null).length}</span>
-          </button>
-          <div className="folder-tree-list">
-            {visibleFolderRows.map(({ folder, depth, hasChildren }) => (
-              <div className="folder-tree-row" key={folder.id}>
-                <span className="folder-depth-space" style={{ width: `${depth * 13}px` }} aria-hidden="true" />
-                {hasChildren ? (
-                  <button
-                    type="button"
-                    className="folder-disclosure"
-                    aria-label={`${expandedFolderIds.has(folder.id) ? "Collapse" : "Expand"} ${folder.name}`}
-                    aria-expanded={expandedFolderIds.has(folder.id)}
-                    onClick={() => setExpandedFolderIds((current) => {
-                      const next = new Set(current);
-                      if (next.has(folder.id)) next.delete(folder.id);
-                      else next.add(folder.id);
-                      return next;
-                    })}
-                  >
-                    {expandedFolderIds.has(folder.id) ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                  </button>
-                ) : <span className="folder-disclosure-spacer" aria-hidden="true" />}
-                <button
-                  type="button"
-                  className={`folder-nav-item folder-tree-button${activeFolderId === folder.id ? " active" : ""}`}
-                  onClick={() => void navigateToFolder(folder.id)}
-                  aria-current={activeFolderId === folder.id ? "page" : undefined}
-                >
-                  {activeFolderId === folder.id ? <FolderOpen size={14} /> : <Folder size={14} />}
-                  <span>{folder.name}</span><span className="folder-count">{folder.documentCount}</span>
-                </button>
-                <button
-                  type="button"
-                  className="folder-row-action"
-                  aria-label={`Rename ${folder.name}`}
-                  onClick={() => void renameFolder(folder.id)}
-                ><Pencil size={13} /></button>
-              </div>
-            ))}
-          </div>
-          {creatingFolderParent !== undefined && (
-            <form className="folder-create-form" onSubmit={(event) => void createFolderAndOpen(event)}>
-              <label htmlFor="new-folder-name">New {creatingFolderParent ? `subfolder in ${folderPathById.get(creatingFolderParent) ?? "folder"}` : "top-level folder"}</label>
-              <input
-                id="new-folder-name"
-                value={newFolderName}
-                onChange={(event) => setNewFolderName(event.currentTarget.value)}
-                maxLength={120}
-                autoFocus
-                required
-              />
-              <div>
-                <button type="submit">Create</button>
-                <button type="button" onClick={() => setCreatingFolderParent(undefined)}>Cancel</button>
-              </div>
-            </form>
-          )}
-          {activeFolder && (
-            <div className="folder-admin" aria-label={`${activeFolder.name} folder actions`}>
-              <div className="folder-admin-actions">
-                <button type="button" onClick={() => beginFolderCreate(activeFolder.id)}><FolderPlus size={13} /> Subfolder</button>
-                <button type="button" onClick={() => void renameActiveFolder()}>Rename</button>
-                <button type="button" onClick={() => void deleteFolderAndReturn()}>Delete empty</button>
-              </div>
-              <label className="folder-move-label">
-                Move folder
-                <select
-                  value={activeFolder.parentId ?? "root"}
-                  onChange={(event) => void moveActiveFolder(event.currentTarget.value)}
-                  aria-label={`Move ${activeFolder.name} to parent folder`}
-                >
-                  <option value="root">Top level</option>
-                  {folders.filter((folder) => !excludedFolderParents.has(folder.id)).map((folder) => (
-                    <option key={folder.id} value={folder.id}>{folderPathById.get(folder.id) ?? folder.name}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          )}
-        </nav>
-        )}
-
         <div className="list-subhead">
           <span>{documentListStatus === "loading" ? "LOADING NOTES" : query ? `${visibleDocuments.length} RESULTS` : activeFolderId === "root" ? "UNFILED NOTES" : activeFolder ? folderPathById.get(activeFolder.id)?.toUpperCase() : "ALL NOTES"}</span>
-          {workspaceRenderer === "desktop" && <div className="list-tools">{renderListTools("desktop")}</div>}
         </div>
 
         <div className="list-filter-row">
@@ -2327,7 +2795,7 @@ export function App() {
             </div>
           )}
         </div>
-        <div className="list-footer"><span>{documentListStatus === "loading" ? "Loading notes…" : documentListStatus === "error" ? "Notes unavailable" : `${visibleDocuments.length} ${visibleDocuments.length === 1 ? "note" : "notes"}`}</span><span>⌘ S to save</span></div>
+        <div className="list-footer"><span>{documentListStatus === "loading" ? "Loading notes…" : documentListStatus === "error" ? "Notes unavailable" : `${visibleDocuments.length} ${visibleDocuments.length === 1 ? "note" : "notes"}`}</span><span>Autosaves while you write</span></div>
       </section>
 
       <main className={`editor-pane${screen.kind === "recent" ? " recent-editor-pane" : ""}`} tabIndex={-1}>
@@ -2371,7 +2839,7 @@ export function App() {
             <header className="editor-toolbar">
               <div className="editor-breadcrumb">
                 <button className="mobile-back" type="button" onClick={backFromDocument} aria-label="Back to notes"><ChevronLeft size={18} /></button>
-                <span className="breadcrumb-muted">{displayDocument.folderId ? folderPathById.get(displayDocument.folderId) ?? "Folder" : "Unfiled"}</span><span className="breadcrumb-divider">/</span>
+                <span className="breadcrumb-muted">{draftFolderId ? folderPathById.get(draftFolderId) ?? "Folder" : "Unfiled"}</span><span className="breadcrumb-divider">/</span>
                 <span className="breadcrumb-title">{draftTitle || "Untitled note"}</span>
               </div>
               <div className="toolbar-actions">
@@ -2379,9 +2847,7 @@ export function App() {
                   {saveState === "saving" ? <LoaderCircle className="spin" size={14} /> : saveState === "saved" ? <Check size={14} /> : saveState === "conflict" ? <RefreshCw size={13} /> : <span className="unsaved-dot" />}
                   <span>{saveStateLabel(saveState)}</span>
                 </div>
-                <button type="button" className="save-button" onClick={() => void saveDocument()} disabled={!isDirty || saveState === "saving" || !markdownSafeToSave} aria-label="Save changes">
-                  <Save size={15} aria-hidden="true" /><span className="toolbar-action-label">Save</span>
-                </button>
+                {saveState === "error" && <button type="button" className="autosave-retry" onClick={() => void retrySave()}>Retry</button>}
                 <button className="icon-button toolbar-delete" type="button" onClick={() => void deleteAndReturn()} aria-label="Delete note"><Trash2 size={16} /></button>
                 <button className="icon-button theme-toggle theme-toggle-editor" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
                   {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
@@ -2390,11 +2856,15 @@ export function App() {
             </header>
 
             {notice && <div className={`notice-bar${saveState === "error" || saveState === "conflict" ? " warning" : ""}`} role="status"><span>{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice("")}><X size={14} /></button></div>}
+            {!draftRecoveryAvailable && <div className="notice-bar warning" role="status"><span>This browser could not keep a local recovery copy. Keep this tab open until sync completes.</span></div>}
             {(connection !== "connected" || reconciliationError) && <div className="sync-banner"><span className={`connection-dot ${connection === "connected" ? "connected" : "reconnecting"}`} />{connection !== "connected" ? "Reconnecting to the local service. Drafts stay in this window." : "The live stream is connected, but saved changes still need reconciliation."}{connection === "connected" && <button type="button" onClick={() => void reconcileChanges()}>Retry sync</button>}</div>}
             {externalVersion !== null && !externalDelete && (
               <div className="conflict-banner" role="alert">
                 <div><strong>A newer version is available</strong><span>Your draft is preserved. The latest saved version is v{externalVersion}.</span></div>
-                <button type="button" onClick={() => void loadLatestVersion()}>Load latest</button>
+                <div className="conflict-actions">
+                  <button type="button" onClick={() => void loadLatestVersion()}>Load latest</button>
+                  <button type="button" onClick={() => void overwriteLatestWithDraft()}>Replace with my draft</button>
+                </div>
               </div>
             )}
             {externalDelete && (
@@ -2411,12 +2881,14 @@ export function App() {
                 value={draftTitle}
                 maxLength={160}
                 onFocus={(event) => keepEditorControlVisible(event.currentTarget)}
+                onCompositionStart={() => { composingRef.current = true; setIsComposing(true); }}
+                onCompositionEnd={() => { composingRef.current = false; setIsComposing(false); }}
                 onChange={(event) => {
                   const nextTitle = event.currentTarget.value;
                   setDraftTitle(nextTitle);
-                  rememberDraft(displayDocument, nextTitle, draftBody);
+                  rememberDraft(selectedRef.current, nextTitle, draftBodyRef.current, draftFolderIdRef.current);
                   setSaveState(externalVersion !== null || externalDelete ? "conflict" : "unsaved");
-                  if (notice === "Saved to this Mac.") setNotice("");
+                  if (notice) setNotice("");
                 }}
                 aria-label="Note title"
               />
@@ -2445,8 +2917,7 @@ export function App() {
                     <span className="document-property-value">
                       <select
                         aria-label="Move note to folder"
-                        value={displayDocument.folderId ?? "root"}
-                        disabled={saveState === "saving"}
+                        value={draftFolderId ?? "root"}
                         onChange={(event) => void moveDocumentToFolder(event.currentTarget.value === "root" ? null : event.currentTarget.value)}
                       >
                         <option value="root">Unfiled</option>
@@ -2466,7 +2937,12 @@ export function App() {
                   </div>
                 </div>
               <div className="document-divider" aria-hidden="true" />
-              <div ref={editorHostRef} className="fieldnotes-rich-editor">
+              <div
+                ref={editorHostRef}
+                className="fieldnotes-rich-editor"
+                onCompositionStartCapture={() => { composingRef.current = true; setIsComposing(true); }}
+                onCompositionEndCapture={() => { composingRef.current = false; setIsComposing(false); }}
+              >
                 <MarkdownLiveEditor
                   value={draftBody}
                   adapters={editorAdapters}
@@ -2478,9 +2954,9 @@ export function App() {
                   }}
                   onChange={(nextBody) => {
                     setDraftBody(nextBody);
-                    rememberDraft(displayDocument, draftTitle, nextBody);
+                    rememberDraft(selectedRef.current, draftTitleRef.current, nextBody, draftFolderIdRef.current);
                     setSaveState(externalVersion !== null || externalDelete ? "conflict" : "unsaved");
-                    if (notice === "Saved to this Mac.") setNotice("");
+                    if (notice) setNotice("");
                   }}
                   onSerializationSafetyChange={handleMarkdownSerializationSafetyChange}
                 />
@@ -2503,7 +2979,7 @@ export function App() {
                 </span>
                 <span>{selectedWordCount} words</span>
                 <span>{draftBody.length.toLocaleString()} characters</span>
-                <span className="save-hint">Changes save when you press <kbd>⌘ S</kbd></span>
+                <span className="save-hint">Changes save automatically · <kbd>⌘ S</kbd> sync now</span>
               </div>
             </section>
           </>
