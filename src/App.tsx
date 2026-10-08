@@ -801,14 +801,16 @@ export function App() {
     }
   }, [acceptDocument, refreshBacklinks]);
 
-  const applyIncomingChange = useCallback(async (change: ChangeRecord) => {
+  const applyIncomingChange = useCallback(async (change: ChangeRecord, refreshCollections = true) => {
     if (change.seq <= sequenceRef.current) return;
     sequenceRef.current = change.seq;
     sessionStorage.setItem(LAST_SEQUENCE_KEY, String(change.seq));
 
-    void refreshDocuments().catch(() => setListError("The note list is temporarily unavailable."));
-    void refreshFolders().catch(() => setListError("The folder list is temporarily unavailable."));
-    void refreshRecent().catch(() => undefined);
+    if (refreshCollections) {
+      void refreshDocuments().catch(() => setListError("The note list is temporarily unavailable."));
+      void refreshFolders().catch(() => setListError("The folder list is temporarily unavailable."));
+      void refreshRecent().catch(() => undefined);
+    }
 
     if (change.entityType === "folder") {
       if (change.operation === "deleted" && activeFolderRef.current === change.folderId) {
@@ -869,7 +871,8 @@ export function App() {
           more = true;
           continue;
         }
-        for (const change of response.changes) await applyIncomingChange(change);
+        // A catch-up page can contain hundreds of events; refresh the collections once after replay.
+        for (const change of response.changes) await applyIncomingChange(change, false);
         more = response.changes.length === 500 && sequenceRef.current < response.highWatermark;
       }
       await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
