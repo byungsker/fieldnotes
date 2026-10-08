@@ -15,7 +15,7 @@ test("uniform CRLF is compared as Markdown and restored after serialization", ()
   assert.equal(restoreMarkdownLineEndings("# Heading\n\nEdited body\n", "crlf"), "# Heading\r\n\r\nEdited body\r\n");
 });
 
-test("mixed and bare-CR line endings are rejected for rich editing", () => {
+test("mixed and bare-CR line endings are not directly normalizable for rich parsing", () => {
   for (const source of ["one\r\ntwo\n", "one\rtwo"]) {
     assert.equal(detectMarkdownLineEndingStyle(source), null);
     assert.equal(normalizeMarkdownLineEndings(source), null);

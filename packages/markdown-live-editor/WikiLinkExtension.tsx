@@ -19,7 +19,6 @@ function WikiLinkView({ node }: NodeViewProps) {
     <NodeViewWrapper
       as="span"
       className="mle-wikilink-token"
-      title={attributes.fragment ? `${attributes.target} · ${attributes.fragment}` : attributes.target}
       aria-label={`Wikilink: ${labelFor(attributes)}`}
       contentEditable={false}
     >
@@ -59,7 +58,6 @@ export const WikiLink = Node.create({
     return ["span", mergeAttributes(HTMLAttributes, {
       class: "mle-wikilink-token",
       "data-mle-wikilink": attributes.raw,
-      title: attributes.fragment ? `${attributes.target} · ${attributes.fragment}` : attributes.target,
     }), labelFor(attributes)];
   },
 

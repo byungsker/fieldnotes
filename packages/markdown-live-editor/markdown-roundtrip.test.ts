@@ -8,8 +8,11 @@ import Image from "@tiptap/extension-image";
 import { common, createLowlight } from "lowlight";
 import type { JSONContent } from "@tiptap/core";
 import { BookmarkCard } from "./BookmarkCardExtension.tsx";
+import { PreservedMarkdown, PreservedWhitespace } from "./PreservedMarkdownExtension.tsx";
+import { MarkdownDocument } from "./MarkdownDocumentExtension.ts";
 import { WikiLink } from "./WikiLinkExtension.tsx";
 import { hasContentPreservingMarkdownRoundTrip, type MarkdownSerializationApi } from "./markdown-roundtrip.ts";
+import { parseMarkdownWithPreservedBlocks } from "./markdown-preservation.ts";
 import { splitLeadingFrontmatter } from "./markdown-safety.ts";
 
 interface BlockDocument {
@@ -39,24 +42,24 @@ function sourceApi(serialize: (markdown: string) => string): MarkdownSerializati
   };
 }
 
-function createTiptapMarkdownApi(): MarkdownSerializationApi {
+function createTiptapMarkdownApi(): MarkdownManager {
   const lowlight = createLowlight(common);
   const manager = new MarkdownManager({
     extensions: [
-      StarterKit.configure({ codeBlock: false, link: false }),
+      StarterKit.configure({ codeBlock: false, link: false, document: false }),
+      MarkdownDocument,
       CodeBlockLowlight.configure({ lowlight, defaultLanguage: "plaintext" }),
       Link.configure({ openOnClick: false, autolink: true, linkOnPaste: false, protocols: ["http", "https"] }),
       Image.configure({ inline: false, allowBase64: false }),
       WikiLink,
       BookmarkCard,
+      PreservedMarkdown,
+      PreservedWhitespace,
       Markdown.configure({ markedOptions: { gfm: true, breaks: false } }),
     ],
     markedOptions: { gfm: true, breaks: false },
   });
-  return {
-    parse: (markdown) => manager.parse(markdown),
-    serialize: (document) => manager.serialize(document as JSONContent),
-  };
+  return manager;
 }
 
 test("allows canonical block spacing when parsed content is unchanged", () => {
@@ -134,6 +137,78 @@ test("frontmatter plus its separator do not duplicate or change after actual Tip
   assert.equal(parts.body, "## Heading\n\n---\n\n## Next");
   assert.equal(hasContentPreservingMarkdownRoundTrip(markdownApi, parts.body), true);
   assert.equal(parts.frontmatter + serializedBody, source);
+});
+
+test("keeps unsupported HTML as an explicit read-only node while adjacent Markdown remains editable", () => {
+  const manager = createTiptapMarkdownApi();
+  const source = "## Original heading\n\nAn editable paragraph.\n\n<div class=\"callout\">\n<script>keep this literal</script>\n</div>\n\nAnother editable paragraph.";
+  const document = parseMarkdownWithPreservedBlocks(manager, source) as JSONContent;
+  const preserved = document.content?.find((node) => node.type === "preservedMarkdown");
+
+  assert.ok(preserved);
+  assert.equal(preserved.attrs?.raw, "<div class=\"callout\">\n<script>keep this literal</script>\n</div>");
+  assert.equal(manager.serialize(document), source);
+
+  const heading = document.content?.find((node) => node.type === "heading");
+  assert.equal(heading?.content?.[0]?.text, "Original heading");
+  if (heading?.content?.[0]) heading.content[0].text = "Edited heading";
+  const updated = manager.serialize(document);
+  assert.match(updated, /^## Edited heading/m);
+  assert.ok(updated.includes("<script>keep this literal</script>"));
+  assert.ok(updated.endsWith("Another editable paragraph."));
+});
+
+test("blank Markdown creates a valid editable paragraph and still serializes to an empty string", () => {
+  const manager = createTiptapMarkdownApi();
+  const document = parseMarkdownWithPreservedBlocks(manager, "");
+  assert.deepEqual(document.content?.map((node) => node.type), ["paragraph"]);
+  assert.equal(manager.serialize(document), "");
+});
+
+test("new adjacent rich blocks use standard Markdown paragraph separators", () => {
+  const manager = createTiptapMarkdownApi();
+  const first = manager.parse("First paragraph.");
+  const second = manager.parse("Second paragraph.");
+  const document: JSONContent = { type: "doc", content: [...(first.content || []), ...(second.content || [])] };
+  assert.equal(manager.serialize(document), "First paragraph.\n\nSecond paragraph.");
+});
+
+test("keeps adjacent Markdown editable around multiple preserved blocks and exact blank lines", () => {
+  const manager = createTiptapMarkdownApi();
+  const source = "# Editable heading\n\nA first editable paragraph.\n\n<div>preserve first</div>\n\neditable middle\n\n<section>preserve second</section>\n\n\nExternal text.";
+  const document = parseMarkdownWithPreservedBlocks(manager, source) as JSONContent;
+  const nodeTypes = document.content?.map((node) => node.type);
+
+  assert.equal(manager.serialize(document), source);
+  assert.equal(nodeTypes?.filter((type) => type === "preservedMarkdown").length, 2);
+  assert.ok(nodeTypes?.includes("heading"));
+  assert.ok(nodeTypes?.filter((type) => type === "paragraph").length >= 2);
+  assert.ok(nodeTypes?.includes("preservedWhitespace"));
+
+  const heading = document.content?.find((node) => node.type === "heading");
+  assert.equal(heading?.content?.[0]?.text, "Editable heading");
+  if (heading?.content?.[0]) heading.content[0].text = "Edited heading";
+  const updated = manager.serialize(document);
+  assert.ok(updated.startsWith("# Edited heading\n\n"));
+  assert.ok(updated.includes("<div>preserve first</div>"));
+  assert.ok(updated.includes("<section>preserve second</section>\n\n\nExternal text."));
+});
+
+test("pasted callouts, custom fences, and HTML are inserted without source loss", () => {
+  const manager = createTiptapMarkdownApi();
+  const pasted = ":::warning\nKeep this block exact.\n:::\n\n```mermaid\nflowchart TD\n A-->B\n```\n\n<div>raw</div>";
+  const document = parseMarkdownWithPreservedBlocks(manager, pasted);
+  assert.equal(manager.serialize(document as JSONContent), pasted);
+  assert.equal((document as JSONContent).content?.filter((node) => node.type === "preservedMarkdown").length, 1);
+});
+
+test("mixed line endings become an exact read-only card instead of being normalized", () => {
+  const manager = createTiptapMarkdownApi();
+  const mixed = "first\r\nsecond\nthird";
+  const document = parseMarkdownWithPreservedBlocks(manager, mixed) as JSONContent;
+  assert.deepEqual(document.content?.map((node) => node.type), ["preservedMarkdown"]);
+  assert.equal(document.content?.[0]?.attrs?.raw, mixed);
+  assert.equal(manager.serialize(document), mixed);
 });
 
 test("rejects serialization that drops parsed content", () => {

@@ -16,34 +16,24 @@ import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import Link from "@tiptap/extension-link";
 import Image from "@tiptap/extension-image";
 import Placeholder from "@tiptap/extension-placeholder";
-import { Markdown } from "@tiptap/markdown";
+import { Markdown, type MarkdownManager } from "@tiptap/markdown";
 import { common, createLowlight } from "lowlight";
 import {
-  Bold,
   BookmarkPlus,
-  Code2,
   Copy,
-  Eye,
-  Heading1,
-  Heading2,
   ImagePlus,
-  Italic,
   Link2,
-  List,
-  ListOrdered,
   ListTree,
-  Pencil,
-  Quote,
   Redo2,
-  Strikethrough,
   Terminal,
   Undo2,
   X,
 } from "lucide-react";
 import { BookmarkCard } from "./BookmarkCardExtension.tsx";
-import { MarkdownPreview } from "./MarkdownPreview.tsx";
+import { PreservedMarkdown, PreservedWhitespace } from "./PreservedMarkdownExtension.tsx";
+import { MarkdownDocument } from "./MarkdownDocumentExtension.ts";
 import { WikiLink } from "./WikiLinkExtension.tsx";
-import { hasContentPreservingMarkdownRoundTrip, type MarkdownSerializationApi } from "./markdown-roundtrip.ts";
+import { parseMarkdownWithPreservedBlocks } from "./markdown-preservation.ts";
 import {
   detectMarkdownLineEndingStyle,
   restoreMarkdownLineEndings,
@@ -62,8 +52,7 @@ import type { EditorSnippet, MarkdownLiveEditorAdapters, MarkdownLiveEditorProps
 const lowlight = createLowlight(common);
 const CODE_LANGUAGES = ["plaintext", "javascript", "typescript", "json", "html", "css", "bash", "python", "sql", "yaml", "markdown"] as const;
 
-type EditorWithMarkdown = Editor & { markdown?: MarkdownSerializationApi };
-type SourceModeReason = "roundtrip" | "paste";
+type EditorWithMarkdown = Editor & { markdown?: MarkdownManager; getMarkdown?: () => string };
 
 function shortcutMatches(event: KeyboardEvent, shortcut: string | null | undefined): boolean {
   if (!shortcut) return false;
@@ -95,7 +84,6 @@ function ToolbarButton({
       type="button"
       className="mle-tool-button"
       aria-label={label}
-      title={label}
       disabled={disabled}
       onMouseDown={(event: ReactMouseEvent<HTMLButtonElement>) => event.preventDefault()}
       onClick={onClick}
@@ -116,41 +104,35 @@ export function MarkdownLiveEditor({
   ariaLabel = "Markdown editor",
   minHeight = 420,
   onFocus,
-  onRoundTripChange,
-  showPreviewTab = true,
+  onSerializationSafetyChange,
 }: MarkdownLiveEditorProps) {
   const initialParts = useRef(splitLeadingFrontmatter(value));
   const adaptersRef = useRef<MarkdownLiveEditorAdapters | undefined>(adapters);
   const onChangeRef = useRef(onChange);
-  const onRoundTripChangeRef = useRef(onRoundTripChange);
+  const onSerializationSafetyChangeRef = useRef(onSerializationSafetyChange);
   const frontmatterRef = useRef(initialParts.current.frontmatter);
   const lineEndingStyleRef = useRef(detectMarkdownLineEndingStyle(initialParts.current.body));
   const terminalNewlineSuffixRef = useRef(splitTerminalNewlineSuffix(initialParts.current.body).suffix);
   const incomingValueRef = useRef(value);
   const emittedValueRef = useRef<string | null>(null);
+  const editorContentInitializedRef = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const imageInsertRangeRef = useRef<{ from: number; to: number } | null>(null);
   const linkRangeRef = useRef<{ from: number; to: number } | null>(null);
   const richModeRef = useRef(false);
   const composingRef = useRef(false);
-  const sourceTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const focusSourceAfterOpenRef = useRef(false);
 
   adaptersRef.current = adapters;
   onChangeRef.current = onChange;
-  onRoundTripChangeRef.current = onRoundTripChange;
+  onSerializationSafetyChangeRef.current = onSerializationSafetyChange;
   const currentParts = splitLeadingFrontmatter(value);
   frontmatterRef.current = currentParts.frontmatter;
   lineEndingStyleRef.current = detectMarkdownLineEndingStyle(currentParts.body);
   terminalNewlineSuffixRef.current = splitTerminalNewlineSuffix(currentParts.body).suffix;
 
-  const [pane, setPane] = useState<"write" | "preview">("write");
-  const [roundTripState, setRoundTripState] = useState<"checking" | "rich" | "source">("checking");
-  const [sourceReason, setSourceReason] = useState<SourceModeReason | null>(null);
-  const [hasUnsafeRoundTrip, setHasUnsafeRoundTrip] = useState(false);
-  const [unsupportedPastePending, setUnsupportedPastePending] = useState(false);
   const [status, setStatus] = useState("");
+  const [hasSerializationError, setHasSerializationError] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [activeCodeLanguage, setActiveCodeLanguage] = useState<string | null>(null);
   const [isLinkOpen, setIsLinkOpen] = useState(false);
@@ -167,14 +149,6 @@ export function MarkdownLiveEditor({
   const [editingSnippetId, setEditingSnippetId] = useState<string | null>(null);
   const [snippetError, setSnippetError] = useState("");
 
-  const switchToSource = useCallback((reason: SourceModeReason, message: string) => {
-    richModeRef.current = false;
-    setSourceReason(reason);
-    setRoundTripState("source");
-    setStatus(message);
-    onRoundTripChangeRef.current?.(true);
-  }, []);
-
   const fetchMetadataAdapter = useCallback((url: string, signal: AbortSignal) => {
     const fetchMetadata = adaptersRef.current?.fetchBookmarkMetadata;
     return fetchMetadata ? fetchMetadata(url, signal) : Promise.resolve(null);
@@ -182,7 +156,8 @@ export function MarkdownLiveEditor({
 
   const extensions = useMemo(
     () => [
-      StarterKit.configure({ codeBlock: false, link: false }),
+      StarterKit.configure({ codeBlock: false, link: false, document: false }),
+      MarkdownDocument,
       CodeBlockLowlight.configure({ lowlight, defaultLanguage: "plaintext" }),
       Link.configure({
         openOnClick: false,
@@ -197,6 +172,8 @@ export function MarkdownLiveEditor({
       WikiLink,
       Markdown.configure({ markedOptions: { gfm: true, breaks: false } }),
       BookmarkCard.configure({ fetchBookmarkMetadata: fetchMetadataAdapter }),
+      PreservedMarkdown,
+      PreservedWhitespace,
     ],
     [fetchMetadataAdapter]
   );
@@ -243,32 +220,33 @@ export function MarkdownLiveEditor({
 
   const updateMarkdown = useCallback((activeEditor: Editor) => {
     if (!richModeRef.current) return;
-    let safe: boolean;
     try {
-      const markdown = activeEditor.getMarkdown();
+      const markdown = (activeEditor as EditorWithMarkdown).getMarkdown?.();
+      if (typeof markdown !== "string") throw new Error("Markdown serializer is unavailable.");
       const content = stripNormalizedTerminalNewlines(markdown);
-      const nextBody = restoreMarkdownLineEndings(content, lineEndingStyleRef.current || "lf") + terminalNewlineSuffixRef.current;
+      const lineEndingStyle = lineEndingStyleRef.current;
+      const serializedBody = lineEndingStyle ? restoreMarkdownLineEndings(content, lineEndingStyle) : content;
+      const nextBody = serializedBody + terminalNewlineSuffixRef.current;
       const nextValue = frontmatterRef.current + nextBody;
       if (nextValue !== incomingValueRef.current) {
         emittedValueRef.current = nextValue;
         onChangeRef.current(nextValue);
       }
 
-      if (composingRef.current) return;
-      const markdownApi = (activeEditor as EditorWithMarkdown).markdown;
-      safe = Boolean(markdownApi && hasContentPreservingMarkdownRoundTrip(markdownApi, markdown));
+      if (!composingRef.current) {
+        setHasSerializationError(false);
+        onSerializationSafetyChangeRef.current?.(true);
+      }
     } catch {
-      safe = false;
+      setHasSerializationError(true);
+      onSerializationSafetyChangeRef.current?.(false);
     }
-    setHasUnsafeRoundTrip(!safe);
-    onRoundTripChangeRef.current?.(safe);
   }, []);
 
   const editor = useEditor(
     {
       extensions,
-      content: initialParts.current.body,
-      contentType: "markdown",
+      content: { type: "doc", content: [{ type: "paragraph" }] },
       immediatelyRender: false,
       editorProps: {
         attributes: {
@@ -289,14 +267,13 @@ export function MarkdownLiveEditor({
               const activeEditor = editorRef.current;
               if (!activeEditor || activeEditor.isDestroyed || !richModeRef.current) return;
               try {
-                const markdown = activeEditor.getMarkdown();
-                const markdownApi = (activeEditor as EditorWithMarkdown).markdown;
-                const safe = Boolean(markdownApi && hasContentPreservingMarkdownRoundTrip(markdownApi, markdown));
-                setHasUnsafeRoundTrip(!safe);
-                onRoundTripChangeRef.current?.(safe);
+                const markdown = (activeEditor as EditorWithMarkdown).getMarkdown?.();
+                if (typeof markdown !== "string") throw new Error("Markdown serializer is unavailable.");
+                setHasSerializationError(false);
+                onSerializationSafetyChangeRef.current?.(true);
               } catch {
-                setHasUnsafeRoundTrip(true);
-                onRoundTripChangeRef.current?.(false);
+                setHasSerializationError(true);
+                onSerializationSafetyChangeRef.current?.(false);
               }
             });
             return false;
@@ -318,14 +295,9 @@ export function MarkdownLiveEditor({
             return true;
           }
           const markdownApi = activeEditor && (activeEditor as EditorWithMarkdown).markdown;
-          if (!markdownApi || !hasContentPreservingMarkdownRoundTrip(markdownApi, text)) {
-            event.preventDefault();
-            setPane("write");
-            setUnsupportedPastePending(true);
-            return true;
-          }
-          setUnsupportedPastePending(false);
-          activeEditor.commands.insertContent(text, { contentType: "markdown" });
+          if (!markdownApi) return false;
+          event.preventDefault();
+          activeEditor.commands.insertContent(parseMarkdownWithPreservedBlocks(markdownApi, text));
           return true;
         },
         handleDrop: (view, event) => {
@@ -359,32 +331,34 @@ export function MarkdownLiveEditor({
       return;
     }
 
-    if (incomingValueRef.current !== value) {
-      editor.commands.setContent(parts.body, { contentType: "markdown", emitUpdate: false });
+    const markdownApi = (editor as EditorWithMarkdown).markdown;
+    if (!markdownApi) {
+      setStatus("Markdown editor is not ready. Your draft remains unchanged.");
+      onSerializationSafetyChangeRef.current?.(false);
+      return;
+    }
+    if (incomingValueRef.current !== value || !editorContentInitializedRef.current) {
+      const { content } = splitTerminalNewlineSuffix(parts.body);
+      const serializedInput = lineEndingStyleRef.current
+        ? restoreMarkdownLineEndings(content, "lf")
+        : content;
+      try {
+        editor.commands.setContent(parseMarkdownWithPreservedBlocks(markdownApi, serializedInput), { emitUpdate: false });
+      } catch {
+        richModeRef.current = false;
+        setHasSerializationError(true);
+        setStatus("This Markdown could not be opened safely. Its draft has not been changed or saved.");
+        onSerializationSafetyChangeRef.current?.(false);
+        return;
+      }
       incomingValueRef.current = value;
+      editorContentInitializedRef.current = true;
     }
 
-    const markdownApi = (editor as EditorWithMarkdown).markdown;
-    const canEditRich = lineEndingStyleRef.current !== null
-      && markdownApi !== undefined
-      && hasContentPreservingMarkdownRoundTrip(markdownApi, parts.body, true);
-    richModeRef.current = canEditRich;
-    setSourceReason(canEditRich ? null : "roundtrip");
-    setRoundTripState(canEditRich ? "rich" : "source");
-    setHasUnsafeRoundTrip(false);
-    onRoundTripChangeRef.current?.(true);
+    richModeRef.current = true;
+    setHasSerializationError(false);
+    onSerializationSafetyChangeRef.current?.(true);
   }, [editor, value]);
-
-  useEffect(() => {
-    if (!focusSourceAfterOpenRef.current || roundTripState !== "source") return;
-    focusSourceAfterOpenRef.current = false;
-    const frame = window.requestAnimationFrame(() => sourceTextareaRef.current?.focus({ preventScroll: true }));
-    return () => window.cancelAnimationFrame(frame);
-  }, [roundTripState]);
-
-  useEffect(() => {
-    if (!showPreviewTab) setPane("write");
-  }, [showPreviewTab]);
 
   useEffect(() => () => {
     editorRef.current = null;
@@ -451,11 +425,6 @@ export function MarkdownLiveEditor({
   const canUpload = Boolean(adapters?.uploadImage);
   const canManageSnippets = Boolean(adapters?.listSnippets || adapters?.saveSnippet || adapters?.deleteSnippet);
 
-  const toggleMark = (mark: "bold" | "italic" | "strike" | "code") => {
-    if (!editor) return;
-    editor.chain().focus().toggleMark(mark).run();
-  };
-
   const copyActiveCodeBlock = async () => {
     if (!editor) return;
     const { $from } = editor.state.selection;
@@ -516,26 +485,6 @@ export function MarkdownLiveEditor({
     setBookmarkError("");
     setIsBookmarkOpen(false);
     editor.commands.focus();
-  };
-
-  const handleSourceEdit = (nextBody: string) => {
-    const nextValue = frontmatter + nextBody;
-    if (nextValue === incomingValueRef.current) return;
-    emittedValueRef.current = nextValue;
-    onChangeRef.current(nextValue);
-    setUnsupportedPastePending(false);
-    onRoundTripChangeRef.current?.(true);
-  };
-
-  const openSourceEditor = () => {
-    focusSourceAfterOpenRef.current = true;
-    setPane("write");
-    switchToSource(
-      "roundtrip",
-      unsupportedPastePending
-        ? "The paste was held in the clipboard. Paste again in source mode to preserve it exactly."
-        : "Source editing preserves this Markdown exactly.",
-    );
   };
 
   const handleImageSelect = (event: FormEvent<HTMLInputElement>) => {
@@ -599,7 +548,10 @@ export function MarkdownLiveEditor({
   };
 
   const insertSnippet = (snippet: EditorSnippet) => {
-    editor?.commands.insertContent(snippet.content, { contentType: "markdown" });
+    const markdownApi = editor && (editor as EditorWithMarkdown).markdown;
+    if (editor && markdownApi) {
+      editor.commands.insertContent(parseMarkdownWithPreservedBlocks(markdownApi, snippet.content));
+    }
     editor?.commands.focus();
     setMenu(null);
   };
@@ -616,45 +568,15 @@ export function MarkdownLiveEditor({
       className="mle-shell"
       style={minHeightStyle}
       onFocusCapture={(event) => {
-        if (event.target instanceof HTMLElement && event.target.closest(".mle-editor-content, .mle-source-textarea")) onFocus?.();
+        if (event.target instanceof HTMLElement && event.target.closest(".mle-editor-content")) onFocus?.();
       }}
     >
-      {(showPreviewTab || frontmatter) && <div className="mle-header">
-        {showPreviewTab && <div className="mle-mode-tabs" role="tablist" aria-label="Editor view">
-          <button type="button" role="tab" aria-selected={pane === "write"} className={pane === "write" ? "is-active" : ""} onClick={() => setPane("write")}>
-            <Pencil aria-hidden="true" /> Write
-          </button>
-            <button type="button" role="tab" aria-selected={pane === "preview"} className={pane === "preview" ? "is-active" : ""} onClick={() => setPane("preview")}>
-              <Eye aria-hidden="true" /> Preview
-            </button>
-        </div>}
-        {frontmatter && <span className="mle-frontmatter-badge" title="Frontmatter remains unchanged while editing the body">Frontmatter preserved</span>}
-      </div>}
+      {frontmatter && <div className="mle-header"><span className="mle-frontmatter-badge">Frontmatter preserved</span></div>}
 
-      {pane === "write" && roundTripState === "rich" && editor && (
+      {editor && (
         <>
-          {(hasUnsafeRoundTrip || unsupportedPastePending) && (
-            <div className="mle-preservation-warning" role="alert">
-              <span>{hasUnsafeRoundTrip
-                ? "This edit may change Markdown syntax. Saving is paused until you review the source."
-                : "This Markdown paste was not inserted. The clipboard still contains it; paste again in source mode to preserve it."}</span>
-              <button type="button" className="mle-quiet-button" onClick={openSourceEditor}>Open Markdown source</button>
-              {unsupportedPastePending && !hasUnsafeRoundTrip && <button type="button" className="mle-quiet-button" onClick={() => setUnsupportedPastePending(false)}>Keep rich editor</button>}
-            </div>
-          )}
-          <div className="mle-toolbar" role="toolbar" aria-label="Markdown formatting">
-            <ToolbarButton label="Heading 1" onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}><Heading1 /></ToolbarButton>
-            <ToolbarButton label="Heading 2" onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}><Heading2 /></ToolbarButton>
-            <span className="mle-toolbar-divider" aria-hidden="true" />
-            <ToolbarButton label="Bold" onClick={() => toggleMark("bold")}><Bold /></ToolbarButton>
-            <ToolbarButton label="Italic" onClick={() => toggleMark("italic")}><Italic /></ToolbarButton>
-            <ToolbarButton label="Strikethrough" onClick={() => toggleMark("strike")}><Strikethrough /></ToolbarButton>
-            <ToolbarButton label="Inline code" onClick={() => toggleMark("code")}><Code2 /></ToolbarButton>
+          <div className="mle-toolbar" role="toolbar" aria-label="Document actions">
             <ToolbarButton label="Code block" onClick={() => editor.chain().focus().toggleCodeBlock().run()}><Terminal /></ToolbarButton>
-            <ToolbarButton label="Bullet list" onClick={() => editor.chain().focus().toggleBulletList().run()}><List /></ToolbarButton>
-            <ToolbarButton label="Numbered list" onClick={() => editor.chain().focus().toggleOrderedList().run()}><ListOrdered /></ToolbarButton>
-            <ToolbarButton label="Blockquote" onClick={() => editor.chain().focus().toggleBlockquote().run()}><Quote /></ToolbarButton>
-            <span className="mle-toolbar-divider" aria-hidden="true" />
             <ToolbarButton label="Insert link (Command or Control K)" onClick={() => {
               const { from, to } = editor.state.selection;
               linkRangeRef.current = { from, to };
@@ -749,34 +671,7 @@ export function MarkdownLiveEditor({
         </>
       )}
 
-      {pane === "write" && roundTripState === "checking" && (
-        <div className="mle-checking" role="status">Checking Markdown preservation…</div>
-      )}
-
-      {pane === "write" && roundTripState === "source" && (
-        <div className="mle-source-fallback">
-          <p className="mle-preservation-message" role="status">
-            {unsupportedPastePending
-                ? "The paste was held. Paste it now in source mode to preserve every character."
-                : sourceReason === "paste"
-                  ? "This Markdown is open in source mode so every character is preserved."
-                : "Rich editing is unavailable for this Markdown, so source mode preserves every character."}
-          </p>
-          {frontmatter && <pre className="mle-frontmatter" aria-label="Protected frontmatter">{frontmatter}</pre>}
-          <textarea
-            ref={sourceTextareaRef}
-            className="mle-source-textarea"
-            aria-label={ariaLabel + " source"}
-            value={body}
-            onChange={(event) => handleSourceEdit(event.target.value)}
-            spellCheck={false}
-            style={{ minHeight: "var(--mle-min-height)" }}
-          />
-        </div>
-      )}
-
-      {pane === "preview" && showPreviewTab && <MarkdownPreview frontmatter={frontmatter} body={body} adapters={adapters} />}
-
+      {hasSerializationError && <p className="mle-status mle-serialization-error" role="alert">Markdown could not be serialized safely. Your changes have not been sent to save.</p>}
       {status && <p className="mle-status" role="status">{status}</p>}
       {isUploading && <p className="mle-status" role="status">Uploading image…</p>}
 
