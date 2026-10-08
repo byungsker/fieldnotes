@@ -199,6 +199,7 @@ button:focus-visible, input:focus-visible, textarea:not(.markdown-editor):focus-
 .notice-bar.warning { color: #9c6b52; border-bottom-color: #f0e4da; background: #fffaf5; }
 .notice-bar button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; color: inherit; border: 0; background: transparent; cursor: pointer; }
 .sync-banner { justify-content: flex-start; color: #977449; border-color: #efe6d8; background: #fffaf2; }
+.sync-banner button { margin-left: auto; padding: 5px 8px; color: #815e48; border: 1px solid #ead9cc; border-radius: 6px; background: white; font: inherit; cursor: pointer; }
 .conflict-banner { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 12px 38px; color: #815e48; border-bottom: 1px solid #f0e2d7; background: #fff8f1; }
 .conflict-banner div { display: flex; flex-direction: column; gap: 4px; }
 .conflict-banner strong { font-size: 11px; }

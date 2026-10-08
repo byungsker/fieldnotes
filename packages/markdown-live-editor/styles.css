@@ -273,6 +273,29 @@
   font-size: 13px;
 }
 
+.mle-preservation-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--mle-border);
+  color: #8a4b12;
+  background: #fff7ed;
+  font-size: 13px;
+}
+
+.mle-preservation-warning .mle-quiet-button {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 480px) {
+  .mle-preservation-warning {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 .mle-checking {
   min-height: 70px;
 }
