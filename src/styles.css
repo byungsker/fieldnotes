@@ -423,10 +423,10 @@ html[data-theme="dark"] .fieldnotes-rich-editor .mle-shell { --mle-code-surface:
   .app-shell.sidebar-collapsed { grid-template-columns: 72px 275px minmax(0, 1fr); }
 }
 
-@media (any-hover: none) {
-  .explorer-file-row { min-height: 40px; }
+@media (hover: none), (pointer: coarse) {
+  .explorer-file-row { min-height: 44px; }
   .explorer-file-actions { pointer-events: auto; opacity: 1; transform: none; }
-  .explorer-file-actions button { width: 36px; height: 36px; }
+  .explorer-file-actions button { width: 44px; height: 44px; }
   .explorer-folder-row .folder-row-action { pointer-events: auto; opacity: 1; transform: none; }
 }
 
@@ -1293,7 +1293,7 @@ html[data-theme="dark"] select:focus-visible { outline-color: rgba(164, 211, 171
 .left-rail.mobile-navigation-drawer .explorer-file-row { min-height: 44px; }
 .left-rail.mobile-navigation-drawer .explorer-file { min-height: 44px; padding-left: 42px; font-size: 14px; }
 .left-rail.mobile-navigation-drawer .explorer-file-date { font-size: 11px; }
-.left-rail.mobile-navigation-drawer .explorer-file-actions button { width: 36px; height: 40px; opacity: 1; }
+.left-rail.mobile-navigation-drawer .explorer-file-actions button { width: 44px; height: 44px; opacity: 1; }
   .drawer-action {
     display: flex;
     align-items: center;
