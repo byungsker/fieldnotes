@@ -5,13 +5,42 @@ import type {
   MarkdownLiveEditorAdapters,
   NewEditorSnippet,
 } from "../packages/markdown-live-editor";
-import type { VisualizationQuery, VisualizationQueryResponse } from "../shared/visualization";
+import type { VisualizationAction, VisualizationQuery, VisualizationQueryResponse } from "../shared/visualization";
 import { subscribeToVaultChanges } from "./vault-change-subscription";
 
 const SNIPPETS_KEY = "fieldnotes:editor-snippets:v1";
 const MAX_IMAGE_SOURCE_LENGTH = 20_000;
 const MAX_IMAGE_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_SNIPPETS = 100;
+const VISUALIZATION_TRUST_PREFIX = "fieldnotes:trusted-view:v1:";
+const MAX_TRUSTED_VIEWS = 200;
+
+function visualizationTrustKey(documentId: string, blockIndex: number, sourceHash: string): string {
+  if (!/^[0-9a-f-]{36}$/i.test(documentId) || !Number.isSafeInteger(blockIndex) || blockIndex < 0 || !/^[0-9a-f]{64}$/i.test(sourceHash)) {
+    throw new Error("This visualization cannot be trusted because its identity is invalid.");
+  }
+  return `${VISUALIZATION_TRUST_PREFIX}${documentId}:${blockIndex}:${sourceHash}`;
+}
+
+function trustedVisualizationKeys(): string[] {
+  const keys: string[] = [];
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (key?.startsWith(VISUALIZATION_TRUST_PREFIX)) keys.push(key);
+  }
+  return keys;
+}
+
+function storeVisualizationTrust(documentId: string, blockIndex: number, sourceHash: string): void {
+  const key = visualizationTrustKey(documentId, blockIndex, sourceHash);
+  window.localStorage.setItem(key, String(Date.now()));
+  const records = trustedVisualizationKeys().map((recordKey) => ({ key: recordKey, timestamp: Number(window.localStorage.getItem(recordKey)) || 0 }));
+  records.sort((left, right) => left.timestamp - right.timestamp);
+  while (records.length > MAX_TRUSTED_VIEWS) {
+    const expired = records.shift();
+    if (expired) window.localStorage.removeItem(expired.key);
+  }
+}
 
 function isEditorSnippet(value: unknown): value is EditorSnippet {
   if (!value || typeof value !== "object") return false;
@@ -116,7 +145,24 @@ export function createFieldnotesEditorAdapters(): MarkdownLiveEditorAdapters {
         signal,
       });
     },
+    async executeVisualizationAction(action: VisualizationAction): Promise<Record<string, unknown>> {
+      return apiRequest<Record<string, unknown>>("/api/views/actions", {
+        method: "POST",
+        body: JSON.stringify(action),
+      });
+    },
+    isVisualizationTrusted(documentId: string, blockIndex: number, sourceHash: string): boolean {
+      try { return window.localStorage.getItem(visualizationTrustKey(documentId, blockIndex, sourceHash)) !== null; }
+      catch { return false; }
+    },
+    trustVisualization(documentId: string, blockIndex: number, sourceHash: string): void {
+      storeVisualizationTrust(documentId, blockIndex, sourceHash);
+    },
+    revokeVisualizationTrust(documentId: string, blockIndex: number, sourceHash: string): void {
+      try { window.localStorage.removeItem(visualizationTrustKey(documentId, blockIndex, sourceHash)); }
+      catch { throw new Error("Could not revoke this visualization's trust record."); }
+    },
     subscribeToVaultChanges,
-    enableCustomVisualizations: Boolean(import.meta.env?.DEV),
+    enableCustomVisualizations: true,
   };
 }

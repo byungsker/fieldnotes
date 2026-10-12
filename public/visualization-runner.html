@@ -3,14 +3,47 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-BbBDEgqFYyoqpFjmokiM5En4EImdCJzuU5TdvyzIGoU=' blob:; script-src-elem 'sha256-BbBDEgqFYyoqpFjmokiM5En4EImdCJzuU5TdvyzIGoU=' blob:; style-src 'self' 'unsafe-inline'; img-src 'none'; font-src 'none'; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'; worker-src blob:">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-Zj6E9h6BgqTfQDv/ONLroQqetsZUZKPZzFVzdsZFDd4=' blob:; script-src-elem 'sha256-Zj6E9h6BgqTfQDv/ONLroQqetsZUZKPZzFVzdsZFDd4=' blob:; style-src 'self' 'unsafe-inline'; img-src 'none'; font-src 'none'; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'; worker-src blob:">
     <title>Fieldnotes visualization runner</title>
     <style>
       :root { color-scheme: light dark; font: 14px/1.45 system-ui, sans-serif; }
       body { margin: 0; padding: 12px; color: CanvasText; background: Canvas; }
       #root { min-width: 0; overflow-wrap: anywhere; }
+      .fieldnotes-custom-root { min-width: 0; color: CanvasText; font: 14px/1.45 system-ui, sans-serif; overflow-wrap: anywhere; }
+      .fieldnotes-custom-root button,
+      .fieldnotes-custom-root input,
+      .fieldnotes-custom-root textarea,
+      .fieldnotes-custom-root select {
+        box-sizing: border-box;
+        color: CanvasText;
+        border: 1px solid color-mix(in srgb, CanvasText 24%, Canvas);
+        border-radius: 6px;
+        background: Canvas;
+        font: inherit;
+      }
+      .fieldnotes-custom-root button { min-height: 36px; padding: 6px 10px; cursor: pointer; }
+      .fieldnotes-custom-root button:hover:not(:disabled) { background: color-mix(in srgb, CanvasText 8%, Canvas); }
+      .fieldnotes-custom-root button:active:not(:disabled) { background: color-mix(in srgb, CanvasText 14%, Canvas); transform: translateY(1px); }
+      .fieldnotes-custom-root button:focus-visible,
+      .fieldnotes-custom-root input:focus-visible,
+      .fieldnotes-custom-root textarea:focus-visible,
+      .fieldnotes-custom-root select:focus-visible { outline: 2px solid #5c9666; outline-offset: 2px; }
+      .fieldnotes-custom-root input,
+      .fieldnotes-custom-root textarea,
+      .fieldnotes-custom-root select { min-height: 36px; max-width: 100%; padding: 6px 9px; }
+      .fieldnotes-custom-root input[type="hidden"] { display: none; }
+      .fieldnotes-custom-root textarea { min-height: 100px; resize: vertical; }
+      .fieldnotes-custom-root button:disabled { color: color-mix(in srgb, CanvasText 72%, Canvas); cursor: not-allowed; opacity: .82; }
+      .fieldnotes-custom-root button[data-fn-event="note.trash"] { color: #a34336; }
+      @media (max-width: 600px) {
+        .fieldnotes-custom-root { font-size: 17px; }
+        .fieldnotes-custom-root button,
+        .fieldnotes-custom-root input,
+        .fieldnotes-custom-root textarea,
+        .fieldnotes-custom-root select { min-height: 48px; }
+      }
     </style>
-    <script defer src="/visualization-runner.js" integrity="sha256-BbBDEgqFYyoqpFjmokiM5En4EImdCJzuU5TdvyzIGoU=" crossorigin="anonymous"></script>
+    <script defer src="/visualization-runner.js" integrity="sha256-Zj6E9h6BgqTfQDv/ONLroQqetsZUZKPZzFVzdsZFDd4=" crossorigin="anonymous"></script>
   </head>
   <body>
     <main id="root" aria-live="polite">Waiting for the Fieldnotes host…</main>

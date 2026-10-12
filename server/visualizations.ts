@@ -1,9 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 import type {
   VisualizationFilter,
   VisualizationNote,
   VisualizationQuery,
   VisualizationQueryResponse,
+  VisualizationTrashNote,
   VisualizationValue,
 } from "../shared/visualization.js";
 import { getDocument, getLatestChangeSequence } from "./database.js";
@@ -14,7 +16,7 @@ const MAX_SCAN_NOTES = 1_000;
 const MAX_SCAN_BYTES = 20_000_000;
 const MAX_RESULT_BYTES = 1_500_000;
 const FIELD_PATTERN = /^(?:title|path|createdAt|updatedAt|excerpt|frontmatter\.[A-Za-z0-9_.-]{1,120})$/;
-const ALLOWED_QUERY_KEYS = new Set(["folderId", "search", "where", "sort", "limit"]);
+const ALLOWED_QUERY_KEYS = new Set(["folderId", "search", "where", "sort", "limit", "includeTrash"]);
 
 export class VisualizationQueryError extends Error {
   readonly status: number;
@@ -98,6 +100,10 @@ export function validateVisualizationQuery(value: unknown): VisualizationQuery {
     }
     query.limit = Math.min(Number(value.limit), 200);
   }
+  if (Object.hasOwn(value, "includeTrash")) {
+    if (typeof value.includeTrash !== "boolean") throw new VisualizationQueryError("includeTrash must be true or false.");
+    query.includeTrash = value.includeTrash;
+  }
   return query;
 }
 
@@ -111,6 +117,7 @@ function fieldValue(note: VisualizationNote, field: string): VisualizationValue 
   let value: VisualizationValue | undefined = note.frontmatter;
   for (const key of field.slice("frontmatter.".length).split(".")) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    if (!Object.hasOwn(value, key)) return undefined;
     value = value[key];
   }
   return value;
@@ -162,7 +169,11 @@ function sortNotes(notes: VisualizationNote[], query: VisualizationQuery): void 
   });
 }
 
-export function queryVisualizationNotes(db: DatabaseSync, query: VisualizationQuery): VisualizationQueryResponse {
+export function queryVisualizationNotes(
+  db: DatabaseSync,
+  query: VisualizationQuery,
+  trashNotes: VisualizationTrashNote[] = [],
+): VisualizationQueryResponse {
   const folderClause = query.folderId === undefined ? "" : query.folderId === null ? "WHERE folder_id IS NULL" : "WHERE folder_id = ?";
   const parameters: (string | number)[] = query.folderId === undefined || query.folderId === null
     ? [MAX_SCAN_NOTES + 1]
@@ -190,6 +201,8 @@ export function queryVisualizationNotes(db: DatabaseSync, query: VisualizationQu
       path: document.filePath ?? "",
       createdAt: document.createdAt,
       updatedAt: document.updatedAt,
+      version: document.version,
+      contentHash: document.contentHash ?? createHash("sha256").update(document.body, "utf8").digest("hex"),
       excerpt: document.excerpt,
       frontmatter: parsed.values,
       ...(parsed.error ? { frontmatterError: parsed.error } : {}),
@@ -204,7 +217,16 @@ export function queryVisualizationNotes(db: DatabaseSync, query: VisualizationQu
 
   sortNotes(notes, query);
   const limited = notes.slice(0, query.limit ?? 100);
-  const response: VisualizationQueryResponse = { notes: limited, sequence: getLatestChangeSequence(db) };
+  const trash = query.includeTrash
+    ? trashNotes
+      .filter((note) => !query.search || `${note.title}\n${note.excerpt}`.toLocaleLowerCase().includes(query.search.toLocaleLowerCase()))
+      .slice(0, query.limit ?? 100)
+    : undefined;
+  const response: VisualizationQueryResponse = {
+    notes: limited,
+    ...(trash ? { trash } : {}),
+    sequence: getLatestChangeSequence(db),
+  };
   if (Buffer.byteLength(JSON.stringify(response), "utf8") > MAX_RESULT_BYTES) {
     throw new VisualizationQueryError("The view result is too large. Reduce its limit or choose a narrower folder.", 413);
   }

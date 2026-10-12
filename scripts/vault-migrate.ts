@@ -4,10 +4,10 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, chmodSync, statSync, lstatSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { FileVault, createVaultFromLegacy, type LegacyDocument, type LegacyFolder } from "../server/vault.js";
+import { FileVault, createVaultFromLegacy, type LegacyDocument, type LegacyFolder, type LegacyTrashedDocument } from "../server/vault.js";
 import type { ChangeRecord } from "../server/types.js";
 
-type LegacySnapshot = { documents: LegacyDocument[]; folders: LegacyFolder[]; changes: ChangeRecord[]; schemaVersion: number };
+type LegacySnapshot = { documents: LegacyDocument[]; trashedDocuments: LegacyTrashedDocument[]; folders: LegacyFolder[]; changes: ChangeRecord[]; schemaVersion: number };
 
 function parseArgs(values: string[]): Record<string, string | true> {
   const result: Record<string, string | true> = {};
@@ -39,9 +39,10 @@ function readSnapshot(file: string): LegacySnapshot {
     const quickCheck = db.prepare("PRAGMA quick_check").get() as { quick_check?: string };
     if (quickCheck.quick_check !== "ok") throw new Error(`SQLite quick_check failed for ${path.basename(file)}.`);
     const schemaVersion = Number((db.prepare("PRAGMA user_version").get() as { user_version?: number }).user_version ?? 0);
-    if (schemaVersion > 3 || schemaVersion < 1) throw new Error(`Unsupported SQLite schema ${schemaVersion} in ${path.basename(file)}.`);
+    if (schemaVersion > 4 || schemaVersion < 1) throw new Error(`Unsupported SQLite schema ${schemaVersion} in ${path.basename(file)}.`);
     const columns = (table: string) => new Set((db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((row) => row.name));
     const documentColumns = columns("documents");
+    const trashColumns = columns("trash_documents");
     const folderColumns = columns("folders");
     const changeColumns = columns("changes");
     const folderId = documentColumns.has("folder_id") ? "folder_id" : "NULL AS folder_id";
@@ -54,6 +55,18 @@ function readSnapshot(file: string): LegacySnapshot {
       updatedAt: String(row.updated_at),
       version: Number(row.version),
     }));
+    const trashedDocuments: LegacyTrashedDocument[] = trashColumns.has("id")
+      ? (db.prepare("SELECT id, title, body, folder_id, created_at, updated_at, trashed_at, version FROM trash_documents ORDER BY id").all() as Array<Record<string, string | number | null>>).map((row) => ({
+        id: String(row.id),
+        title: String(row.title),
+        body: String(row.body),
+        folderId: row.folder_id === null ? null : String(row.folder_id),
+        createdAt: String(row.created_at),
+        updatedAt: String(row.updated_at),
+        trashedAt: String(row.trashed_at),
+        version: Number(row.version),
+      }))
+      : [];
     const folders: LegacyFolder[] = folderColumns.has("id")
       ? (db.prepare("SELECT id, name, parent_id, created_at, updated_at, version FROM folders ORDER BY id").all() as Array<Record<string, string | number | null>>).map((row) => ({
         id: String(row.id),
@@ -78,7 +91,7 @@ function readSnapshot(file: string): LegacySnapshot {
       const id = String(row.document_id);
       return type === "folder" ? { ...common, entityType: type, folderId: id } : { ...common, entityType: type, documentId: id };
     });
-    return { documents, folders, changes, schemaVersion };
+    return { documents, trashedDocuments, folders, changes, schemaVersion };
   } finally {
     db.close();
   }
@@ -86,6 +99,7 @@ function readSnapshot(file: string): LegacySnapshot {
 
 function compareSnapshots(left: LegacySnapshot, right: LegacySnapshot): void {
   assert.deepStrictEqual(left.documents, right.documents, "The live SQLite database and requested backup differ in document rows.");
+  assert.deepStrictEqual(left.trashedDocuments, right.trashedDocuments, "The live SQLite database and requested backup differ in trash rows.");
   assert.deepStrictEqual(left.folders, right.folders, "The live SQLite database and requested backup differ in folder rows.");
   assert.deepStrictEqual(left.changes, right.changes, "The live SQLite database and requested backup differ in change history.");
 }
@@ -140,10 +154,11 @@ function main(): void {
   const active = readSnapshot(livePath);
   const backup = readSnapshot(backupPath);
   compareSnapshots(active, backup);
-  const result = createVaultFromLegacy(vaultPath, backup.documents, backup.folders, backup.changes, manifestPath);
+  const result = createVaultFromLegacy(vaultPath, backup.documents, backup.folders, backup.changes, manifestPath, backup.trashedDocuments);
   const migrated = new FileVault(vaultPath).snapshot();
   assert.equal(migrated.documents.length, backup.documents.length, "Migrated document count differs from the verified backup.");
   assert.equal(migrated.folders.length, backup.folders.length, "Migrated folder count differs from the verified backup.");
+  assert.deepStrictEqual(new Map(new FileVault(vaultPath).listTrashedDocuments().map((note) => [note.id, note.version])), new Map(backup.trashedDocuments.map((note) => [note.id, note.version])), "Migrated trash differs from the verified backup.");
   assert.deepStrictEqual(migrated.changes, backup.changes, "Migrated change history differs from the verified backup.");
   const migratedFolders = new Map(migrated.folders.map((folder) => [folder.id, folder]));
   for (const expected of backup.folders) {

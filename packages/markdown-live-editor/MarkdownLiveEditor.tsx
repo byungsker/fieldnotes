@@ -106,11 +106,14 @@ export function MarkdownLiveEditor({
   minHeight = 420,
   onFocus,
   onSerializationSafetyChange,
+  visualizationDocumentId,
+  openVisualizationNote,
 }: MarkdownLiveEditorProps) {
   const initialParts = useRef(splitLeadingFrontmatter(value));
   const adaptersRef = useRef<MarkdownLiveEditorAdapters | undefined>(adapters);
   const onChangeRef = useRef(onChange);
   const onSerializationSafetyChangeRef = useRef(onSerializationSafetyChange);
+  const openVisualizationNoteRef = useRef(openVisualizationNote);
   const frontmatterRef = useRef(initialParts.current.frontmatter);
   const lineEndingStyleRef = useRef(detectMarkdownLineEndingStyle(initialParts.current.body));
   const terminalNewlineSuffixRef = useRef(splitTerminalNewlineSuffix(initialParts.current.body).suffix);
@@ -127,6 +130,7 @@ export function MarkdownLiveEditor({
   adaptersRef.current = adapters;
   onChangeRef.current = onChange;
   onSerializationSafetyChangeRef.current = onSerializationSafetyChange;
+  openVisualizationNoteRef.current = openVisualizationNote;
   const currentParts = splitLeadingFrontmatter(value);
   frontmatterRef.current = currentParts.frontmatter;
   lineEndingStyleRef.current = detectMarkdownLineEndingStyle(currentParts.body);
@@ -162,6 +166,19 @@ export function MarkdownLiveEditor({
   const subscribeToVaultChangesAdapter = useCallback((onChange: () => void) => {
     return adaptersRef.current?.subscribeToVaultChanges?.(onChange) ?? (() => undefined);
   }, []);
+  const visualizationTrustAdapter = useMemo(() => ({
+    isTrusted: (documentId: string, blockIndex: number, sourceHash: string) => adaptersRef.current?.isVisualizationTrusted?.(documentId, blockIndex, sourceHash) ?? false,
+    trust: (documentId: string, blockIndex: number, sourceHash: string) => adaptersRef.current?.trustVisualization?.(documentId, blockIndex, sourceHash),
+    revoke: (documentId: string, blockIndex: number, sourceHash: string) => adaptersRef.current?.revokeVisualizationTrust?.(documentId, blockIndex, sourceHash),
+  }), []);
+  const runVisualizationAction = useCallback((action: Parameters<NonNullable<MarkdownLiveEditorAdapters["executeVisualizationAction"]>>[0]) => {
+    const run = adaptersRef.current?.executeVisualizationAction;
+    return run ? run(action) : Promise.reject(new Error("Fieldnotes actions are unavailable in this editor."));
+  }, []);
+  const openVisualizationNoteAdapter = useCallback((noteId: string) => {
+    const open = openVisualizationNoteRef.current;
+    return open ? open(noteId) : Promise.reject(new Error("Opening notes is unavailable in this editor."));
+  }, []);
   const enableCustomVisualizations = adapters?.enableCustomVisualizations === true;
 
   const extensions = useMemo(
@@ -172,6 +189,10 @@ export function MarkdownLiveEditor({
         queryVisualization: queryVisualizationAdapter,
         subscribeToVaultChanges: subscribeToVaultChangesAdapter,
         enableCustomVisualizations,
+        visualizationDocumentId,
+        visualizationTrustAdapter,
+        runVisualizationAction,
+        openVisualizationNote: openVisualizationNoteAdapter,
       }),
       CodeBlockLowlight.configure({ lowlight, defaultLanguage: "plaintext" }),
       Link.configure({
@@ -190,7 +211,7 @@ export function MarkdownLiveEditor({
       PreservedMarkdown,
       PreservedWhitespace,
     ],
-    [fetchMetadataAdapter, queryVisualizationAdapter, subscribeToVaultChangesAdapter, enableCustomVisualizations]
+    [fetchMetadataAdapter, queryVisualizationAdapter, subscribeToVaultChangesAdapter, enableCustomVisualizations, openVisualizationNoteAdapter, runVisualizationAction, visualizationDocumentId, visualizationTrustAdapter]
   );
 
   const insertUploadedImage = useCallback(async (file: File, position?: number | { from: number; to: number }) => {
@@ -595,6 +616,7 @@ export function MarkdownLiveEditor({
       {editor && (
         <>
           <div className="mle-toolbar" role="toolbar" aria-label="Document actions">
+            <div className="mle-toolbar-group mle-toolbar-group--editing" role="group" aria-label="Editing actions">
             <ToolbarButton label="Code block" onClick={() => editor.chain().focus().toggleCodeBlock().run()}><Terminal /></ToolbarButton>
             <ToolbarButton label="Insert link (Command or Control K)" onClick={() => {
               const { from, to } = editor.state.selection;
@@ -639,11 +661,13 @@ export function MarkdownLiveEditor({
                 <ToolbarButton label="Copy code block" onClick={() => void copyActiveCodeBlock()}><Copy /></ToolbarButton>
               </>
             )}
-            <span className="mle-toolbar-spacer" />
+            </div>
+            <div className="mle-toolbar-group mle-toolbar-group--navigation" role="group" aria-label="Navigation and snippets">
             <ToolbarButton label="Table of contents" disabled={headings.length === 0} onClick={() => setMenu(menu === "toc" ? null : "toc")}><ListTree /><span>Outline</span></ToolbarButton>
             {canManageSnippets && (
               <ToolbarButton label="Snippets" onClick={() => setMenu(menu === "snippets" ? null : "snippets")}>Snips</ToolbarButton>
             )}
+            </div>
           </div>
 
           {menu === "toc" && (

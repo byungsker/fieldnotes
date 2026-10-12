@@ -301,6 +301,7 @@ export function App() {
   const [draftRecoveryAvailable, setDraftRecoveryAvailable] = useState(true);
   const editorAdapters = useMemo(() => createFieldnotesEditorAdapters(), []);
   const [query, setQuery] = useState("");
+  const [showSearchSuggestions, setShowSearchSuggestions] = useState(false);
   const [sortOrder, setSortOrder] = useState<SortOrder>("updated-desc");
   const [theme, setTheme] = useState<ColorTheme>(initialTheme);
   const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(initialDesktopSidebarCollapsed);
@@ -2726,20 +2727,47 @@ export function App() {
           </div>
         </div>
 
-        <label className="search-box">
-          <Search size={16} aria-hidden="true" />
-          <input
-            ref={searchInputRef}
-            type="search"
-            className="search-input"
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="Search your notes"
-            aria-label="Search all notes"
-          />
-          {query && <button type="button" className="clear-search" aria-label="Clear search" onClick={() => setQuery("")}><X size={14} /></button>}
-          {!query && <kbd>⌘ K</kbd>}
-        </label>
+        <div
+          className="search-area"
+          onFocusCapture={() => setShowSearchSuggestions(true)}
+          onBlurCapture={(event) => {
+            const nextFocus = event.relatedTarget;
+            if (!(nextFocus instanceof Node) || !event.currentTarget.contains(nextFocus)) setShowSearchSuggestions(false);
+          }}
+        >
+          <label className="search-box">
+            <Search size={16} aria-hidden="true" />
+            <input
+              ref={searchInputRef}
+              type="search"
+              className="search-input"
+              value={query}
+              onChange={(event) => setQuery(event.currentTarget.value)}
+              onKeyDown={(event) => { if (event.key === "Escape") setShowSearchSuggestions(false); }}
+              placeholder="Search your notes"
+              aria-label="Search all notes"
+            />
+            {query && <button type="button" className="clear-search" aria-label="Clear search" onClick={() => setQuery("")}><X size={14} /></button>}
+            {!query && <kbd>⌘ K</kbd>}
+          </label>
+          {showSearchSuggestions && !query.trim() && orderedDocuments.length > 0 && (
+            <div className="search-suggestions" role="group" aria-label="Recent note suggestions">
+              <span className="search-suggestions-heading">Recent notes</span>
+              {orderedDocuments.slice(0, 4).map((document) => (
+                <button
+                  type="button"
+                  className="search-suggestion"
+                  key={document.id}
+                  title={document.title}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => { setShowSearchSuggestions(false); void navigateToDocument(document.id); }}
+                >
+                  <span>{document.title}</span><time dateTime={document.updatedAt}>{relativeDate(document.updatedAt)}</time>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div className="list-subhead">
           <span>{documentListStatus === "loading" ? "LOADING NOTES" : query ? `${visibleDocuments.length} RESULTS` : activeFolderId === "root" ? "UNFILED NOTES" : activeFolder ? folderPathById.get(activeFolder.id)?.toUpperCase() : "ALL NOTES"}</span>
@@ -2947,6 +2975,8 @@ export function App() {
                   key={displayDocument.id}
                   value={draftBody}
                   adapters={editorAdapters}
+                  visualizationDocumentId={displayDocument.id}
+                  openVisualizationNote={(noteId) => navigateToDocument(noteId)}
                   ariaLabel="Markdown body"
                   minHeight={230}
                   onFocus={() => {

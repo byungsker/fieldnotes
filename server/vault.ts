@@ -22,10 +22,11 @@ import path from "node:path";
 import { TextDecoder } from "node:util";
 import { excerptFromMarkdown } from "./markdown.js";
 import type { ChangeRecord, DocumentRecord, FolderRecord } from "./types.js";
+import type { VisualizationTrashNote } from "../shared/visualization.js";
 
 const STATE_FILE = "state.json";
 const STATE_FORMAT = "fieldnotes-vault";
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
 const TEMP_PREFIX = ".fieldnotes-tmp-";
 const MAX_VAULT_FILE_BYTES = 5_000_000;
 
@@ -66,6 +67,8 @@ export type VaultDocumentMeta = FileKey & {
   contentHash: string;
 };
 
+export type VaultTrashMeta = VaultDocumentMeta & { trashPath: string; trashedAt: string };
+
 export type VaultFolderMeta = FileKey & {
   id: string;
   name: string;
@@ -81,6 +84,8 @@ type PendingOperation = PendingBase & (
   | { kind: "document-create"; next: Omit<VaultDocumentMeta, keyof FileKey>; tempPath: string }
   | { kind: "document-update"; next: Omit<VaultDocumentMeta, keyof FileKey>; oldPath: string; oldHash: string; tempPath: string }
   | { kind: "document-delete"; id: string; title: string; oldPath: string; oldHash: string; nextVersion: number }
+  | { kind: "document-trash"; id: string; oldPath: string; oldHash: string; trashPath: string; trashedAt: string; nextVersion: number }
+  | { kind: "document-restore"; id: string; trashPath: string; next: Omit<VaultDocumentMeta, keyof FileKey>; change: ChangeRecord }
   | { kind: "folder-create"; next: Omit<VaultFolderMeta, keyof FileKey> }
   | { kind: "folder-update"; next: Omit<VaultFolderMeta, keyof FileKey>; oldPath: string; tempPath?: string }
   | { kind: "folder-delete"; id: string; name: string; oldPath: string; nextVersion: number }
@@ -92,6 +97,7 @@ export type VaultState = {
   vaultId: string;
   sequence: number;
   documents: VaultDocumentMeta[];
+  trashedDocuments: VaultTrashMeta[];
   folders: VaultFolderMeta[];
   changes: ChangeRecord[];
   pending?: PendingOperation;
@@ -114,6 +120,8 @@ export type LegacyDocument = {
   updatedAt: string;
   version: number;
 };
+
+export type LegacyTrashedDocument = LegacyDocument & { trashedAt: string };
 
 export type LegacyFolder = {
   id: string;
@@ -339,6 +347,10 @@ function isVaultPath(value: unknown): value is string {
     && !value.split("/").some((segment) => !segment || segment === "." || segment === ".." || normalizedNameKey(segment) === ".fieldnotes");
 }
 
+function isTrashPath(value: unknown, id: unknown): value is string {
+  return typeof id === "string" && UUID_PATTERN.test(id) && value === `.fieldnotes/trash/${id}.md`;
+}
+
 function isTimestamp(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
@@ -378,6 +390,19 @@ function isPendingOperation(value: unknown, sequence: number): value is PendingO
     return UUID_PATTERN.test(String(value.id)) && typeof value.title === "string"
       && pathFields(["oldPath"]) && /^[0-9a-f]{64}$/i.test(String(value.oldHash));
   }
+  if (value.kind === "document-trash") {
+    return UUID_PATTERN.test(String(value.id)) && pathFields(["oldPath"])
+      && isTrashPath(value.trashPath, value.id) && /^[0-9a-f]{64}$/i.test(String(value.oldHash))
+      && isTimestamp(value.trashedAt) && Number.isSafeInteger(value.nextVersion) && Number(value.nextVersion) >= 2;
+  }
+  if (value.kind === "document-restore") {
+    if (!UUID_PATTERN.test(String(value.id)) || !isTrashPath(value.trashPath, value.id) || !isRecord(value.next)) return false;
+    return value.next.id === value.id && typeof value.next.title === "string"
+      && (value.next.folderId === null || UUID_PATTERN.test(String(value.next.folderId)))
+      && isVaultPath(value.next.relativePath) && isTimestamp(value.next.createdAt) && isTimestamp(value.next.updatedAt)
+      && Number.isSafeInteger(value.next.version) && Number(value.next.version) >= 2
+      && /^[0-9a-f]{64}$/i.test(String(value.next.contentHash));
+  }
   if (value.kind === "folder-create" || value.kind === "folder-update") {
     if (!isRecord(value.next) || !UUID_PATTERN.test(String(value.next.id))
       || typeof value.next.name !== "string"
@@ -396,7 +421,7 @@ function shallowState(value: unknown): value is VaultState {
   if (!isRecord(value) || value.format !== STATE_FORMAT || value.schemaVersion !== STATE_VERSION
     || typeof value.vaultId !== "string" || !UUID_PATTERN.test(value.vaultId)
     || !Number.isSafeInteger(value.sequence) || Number(value.sequence) < 0
-    || !Array.isArray(value.documents) || !Array.isArray(value.folders) || !Array.isArray(value.changes)) return false;
+    || !Array.isArray(value.documents) || !Array.isArray(value.trashedDocuments) || !Array.isArray(value.folders) || !Array.isArray(value.changes)) return false;
   const documentsValid = value.documents.every((entry) => isRecord(entry)
     && UUID_PATTERN.test(String(entry.id)) && typeof entry.title === "string"
     && (entry.folderId === null || UUID_PATTERN.test(String(entry.folderId)))
@@ -408,6 +433,13 @@ function shallowState(value: unknown): value is VaultState {
     && (entry.parentId === null || UUID_PATTERN.test(String(entry.parentId)))
     && isVaultPath(entry.relativePath) && isTimestamp(entry.createdAt) && isTimestamp(entry.updatedAt)
     && Number.isSafeInteger(entry.version) && Number(entry.version) >= 1 && isFileKey(entry));
+  const trashValid = value.trashedDocuments.every((entry) => isRecord(entry)
+    && UUID_PATTERN.test(String(entry.id)) && typeof entry.title === "string"
+    && (entry.folderId === null || UUID_PATTERN.test(String(entry.folderId)))
+    && isVaultPath(entry.relativePath) && isTrashPath(entry.trashPath, entry.id)
+    && isTimestamp(entry.createdAt) && isTimestamp(entry.updatedAt) && isTimestamp(entry.trashedAt)
+    && Number.isSafeInteger(entry.version) && Number(entry.version) >= 1
+    && /^[0-9a-f]{64}$/i.test(String(entry.contentHash)) && isFileKey(entry));
   const changesValid = value.changes.every(isChange)
     && value.changes.every((change) => change.seq <= Number(value.sequence));
   const uniqueIds = (entries: unknown[]) => new Set(entries.map((entry) => isRecord(entry) ? entry.id : undefined)).size === entries.length;
@@ -417,7 +449,8 @@ function shallowState(value: unknown): value is VaultState {
   const orderedUniqueChanges = new Set(changeSequences).size === changeSequences.length
     && changeSequences.every((sequence, index) => index === 0 || sequence > changeSequences[index - 1]);
   const pendingValid = value.pending === undefined || isPendingOperation(value.pending, Number(value.sequence));
-  return documentsValid && foldersValid && changesValid && uniqueIds(value.documents) && uniqueIds(value.folders)
+  return documentsValid && foldersValid && trashValid && changesValid
+    && uniqueIds([...value.documents, ...value.trashedDocuments]) && uniqueIds(value.folders)
     && uniquePaths && orderedUniqueChanges && pendingValid;
 }
 
@@ -475,8 +508,12 @@ export class FileVault {
       } catch {
         throw new VaultStorageError("Vault metadata is unreadable; original Markdown files were left untouched.", "vault_state_invalid", 409);
       }
-      if (!shallowState(parsed)) throw new VaultStorageError("Vault metadata has an unsupported format; original Markdown files were left untouched.", "vault_state_invalid", 409);
-      this.state = parsed;
+      const migrated = isRecord(parsed) && parsed.schemaVersion === 1
+        ? { ...parsed, schemaVersion: STATE_VERSION, trashedDocuments: [] }
+        : parsed;
+      if (!shallowState(migrated)) throw new VaultStorageError("Vault metadata has an unsupported format; original Markdown files were left untouched.", "vault_state_invalid", 409);
+      this.state = migrated;
+      if (migrated !== parsed) writeAtomic(this.statePath, Buffer.from(`${JSON.stringify(this.state, null, 2)}\n`, "utf8"));
     } else {
       this.state = {
         format: STATE_FORMAT,
@@ -484,6 +521,7 @@ export class FileVault {
         vaultId: randomUUID(),
         sequence: 0,
         documents: [],
+        trashedDocuments: [],
         folders: [],
         changes: [],
       };
@@ -505,6 +543,23 @@ export class FileVault {
 
   getDocumentMeta(id: string): VaultDocumentMeta | undefined {
     return this.state.documents.find((document) => document.id === id);
+  }
+
+  listTrashedDocuments(): VisualizationTrashNote[] {
+    return this.state.trashedDocuments.map((meta) => {
+      const info = this.trashFileInfo(meta.id);
+      if (!info || info.contentHash !== meta.contentHash) {
+        throw new VaultVersionConflictError(meta.version, info?.contentHash ?? "0".repeat(64));
+      }
+      return {
+        id: meta.id,
+        title: meta.title,
+        folderId: meta.folderId,
+        trashedAt: meta.trashedAt,
+        version: meta.version,
+        excerpt: excerptFromMarkdown(info.body, 150),
+      };
+    });
   }
 
   getFolderMeta(id: string): VaultFolderMeta | undefined {
@@ -552,6 +607,36 @@ export class FileVault {
       throw new VaultStorageError("The absolute vault path exceeds the portable 900-byte limit.", "vault_path_too_long", 409);
     }
     return resolved;
+  }
+
+  private safeTrashAbsolute(id: string, allowMissing = false): string {
+    if (!UUID_PATTERN.test(id)) throw new VaultStorageError("Trash entries require a valid note id.", "vault_path_invalid", 400);
+    const trashDirectory = path.join(this.metadataDir, "trash");
+    if (existsSync(trashDirectory) && statKind(trashDirectory) === "symlink") {
+      throw new VaultStorageError("The private trash directory cannot be a symbolic link.", "vault_symlink", 409);
+    }
+    if (!existsSync(trashDirectory) && !allowMissing) {
+      throw new VaultStorageError("The private trash entry is missing.", "vault_entry_invalid", 409);
+    }
+    if (!existsSync(trashDirectory) && allowMissing) mkdirSync(trashDirectory, { recursive: false, mode: 0o700 });
+    if (existsSync(trashDirectory) && statKind(trashDirectory) !== "directory") {
+      throw new VaultStorageError("The private trash path is not a directory.", "vault_entry_invalid", 409);
+    }
+    if (existsSync(trashDirectory)) chmodSync(trashDirectory, 0o700);
+    return path.join(trashDirectory, `${id}.md`);
+  }
+
+  private trashFileInfo(id: string, allowMissing = false): { body: string; contentHash: string } | undefined {
+    const absolute = this.safeTrashAbsolute(id, allowMissing);
+    if (!existsSync(absolute)) return undefined;
+    if (statKind(absolute) !== "file") throw new VaultStorageError("A trash entry must be a regular file.", "vault_entry_invalid", 409);
+    const bytes = readRegularFileNoFollow(absolute);
+    if (bytes.byteLength > MAX_VAULT_FILE_BYTES) throw new VaultStorageError("A trashed note exceeds the vault file limit.", "vault_file_too_large", 409);
+    let body: string;
+    try { body = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+    catch { throw new VaultStorageError("A trashed note is not valid UTF-8.", "vault_invalid_encoding", 409); }
+    if (body.length > 250_000) throw new VaultStorageError("A trashed note exceeds the index limit.", "vault_file_too_large", 409);
+    return { body, contentHash: hashBytes(bytes) };
   }
 
   private fileInfo(relative: string): { body: string; contentHash: string; key: FileKey; byteLength: number } {
@@ -793,6 +878,39 @@ export class FileVault {
       this.persist(this.appendChange({ ...state, documents }, pending.change));
       return;
     }
+    if (pending.kind === "document-trash") {
+      const current = state.documents.find((document) => document.id === pending.id);
+      const info = this.trashFileInfo(pending.id);
+      if (!current || !info || info.contentHash !== pending.oldHash || current.contentHash !== pending.oldHash) {
+        throw new VaultStorageError("The trash operation could not verify the original Markdown; the note was preserved.", "vault_external_conflict", 409);
+      }
+      const absolute = this.safeTrashAbsolute(pending.id);
+      const nextTrash: VaultTrashMeta = {
+        ...current,
+        ...fileKey(absolute),
+        trashPath: pending.trashPath,
+        trashedAt: pending.trashedAt,
+      };
+      const nextState = {
+        ...state,
+        documents: state.documents.filter((document) => document.id !== pending.id),
+        trashedDocuments: [...state.trashedDocuments.filter((document) => document.id !== pending.id), nextTrash],
+      };
+      this.persist(this.appendChange(nextState, pending.change));
+      return;
+    }
+    if (pending.kind === "document-restore") {
+      const info = this.fileInfo(pending.next.relativePath);
+      if (info.contentHash !== pending.next.contentHash) throw new VaultStorageError("The restored Markdown changed before it could be indexed.", "vault_external_conflict", 409);
+      const restored: VaultDocumentMeta = { ...pending.next, ...info.key };
+      const nextState = {
+        ...state,
+        documents: [...state.documents.filter((document) => document.id !== pending.id), restored],
+        trashedDocuments: state.trashedDocuments.filter((document) => document.id !== pending.id),
+      };
+      this.persist(this.appendChange(nextState, pending.change));
+      return;
+    }
     if (pending.kind === "folder-create") {
       const key = this.statFileKey(pending.next.relativePath);
       const folders = [...state.folders.filter((folder) => folder.id !== pending.next.id), { ...pending.next, ...key }];
@@ -865,6 +983,18 @@ export class FileVault {
       if (current === undefined) this.completePending(pending);
       else if (current === pending.oldHash) this.clearPending();
       else throw new VaultStorageError("A pending delete conflicts with a file changed by another process.", "vault_external_conflict", 409);
+    } else if (pending.kind === "document-trash") {
+      const original = hashAt(pending.oldPath);
+      const trashed = this.trashFileInfo(pending.id, true)?.contentHash;
+      if (original === pending.oldHash && trashed === undefined) this.clearPending();
+      else if (original === undefined && trashed === pending.oldHash) this.completePending(pending);
+      else throw new VaultStorageError("A pending trash operation conflicts with a changed Markdown file; both copies were preserved.", "vault_external_conflict", 409);
+    } else if (pending.kind === "document-restore") {
+      const trashed = this.trashFileInfo(pending.id, true)?.contentHash;
+      const restored = hashAt(pending.next.relativePath);
+      if (trashed === undefined && restored === pending.next.contentHash) this.completePending(pending);
+      else if (trashed === pending.next.contentHash && restored === undefined) this.clearPending();
+      else throw new VaultStorageError("A pending restore conflicts with a changed Markdown file; both copies were preserved.", "vault_external_conflict", 409);
     } else if (pending.kind === "folder-create") {
       if (this.pathExists(pending.next.relativePath)) {
         if (statKind(this.safeAbsolute(pending.next.relativePath)) !== "directory") throw new VaultStorageError("A pending folder creation conflicts with a non-folder entry.", "vault_external_conflict", 409);
@@ -1200,6 +1330,74 @@ export class FileVault {
     return change;
   }
 
+  trashDocument(id: string, expectedVersion: number, expectedHash?: string): VisualizationTrashNote {
+    const current = this.getDocumentMeta(id);
+    if (!current) throw new VaultStorageError("Note not found.", "not_found", 404);
+    const info = this.fileInfo(current.relativePath);
+    if (current.version !== expectedVersion || info.contentHash !== current.contentHash || (expectedHash && expectedHash !== current.contentHash)) {
+      throw new VaultVersionConflictError(current.version, info.contentHash);
+    }
+    const trashedAt = new Date().toISOString();
+    const trashPath = `.fieldnotes/trash/${id}.md`;
+    const change = eventFor(this.state, "document", id, current.title, "deleted", current.version + 1, trashedAt);
+    const pending: PendingOperation = {
+      kind: "document-trash", id, oldPath: current.relativePath, oldHash: current.contentHash,
+      trashPath, trashedAt, nextVersion: current.version + 1, change,
+    };
+    this.runPending(pending, () => {
+      const currentInfo = this.fileInfo(current.relativePath);
+      if (currentInfo.contentHash !== current.contentHash) throw new VaultVersionConflictError(current.version, currentInfo.contentHash);
+      const source = this.safeAbsolute(current.relativePath);
+      const target = this.safeTrashAbsolute(id, true);
+      if (existsSync(target)) throw new VaultStorageError("A trash entry already exists for this note id.", "vault_state_conflict", 409);
+      renameSync(source, target);
+      fsyncDirectory(path.dirname(source));
+      fsyncDirectory(path.dirname(target));
+    });
+    const trashed = this.listTrashedDocuments().find((note) => note.id === id);
+    if (!trashed) throw new VaultStorageError("Trashed note was not visible after its durable commit.");
+    return trashed;
+  }
+
+  restoreTrashedDocument(id: string, expectedVersion: number): { document: DocumentRecord; change: ChangeRecord } {
+    const current = this.state.trashedDocuments.find((document) => document.id === id);
+    if (!current) throw new VaultStorageError("Trashed note not found.", "not_found", 404);
+    const info = this.trashFileInfo(id);
+    if (!info || current.version !== expectedVersion || info.contentHash !== current.contentHash) {
+      throw new VaultVersionConflictError(current.version, info?.contentHash ?? "0".repeat(64));
+    }
+    const folderId = current.folderId !== null && this.getFolderMeta(current.folderId) ? current.folderId : null;
+    const relativePath = this.notePath(current.title, id, folderId);
+    const updatedAt = new Date().toISOString();
+    const next: Omit<VaultDocumentMeta, keyof FileKey> = {
+      id: current.id,
+      title: current.title,
+      folderId,
+      relativePath,
+      createdAt: current.createdAt,
+      updatedAt,
+      version: current.version + 1,
+      contentHash: current.contentHash,
+    };
+    const change = eventFor(this.state, "document", id, current.title, "created", next.version, updatedAt);
+    const pending: PendingOperation = { kind: "document-restore", id, trashPath: current.trashPath, next, change };
+    this.runPending(pending, () => {
+      const currentInfo = this.trashFileInfo(id);
+      if (!currentInfo || currentInfo.contentHash !== current.contentHash) {
+        throw new VaultVersionConflictError(current.version, currentInfo?.contentHash ?? "0".repeat(64));
+      }
+      const source = this.safeTrashAbsolute(id);
+      const target = this.safeAbsolute(relativePath, true);
+      if (existsSync(target)) throw new VaultStorageError("The restore destination already exists; the note was left in trash.", "vault_name_collision", 409);
+      renameSync(source, target);
+      fsyncDirectory(path.dirname(source));
+      fsyncDirectory(path.dirname(target));
+    });
+    const document = this.snapshot().documents.find((entry) => entry.id === id);
+    if (!document) throw new VaultStorageError("Restored note was not visible after its durable commit.");
+    return { document, change };
+  }
+
   createFolder(name: string, parentId: string | null): { folder: FolderRecord; change: ChangeRecord } {
     if (parentId !== null && !this.getFolderMeta(parentId)) throw new VaultStorageError("Folder not found.", "not_found", 404);
     const parent = this.relativeForFolderId(parentId);
@@ -1309,6 +1507,7 @@ export function createVaultFromLegacy(
   folders: LegacyFolder[],
   changes: ChangeRecord[],
   migrationManifestPath: string,
+  trashedDocuments: LegacyTrashedDocument[] = [],
 ): { vaultId: string; documentCount: number; folderCount: number; sequence: number } {
   const destination = path.resolve(root);
   if (existsSync(destination)) throw new VaultStorageError("Migration destination must not already exist.", "vault_destination_exists", 409);
@@ -1322,7 +1521,9 @@ export function createVaultFromLegacy(
   try {
   if (existsSync(resolvedManifest)) throw new VaultStorageError("Migration manifest already exists; refusing to overwrite it.", "vault_manifest_exists", 409);
   if (new Set(documents.map((document) => document.id)).size !== documents.length
-    || new Set(folders.map((folder) => folder.id)).size !== folders.length) {
+    || new Set(folders.map((folder) => folder.id)).size !== folders.length
+    || new Set([...documents, ...trashedDocuments].map((document) => document.id)).size !== documents.length + trashedDocuments.length
+    || new Set(trashedDocuments.map((document) => document.id)).size !== trashedDocuments.length) {
     throw new VaultStorageError("Legacy storage contains duplicate stable IDs.", "vault_migration_invalid", 409);
   }
   const metadata = path.join(staging, ".fieldnotes");
@@ -1376,6 +1577,7 @@ export function createVaultFromLegacy(
 
   const usedPaths = new Set<string>(folderMetas.map((folder) => normalizedRelativeKey(folder.relativePath)));
   const documentMetas: VaultDocumentMeta[] = [];
+  const trashMetas: VaultTrashMeta[] = [];
   const migrationDocuments: Array<{ id: string; title: string; folderId: string | null; relativePath: string; contentHash: string }> = [];
   const sortedDocuments = [...documents].sort((left, right) => left.id.localeCompare(right.id));
   for (const document of sortedDocuments) {
@@ -1428,6 +1630,40 @@ export function createVaultFromLegacy(
     if (roundtrip !== document.body) throw new VaultStorageError(`Markdown roundtrip failed for legacy note ${document.id}.`, "vault_migration_invalid", 409);
   }
 
+  if (trashedDocuments.length) mkdirSync(path.join(metadata, "trash"), { recursive: false, mode: 0o700 });
+  for (const document of trashedDocuments) {
+    if (!UUID_PATTERN.test(document.id) || !document.title.trim() || document.title.length > 160
+      || !isTimestamp(document.createdAt) || !isTimestamp(document.updatedAt) || !isTimestamp(document.trashedAt)
+      || !Number.isSafeInteger(document.version) || document.version < 1) {
+      throw new VaultStorageError("A trashed legacy note has invalid metadata.", "vault_migration_invalid", 409);
+    }
+    const bytes = Buffer.from(document.body, "utf8");
+    if (document.body.length > 250_000 || bytes.byteLength > MAX_VAULT_FILE_BYTES) {
+      throw new VaultStorageError(`Trashed legacy note ${document.id} exceeds the vault file limit.`, "vault_migration_invalid", 409);
+    }
+    const trashPath = `.fieldnotes/trash/${document.id}.md`;
+    const absolute = path.join(metadata, "trash", `${document.id}.md`);
+    writeNewDurable(absolute, bytes);
+    fsyncDirectory(path.dirname(absolute));
+    const parentRelative = document.folderId ? folderPaths.get(document.folderId) : "";
+    const relativeName = relativePath(parentRelative ?? "", safeNoteFileName(document.title, document.id, true));
+    const contentHash = hashBytes(bytes);
+    const meta: VaultTrashMeta = {
+      id: document.id,
+      title: document.title,
+      folderId: document.folderId,
+      relativePath: relativeName,
+      createdAt: document.createdAt,
+      updatedAt: document.updatedAt,
+      version: document.version,
+      contentHash,
+      trashPath,
+      trashedAt: document.trashedAt,
+      ...fileKey(absolute),
+    };
+    trashMetas.push(meta);
+  }
+
   const vaultId = randomUUID();
   const sequence = changes.reduce((maximum, change) => Math.max(maximum, change.seq), 0);
   const state: VaultState = {
@@ -1436,6 +1672,7 @@ export function createVaultFromLegacy(
     vaultId,
     sequence,
     documents: documentMetas,
+    trashedDocuments: trashMetas,
     folders: folderMetas,
     changes: [...changes].sort((left, right) => left.seq - right.seq),
   };
@@ -1445,8 +1682,9 @@ export function createVaultFromLegacy(
     format: "fieldnotes-migration-manifest",
     createdAt: new Date().toISOString(),
     vaultId,
-    sourceCounts: { documents: documents.length, folders: folders.length, changes: changes.length },
+    sourceCounts: { documents: documents.length, trashedDocuments: trashedDocuments.length, folders: folders.length, changes: changes.length },
     documents: migrationDocuments,
+    trashedDocuments: trashMetas.map(({ id, title, folderId, version, contentHash, trashedAt }) => ({ id, title, folderId, version, contentHash, trashedAt })),
     folders: folderMetas.map(({ id, name, parentId, relativePath: filePath }) => ({ id, name, parentId, filePath })),
   };
   writeNewDurable(resolvedManifest, Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8"));

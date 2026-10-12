@@ -1,4 +1,4 @@
-import type { VisualizationQuery, VisualizationQueryResponse } from "../../shared/visualization.ts";
+import type { VisualizationAction, VisualizationQuery, VisualizationQueryResponse } from "../../shared/visualization.ts";
 
 export interface BookmarkMetadata {
   title: string | null;
@@ -29,8 +29,12 @@ export interface MarkdownLiveEditorAdapters {
   saveSnippet?: (snippet: NewEditorSnippet) => Promise<EditorSnippet>;
   deleteSnippet?: (id: string) => Promise<void>;
   queryVisualization?: (query: VisualizationQuery, signal: AbortSignal) => Promise<VisualizationQueryResponse>;
+  executeVisualizationAction?: (action: VisualizationAction) => Promise<Record<string, unknown>>;
   subscribeToVaultChanges?: (onChange: () => void) => () => void;
   enableCustomVisualizations?: boolean;
+  isVisualizationTrusted?: (documentId: string, blockIndex: number, sourceHash: string) => boolean;
+  trustVisualization?: (documentId: string, blockIndex: number, sourceHash: string) => void;
+  revokeVisualizationTrust?: (documentId: string, blockIndex: number, sourceHash: string) => void;
 }
 
 export interface MarkdownLiveEditorProps {
@@ -42,4 +46,6 @@ export interface MarkdownLiveEditorProps {
   onFocus?: () => void;
   /** Reports an unexpected serializer failure so the host can keep an unsafe draft from being saved. */
   onSerializationSafetyChange?: (safe: boolean) => void;
+  visualizationDocumentId?: string;
+  openVisualizationNote?: (noteId: string) => Promise<void>;
 }
