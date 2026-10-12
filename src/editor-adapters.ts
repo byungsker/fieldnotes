@@ -5,6 +5,8 @@ import type {
   MarkdownLiveEditorAdapters,
   NewEditorSnippet,
 } from "../packages/markdown-live-editor";
+import type { VisualizationQuery, VisualizationQueryResponse } from "../shared/visualization";
+import { subscribeToVaultChanges } from "./vault-change-subscription";
 
 const SNIPPETS_KEY = "fieldnotes:editor-snippets:v1";
 const MAX_IMAGE_SOURCE_LENGTH = 20_000;
@@ -107,5 +109,14 @@ export function createFieldnotesEditorAdapters(): MarkdownLiveEditorAdapters {
     async deleteSnippet(id) {
       storeSnippets(listSnippets().filter((snippet) => snippet.id !== id));
     },
+    async queryVisualization(query: VisualizationQuery, signal: AbortSignal): Promise<VisualizationQueryResponse> {
+      return apiRequest<VisualizationQueryResponse>("/api/views/query", {
+        method: "POST",
+        body: JSON.stringify({ query }),
+        signal,
+      });
+    },
+    subscribeToVaultChanges,
+    enableCustomVisualizations: Boolean(import.meta.env?.DEV),
   };
 }

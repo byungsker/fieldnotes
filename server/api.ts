@@ -32,6 +32,7 @@ import {
   type KnowledgeDatabase,
 } from "./database.js";
 import { VaultStorageError } from "./vault.js";
+import { queryVisualizationNotes, validateVisualizationQuery, VisualizationQueryError } from "./visualizations.js";
 
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_TITLE_LENGTH = 160;
@@ -235,12 +236,17 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
   app.disable("x-powered-by");
   app.use((request, response, next) => {
     response.setHeader("X-Content-Type-Options", "nosniff");
-    response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-    response.setHeader("X-Frame-Options", "DENY");
-    response.setHeader(
-      "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
-    );
+    const visualizationRunner = request.path === "/visualization-runner.html";
+    const visualizationRunnerScript = request.path === "/visualization-runner.js";
+    response.setHeader("Referrer-Policy", visualizationRunner ? "no-referrer" : "strict-origin-when-cross-origin");
+    response.setHeader("X-Frame-Options", visualizationRunner ? "SAMEORIGIN" : "DENY");
+    if (visualizationRunnerScript) {
+      response.setHeader("Access-Control-Allow-Origin", "null");
+      response.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    }
+    response.setHeader("Content-Security-Policy", visualizationRunner
+      ? "default-src 'none'; script-src 'sha256-BbBDEgqFYyoqpFjmokiM5En4EImdCJzuU5TdvyzIGoU=' blob:; script-src-elem 'sha256-BbBDEgqFYyoqpFjmokiM5En4EImdCJzuU5TdvyzIGoU=' blob:; style-src 'self' 'unsafe-inline'; img-src 'none'; font-src 'none'; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'; frame-ancestors 'self'; worker-src blob:"
+      : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
 
     if (allowedTailscaleLogin) {
       // Tailscale Serve is the trusted proxy: it removes client-supplied identity headers
@@ -264,7 +270,10 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
     const origin = request.get("origin");
     if (origin) {
       const expectedOrigin = `${request.protocol}://${request.get("host")}`;
-      if (origin !== expectedOrigin && origin !== configuredPublicOrigin) {
+      const sandboxRunnerScript = origin === "null"
+        && request.method === "GET"
+        && request.path === "/visualization-runner.js";
+      if (origin !== expectedOrigin && origin !== configuredPublicOrigin && !sandboxRunnerScript) {
         sendError(response, 403, "origin_rejected", "Cross-origin requests are not allowed.");
         return;
       }
@@ -337,6 +346,15 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
 
   app.get("/api/documents/:id", (request, response) => {
     currentDocument(database, request, response);
+  });
+
+  app.post("/api/views/query", (request, response) => {
+    const serialized = JSON.stringify(request.body?.query);
+    if (!serialized || Buffer.byteLength(serialized, "utf8") > 16_000) {
+      throw new RequestValidationError("query must be a JSON object smaller than 16 KB.");
+    }
+    const query = validateVisualizationQuery(request.body.query);
+    response.json(queryVisualizationNotes(database.db, query));
   });
 
   app.put("/api/documents/:id", (request, response) => {
@@ -517,6 +535,10 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
     }
     if (error instanceof RequestValidationError) {
       sendError(response, 400, "invalid_request", error.message);
+      return;
+    }
+    if (error instanceof VisualizationQueryError) {
+      sendError(response, error.status, "invalid_view_query", error.message);
       return;
     }
     if (error instanceof UnsafeBookmarkUrlError) {

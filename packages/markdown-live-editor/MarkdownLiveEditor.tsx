@@ -30,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 import { BookmarkCard } from "./BookmarkCardExtension.tsx";
+import { FieldnotesViewBlock } from "./FieldnotesViewBlock.tsx";
 import { PreservedMarkdown, PreservedWhitespace } from "./PreservedMarkdownExtension.tsx";
 import { MarkdownDocument } from "./MarkdownDocumentExtension.ts";
 import { WikiLink } from "./WikiLinkExtension.tsx";
@@ -154,10 +155,24 @@ export function MarkdownLiveEditor({
     return fetchMetadata ? fetchMetadata(url, signal) : Promise.resolve(null);
   }, []);
 
+  const queryVisualizationAdapter = useCallback((query: Parameters<NonNullable<MarkdownLiveEditorAdapters["queryVisualization"]>>[0], signal: AbortSignal) => {
+    const run = adaptersRef.current?.queryVisualization;
+    return run ? run(query, signal) : Promise.reject(new Error("Vault query is unavailable in this editor."));
+  }, []);
+  const subscribeToVaultChangesAdapter = useCallback((onChange: () => void) => {
+    return adaptersRef.current?.subscribeToVaultChanges?.(onChange) ?? (() => undefined);
+  }, []);
+  const enableCustomVisualizations = adapters?.enableCustomVisualizations === true;
+
   const extensions = useMemo(
     () => [
       StarterKit.configure({ codeBlock: false, link: false, document: false }),
       MarkdownDocument,
+      FieldnotesViewBlock.configure({
+        queryVisualization: queryVisualizationAdapter,
+        subscribeToVaultChanges: subscribeToVaultChangesAdapter,
+        enableCustomVisualizations,
+      }),
       CodeBlockLowlight.configure({ lowlight, defaultLanguage: "plaintext" }),
       Link.configure({
         openOnClick: false,
@@ -175,7 +190,7 @@ export function MarkdownLiveEditor({
       PreservedMarkdown,
       PreservedWhitespace,
     ],
-    [fetchMetadataAdapter]
+    [fetchMetadataAdapter, queryVisualizationAdapter, subscribeToVaultChangesAdapter, enableCustomVisualizations]
   );
 
   const insertUploadedImage = useCallback(async (file: File, position?: number | { from: number; to: number }) => {
@@ -343,7 +358,11 @@ export function MarkdownLiveEditor({
         ? restoreMarkdownLineEndings(content, "lf")
         : content;
       try {
-        editor.commands.setContent(parseMarkdownWithPreservedBlocks(markdownApi, serializedInput), { emitUpdate: false });
+        editor.chain()
+          // Loading a saved note is hydration, not a user edit to undo.
+          .command(({ tr }) => { tr.setMeta("addToHistory", false); return true; })
+          .setContent(parseMarkdownWithPreservedBlocks(markdownApi, serializedInput), { emitUpdate: false })
+          .run();
       } catch {
         richModeRef.current = false;
         setHasSerializationError(true);

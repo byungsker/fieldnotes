@@ -1,3 +1,5 @@
+import type { VisualizationQuery, VisualizationQueryResponse } from "../../shared/visualization.ts";
+
 export interface BookmarkMetadata {
   title: string | null;
   description: string | null;
@@ -26,6 +28,9 @@ export interface MarkdownLiveEditorAdapters {
   listSnippets?: () => Promise<EditorSnippet[]>;
   saveSnippet?: (snippet: NewEditorSnippet) => Promise<EditorSnippet>;
   deleteSnippet?: (id: string) => Promise<void>;
+  queryVisualization?: (query: VisualizationQuery, signal: AbortSignal) => Promise<VisualizationQueryResponse>;
+  subscribeToVaultChanges?: (onChange: () => void) => () => void;
+  enableCustomVisualizations?: boolean;
 }
 
 export interface MarkdownLiveEditorProps {

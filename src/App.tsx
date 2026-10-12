@@ -2944,6 +2944,7 @@ export function App() {
                 onCompositionEndCapture={() => { composingRef.current = false; setIsComposing(false); }}
               >
                 <MarkdownLiveEditor
+                  key={displayDocument.id}
                   value={draftBody}
                   adapters={editorAdapters}
                   ariaLabel="Markdown body"

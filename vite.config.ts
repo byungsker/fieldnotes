@@ -9,6 +9,7 @@ export default defineConfig({
     host: "127.0.0.1",
     port: Number(process.env.VITE_PORT ?? 4177),
     strictPort: true,
+    cors: { origin: ["null"] },
     proxy: {
       "/api": { target: apiOrigin },
     },

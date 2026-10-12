@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-BbBDEgqFYyoqpFjmokiM5En4EImdCJzuU5TdvyzIGoU=' blob:; script-src-elem 'sha256-BbBDEgqFYyoqpFjmokiM5En4EImdCJzuU5TdvyzIGoU=' blob:; style-src 'self' 'unsafe-inline'; img-src 'none'; font-src 'none'; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'; worker-src blob:">
+    <title>Fieldnotes visualization runner</title>
+    <style>
+      :root { color-scheme: light dark; font: 14px/1.45 system-ui, sans-serif; }
+      body { margin: 0; padding: 12px; color: CanvasText; background: Canvas; }
+      #root { min-width: 0; overflow-wrap: anywhere; }
+    </style>
+    <script defer src="/visualization-runner.js" integrity="sha256-BbBDEgqFYyoqpFjmokiM5En4EImdCJzuU5TdvyzIGoU=" crossorigin="anonymous"></script>
+  </head>
+  <body>
+    <main id="root" aria-live="polite">Waiting for the Fieldnotes host…</main>
+  </body>
+</html>
