@@ -2947,6 +2947,7 @@ export function App() {
                   value={draftBody}
                   adapters={editorAdapters}
                   ariaLabel="Markdown body"
+                  showToolbar={false}
                   minHeight={230}
                   onFocus={() => {
                     const control = document.activeElement;

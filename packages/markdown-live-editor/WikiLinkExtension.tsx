@@ -1,5 +1,5 @@
 import { mergeAttributes, nodeInputRule, Node } from "@tiptap/core";
-import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
+import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { parseWikiLinkSyntax } from "./markdown-safety.ts";
 
 interface WikiLinkAttributes {
@@ -13,18 +13,26 @@ function labelFor(attributes: Partial<WikiLinkAttributes>): string {
   return attributes.alias?.trim() || attributes.target?.trim() || "Wiki link";
 }
 
-function WikiLinkView({ node }: NodeViewProps) {
-  const attributes = node.attrs as WikiLinkAttributes;
-  return (
-    <NodeViewWrapper
-      as="span"
-      className="mle-wikilink-token"
-      aria-label={`Wikilink: ${labelFor(attributes)}`}
-      contentEditable={false}
-    >
-      {labelFor(attributes)}
-    </NodeViewWrapper>
-  );
+function wikiLinkNodeView({ node: initialNode }: { node: ProseMirrorNode }) {
+  let node = initialNode;
+  const dom = document.createElement("span");
+  dom.className = "mle-wikilink-token";
+  dom.contentEditable = "false";
+  const render = (current: ProseMirrorNode) => {
+    const attributes = current.attrs as WikiLinkAttributes;
+    dom.setAttribute("aria-label", `Wikilink: ${labelFor(attributes)}`);
+    dom.textContent = labelFor(attributes);
+  };
+  render(node);
+  return {
+    dom,
+    update(updatedNode: ProseMirrorNode) {
+      if (updatedNode.type !== node.type) return false;
+      node = updatedNode;
+      render(updatedNode);
+      return true;
+    },
+  };
 }
 
 export const WikiLink = Node.create({
@@ -62,7 +70,7 @@ export const WikiLink = Node.create({
   },
 
   addNodeView() {
-    return ReactNodeViewRenderer(WikiLinkView);
+    return wikiLinkNodeView;
   },
 
   addInputRules() {

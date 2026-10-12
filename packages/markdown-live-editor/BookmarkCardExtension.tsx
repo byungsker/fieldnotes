@@ -1,7 +1,6 @@
-import { Node, mergeAttributes } from "@tiptap/core";
-import { ReactNodeViewRenderer, NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
+import { Node, mergeAttributes, type NodeViewRendererProps } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
-import { useEffect, useState } from "react";
+import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { safeHttpUrl, safeImageSource, isStandaloneWebUrl } from "./markdown-safety.ts";
 import type { BookmarkMetadata, MarkdownLiveEditorAdapters } from "./types.ts";
 
@@ -17,64 +16,113 @@ declare module "@tiptap/core" {
   }
 }
 
-function BookmarkCardView({ node, deleteNode, extension }: NodeViewProps) {
-  const rawUrl = typeof node.attrs.url === "string" ? node.attrs.url : "";
-  const url = safeHttpUrl(rawUrl);
-  const [metadata, setMetadata] = useState<BookmarkMetadata | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const fetchMetadata = (extension.options as BookmarkCardOptions).fetchBookmarkMetadata;
+function bookmarkNodeView({ node: initialNode, editor, getPos, extension }: NodeViewRendererProps) {
+  let node: ProseMirrorNode = initialNode;
+  let metadata: BookmarkMetadata | null = null;
+  let loading = false;
+  let failed = false;
+  let controller: AbortController | null = null;
+  const rawUrl = () => typeof node.attrs.url === "string" ? node.attrs.url : "";
+  const url = () => safeHttpUrl(rawUrl());
+  const dom = document.createElement("div");
+  dom.className = "mle-bookmark-card";
+  dom.contentEditable = "false";
+  const link = document.createElement("a");
+  link.className = "mle-bookmark-card-link";
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  const copy = document.createElement("span");
+  copy.className = "mle-bookmark-card-copy";
+  const title = document.createElement("strong");
+  const description = document.createElement("span");
+  const meta = document.createElement("small");
+  copy.append(title, description, meta);
+  const invalidLabel = document.createElement("span");
+  invalidLabel.textContent = "Unsafe bookmark URL preserved as text.";
+  invalidLabel.hidden = true;
+  const image = document.createElement("img");
+  image.loading = "lazy";
+  image.referrerPolicy = "no-referrer";
+  link.append(copy, image);
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "mle-bookmark-card-remove";
+  remove.setAttribute("aria-label", "Remove bookmark card");
+  remove.textContent = "×";
+  remove.addEventListener("click", () => {
+    const position = getPos();
+    if (typeof position === "number") editor.view.dispatch(editor.state.tr.delete(position, position + node.nodeSize));
+  });
+  dom.append(link, remove);
 
-  useEffect(() => {
-    setMetadata(null);
-    setFailed(false);
-    if (!url || !fetchMetadata) {
-      setLoading(false);
+  const render = () => {
+    const safeUrl = url();
+    if (!safeUrl) {
+      dom.classList.add("mle-bookmark-card-invalid");
+      link.removeAttribute("href");
+      title.hidden = true;
+      description.hidden = true;
+      meta.hidden = true;
+      invalidLabel.hidden = false;
+      copy.prepend(invalidLabel);
+      image.hidden = true;
+      remove.hidden = true;
       return;
     }
-
-    const controller = new AbortController();
-    setLoading(true);
-    void fetchMetadata(url, controller.signal)
-      .then((result) => {
-        if (!controller.signal.aborted && result) setMetadata(result);
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setFailed(true);
-      })
+    dom.classList.remove("mle-bookmark-card-invalid");
+    invalidLabel.remove();
+    title.hidden = false;
+    meta.hidden = false;
+    remove.hidden = false;
+    link.href = safeUrl;
+    const hostname = new URL(safeUrl).hostname;
+    title.textContent = metadata?.title || hostname;
+    description.textContent = metadata?.description || "";
+    description.hidden = !metadata?.description;
+    meta.textContent = `${metadata?.siteName || hostname}${loading ? " · Loading preview" : failed ? " · Preview unavailable" : ""}`;
+    const imageUrl = metadata?.image ? safeImageSource(metadata.image) : null;
+    if (imageUrl) {
+      image.src = imageUrl;
+      image.alt = metadata?.title || "";
+      image.hidden = false;
+    } else {
+      image.removeAttribute("src");
+      image.hidden = true;
+    }
+  };
+  const loadMetadata = () => {
+    controller?.abort();
+    controller = null;
+    metadata = null;
+    failed = false;
+    const safeUrl = url();
+    const fetchMetadata = (extension.options as BookmarkCardOptions).fetchBookmarkMetadata;
+    loading = Boolean(safeUrl && fetchMetadata);
+    render();
+    if (!safeUrl || !fetchMetadata) return;
+    const requestController = new AbortController();
+    controller = requestController;
+    void fetchMetadata(safeUrl, requestController.signal)
+      .then((result) => { if (!requestController.signal.aborted && result) metadata = result; })
+      .catch(() => { if (!requestController.signal.aborted) failed = true; })
       .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
+        if (requestController.signal.aborted) return;
+        loading = false;
+        render();
       });
-
-    return () => controller.abort();
-  }, [fetchMetadata, url]);
-
-  const hostname = url ? new URL(url).hostname : rawUrl;
-  const image = metadata?.image ? safeImageSource(metadata.image) : null;
-
-  if (!url) {
-    return (
-      <NodeViewWrapper className="mle-bookmark-card mle-bookmark-card-invalid" contentEditable={false}>
-        <span>Unsafe bookmark URL preserved as text.</span>
-      </NodeViewWrapper>
-    );
-  }
-
-  return (
-    <NodeViewWrapper className="mle-bookmark-card" contentEditable={false}>
-      <a className="mle-bookmark-card-link" href={url} target="_blank" rel="noopener noreferrer">
-        <span className="mle-bookmark-card-copy">
-          <strong>{metadata?.title || hostname}</strong>
-          {metadata?.description && <span>{metadata.description}</span>}
-          <small>{metadata?.siteName || hostname}{loading ? " · Loading preview" : failed ? " · Preview unavailable" : ""}</small>
-        </span>
-        {image && <img src={image} alt={metadata?.title || ""} loading="lazy" referrerPolicy="no-referrer" />}
-      </a>
-      <button type="button" className="mle-bookmark-card-remove" onClick={deleteNode} aria-label="Remove bookmark card">
-        ×
-      </button>
-    </NodeViewWrapper>
-  );
+  };
+  loadMetadata();
+  return {
+    dom,
+    update(updatedNode: ProseMirrorNode) {
+      if (updatedNode.type !== node.type) return false;
+      const urlChanged = updatedNode.attrs.url !== node.attrs.url;
+      node = updatedNode;
+      if (urlChanged) loadMetadata();
+      return true;
+    },
+    destroy() { controller?.abort(); },
+  };
 }
 
 export const BookmarkCard = Node.create<BookmarkCardOptions>({
@@ -110,7 +158,7 @@ export const BookmarkCard = Node.create<BookmarkCardOptions>({
   },
 
   addNodeView() {
-    return ReactNodeViewRenderer(BookmarkCardView);
+    return bookmarkNodeView;
   },
 
   addCommands() {
