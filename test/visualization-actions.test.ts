@@ -5,9 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { createApp } from "../server/api.js";
-import { closeDatabase, createDocument, openDatabase, trashDocument, restoreTrashedDocument } from "../server/database.js";
+import { closeDatabase, createDocument, listTrashedDocuments, openDatabase, trashDocument, restoreTrashedDocument } from "../server/database.js";
 import { parseFrontmatter } from "../server/frontmatter.js";
 import { TmdbMovieSearchAdapter } from "../server/movie-search.js";
+import { ViewQueryLimitError } from "../server/view-query-limits.js";
 import { parseVisualizationUiEvent, type MovieSearchResult } from "../shared/visualization.js";
 import { parseFieldnotesViewConfig } from "../packages/markdown-live-editor/fieldnotes-view-config.js";
 
@@ -222,6 +223,26 @@ test("create actions are idempotent and reject action-id reuse with a different 
   assert.equal(collision.response.status, 409);
 });
 
+test("trash view queries cap candidates at the runner limit and enforce a byte budget", async () => {
+  for (let index = 0; index < 101; index += 1) {
+    const created = createDocument(database, `Trash candidate ${index}`, `Synthetic trash body ${index}.`);
+    trashDocument(database, created.id, created.version, created.contentHash);
+  }
+  const response = await post("/api/views/query", { query: { includeTrash: true, limit: 200 } });
+  assert.equal(response.response.status, 200);
+  assert.equal(response.body.trash?.length, 100);
+  assert.throws(() => listTrashedDocuments(database, 100, 1), ViewQueryLimitError);
+
+  const largeBody = "x".repeat(250_000);
+  for (let index = 0; index < 81; index += 1) {
+    const created = createDocument(database, `Large trash candidate ${index}`, largeBody);
+    trashDocument(database, created.id, created.version, created.contentHash);
+  }
+  const overBudget = await post("/api/views/query", { query: { includeTrash: true, limit: 200 } });
+  assert.equal(overBudget.response.status, 413);
+  assert.equal(overBudget.body.error, "invalid_view_query");
+});
+
 test("TMDb search uses only the injected mock adapter and returns bounded fixture results", async () => {
   const response = await post("/api/views/actions", { type: "movies.search", provider: "tmdb", query: " Arrival ", language: "en-US" });
   assert.equal(response.response.status, 200);
@@ -268,6 +289,7 @@ test("filesystem trash is private and restore handles a folder deleted while the
     const trashed = trashDocument(fsDatabase, created.id, created.version, created.contentHash);
     assert.equal(readFileSync(path.join(vaultDirectory, ".fieldnotes", "trash", `${created.id}.md`), "utf8"), "Original file body.");
     assert.equal(fsDatabase.vault?.snapshot().documents.some((entry) => entry.id === created.id), false);
+    assert.throws(() => fsDatabase.vault?.listTrashedDocuments(100, 1), ViewQueryLimitError);
     fsDatabase.vault?.deleteFolder(folder.folder.id, folder.folder.version);
     const restored = restoreTrashedDocument(fsDatabase, created.id, trashed.version);
     assert.equal(restored.folderId, null);
@@ -276,6 +298,47 @@ test("filesystem trash is private and restore handles a folder deleted while the
     assert.equal(fsDatabase.vault?.listTrashedDocuments().length, 0);
     assert.equal(existsSync(originalPath), false);
   } finally {
+    closeDatabase(fsDatabase);
+  }
+});
+
+test("filesystem view queries use the bounded index without triggering a full vault rescan", async () => {
+  const dataDirectory = path.join(temporaryRoot, "query-fs-data");
+  const vaultDirectory = path.join(dataDirectory, "vaults", "default");
+  const fsDatabase = openDatabase(dataDirectory, { seedDemo: false, vaultDir: vaultDirectory });
+  const created = createDocument(fsDatabase, "Indexed fixture", "Cached synthetic content.");
+  const vault = fsDatabase.vault;
+  assert.ok(vault);
+  let reconcileCount = 0;
+  const reconcile = vault.reconcile.bind(vault);
+  vault.reconcile = () => {
+    reconcileCount += 1;
+    return reconcile();
+  };
+  const queryServer = createApp(fsDatabase).listen(0, "127.0.0.1");
+  await new Promise<void>((resolve, reject) => {
+    queryServer.once("listening", resolve);
+    queryServer.once("error", reject);
+  });
+  const address = queryServer.address();
+  assert.ok(address && typeof address !== "string");
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/views/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: { search: "Indexed fixture" } }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json() as { notes: Array<{ id: string }> };
+    assert.ok(result.notes.some((note) => note.id === created.id));
+    assert.equal(reconcileCount, 0);
+
+    const health = await fetch(`http://127.0.0.1:${address.port}/api/health`);
+    assert.equal(health.status, 200);
+    assert.equal(reconcileCount, 1);
+  } finally {
+    await new Promise<void>((resolve, reject) => queryServer.close((error) => error ? reject(error) : resolve()));
     closeDatabase(fsDatabase);
   }
 });

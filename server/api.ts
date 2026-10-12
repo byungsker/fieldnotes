@@ -37,6 +37,7 @@ import {
 } from "./database.js";
 import { VaultStorageError } from "./vault.js";
 import { queryVisualizationNotes, validateVisualizationQuery, VisualizationQueryError } from "./visualizations.js";
+import { MAX_VIEW_TRASH_BYTES, MAX_VIEW_TRASH_CANDIDATES, ViewQueryLimitError } from "./view-query-limits.js";
 import { patchFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { MovieSearchProviderError, type MovieSearchAdapter } from "./movie-search.js";
 import type { VisualizationAction, VisualizationValue } from "../shared/visualization.js";
@@ -400,6 +401,13 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
   app.use(express.json({ limit: "8mb", strict: true }));
 
   app.use("/api", (request, response, next) => {
+    // View queries read from the reconciled index. The filesystem watcher updates
+    // that index when Markdown changes, so rewalking the entire vault on every
+    // render would defeat the query route's candidate and byte limits.
+    if (request.method === "POST" && request.path === "/views/query") {
+      next();
+      return;
+    }
     try {
       reconcileVault(database);
       next();
@@ -464,7 +472,11 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
       throw new RequestValidationError("query must be a JSON object smaller than 16 KB.");
     }
     const query = validateVisualizationQuery(request.body.query);
-    response.json(queryVisualizationNotes(database.db, query, query.includeTrash ? listTrashedDocuments(database) : []));
+    response.json(queryVisualizationNotes(
+      database.db,
+      query,
+      query.includeTrash ? listTrashedDocuments(database, MAX_VIEW_TRASH_CANDIDATES, MAX_VIEW_TRASH_BYTES) : [],
+    ));
   });
 
   app.post("/api/views/actions", async (request, response) => {
@@ -712,6 +724,10 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
     }
     if (error instanceof VisualizationQueryError) {
       sendError(response, error.status, "invalid_view_query", error.message);
+      return;
+    }
+    if (error instanceof ViewQueryLimitError) {
+      sendError(response, 413, "invalid_view_query", error.message);
       return;
     }
     if (error instanceof UnsafeBookmarkUrlError) {

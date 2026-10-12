@@ -10,6 +10,7 @@ import type {
 } from "../shared/visualization.js";
 import { getDocument, getLatestChangeSequence } from "./database.js";
 import { parseFrontmatter } from "./frontmatter.js";
+import { MAX_VIEW_TRASH_CANDIDATES } from "./view-query-limits.js";
 
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_SCAN_NOTES = 1_000;
@@ -220,7 +221,7 @@ export function queryVisualizationNotes(
   const trash = query.includeTrash
     ? trashNotes
       .filter((note) => !query.search || `${note.title}\n${note.excerpt}`.toLocaleLowerCase().includes(query.search.toLocaleLowerCase()))
-      .slice(0, query.limit ?? 100)
+      .slice(0, Math.min(query.limit ?? 100, MAX_VIEW_TRASH_CANDIDATES))
     : undefined;
   const response: VisualizationQueryResponse = {
     notes: limited,

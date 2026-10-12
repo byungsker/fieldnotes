@@ -8,6 +8,8 @@
 
 Returned records contain only a note ID, title, relative path, timestamps, a 150-character excerpt, and parsed frontmatter. The full Markdown body and absolute path are omitted. The server reads local Markdown to extract those values but scans at most 1,000 candidate notes / 20,000,000 UTF-8 bytes and caps the JSON response at 1.5 MB. A broad query over those bounds returns `413` and should be narrowed. The API is read-only.
 
+When a query includes trash, it examines at most the 100 most recently trashed entries and reads at most 20,000,000 UTF-8 bytes before returning excerpts. Larger trash scans return `413`. The query reads from the reconciled index; filesystem changes are reconciled by the vault monitor, avoiding a full vault walk on each view render.
+
 Frontmatter parsing supports a safe subset of YAML scalars, lists, and mappings. It does not evaluate tags, constructors, or expressions. Unsupported or malformed frontmatter is reported as `frontmatterError`; it is not written back.
 
 ## Execution boundary and limits

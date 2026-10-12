@@ -23,6 +23,7 @@ import { TextDecoder } from "node:util";
 import { excerptFromMarkdown } from "./markdown.js";
 import type { ChangeRecord, DocumentRecord, FolderRecord } from "./types.js";
 import type { VisualizationTrashNote } from "../shared/visualization.js";
+import { ViewQueryLimitError, VIEW_TRASH_LIMIT_MESSAGE } from "./view-query-limits.js";
 
 const STATE_FILE = "state.json";
 const STATE_FORMAT = "fieldnotes-vault";
@@ -304,13 +305,17 @@ function writeNewDurable(absolutePath: string, bytes: Buffer, mode = 0o600): voi
   }
 }
 
-function readRegularFileNoFollow(absolutePath: string): Buffer {
+function readRegularFileNoFollow(absolutePath: string, maxBytes = MAX_VAULT_FILE_BYTES): Buffer {
   let descriptor: number | undefined;
   try {
     descriptor = openSync(absolutePath, constants.O_RDONLY | constants.O_NOFOLLOW);
     const stat = fstatSync(descriptor);
     if (!stat.isFile()) throw new VaultStorageError("Expected a regular file; symbolic links are not followed.", "vault_symlink", 409);
-    if (stat.size > MAX_VAULT_FILE_BYTES) throw new VaultStorageError(`Markdown file exceeds the ${MAX_VAULT_FILE_BYTES} byte vault limit.`, "vault_file_too_large", 409);
+    const effectiveMaxBytes = Math.min(maxBytes, MAX_VAULT_FILE_BYTES);
+    if (stat.size > effectiveMaxBytes) {
+      if (maxBytes < MAX_VAULT_FILE_BYTES) throw new ViewQueryLimitError(VIEW_TRASH_LIMIT_MESSAGE);
+      throw new VaultStorageError(`Markdown file exceeds the ${MAX_VAULT_FILE_BYTES} byte vault limit.`, "vault_file_too_large", 409);
+    }
     return readFileSync(descriptor);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ELOOP") {
@@ -545,12 +550,20 @@ export class FileVault {
     return this.state.documents.find((document) => document.id === id);
   }
 
-  listTrashedDocuments(): VisualizationTrashNote[] {
-    return this.state.trashedDocuments.map((meta) => {
-      const info = this.trashFileInfo(meta.id);
+  listTrashedDocuments(limit = 500, maxBytes = Number.MAX_SAFE_INTEGER): VisualizationTrashNote[] {
+    if (!Number.isSafeInteger(limit) || limit < 0 || limit > 500) throw new RangeError("Trash query limit must be between 0 and 500.");
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError("Trash query byte limit is invalid.");
+    const candidates = [...this.state.trashedDocuments]
+      .sort((left, right) => right.trashedAt.localeCompare(left.trashedAt) || right.id.localeCompare(left.id))
+      .slice(0, limit);
+    let scannedBytes = 0;
+    return candidates.map((meta) => {
+      const remainingBytes = maxBytes - scannedBytes;
+      const info = this.trashFileInfo(meta.id, false, remainingBytes);
       if (!info || info.contentHash !== meta.contentHash) {
         throw new VaultVersionConflictError(meta.version, info?.contentHash ?? "0".repeat(64));
       }
+      scannedBytes += info.byteLength;
       return {
         id: meta.id,
         title: meta.title,
@@ -626,17 +639,17 @@ export class FileVault {
     return path.join(trashDirectory, `${id}.md`);
   }
 
-  private trashFileInfo(id: string, allowMissing = false): { body: string; contentHash: string } | undefined {
+  private trashFileInfo(id: string, allowMissing = false, maxBytes = MAX_VAULT_FILE_BYTES): { body: string; contentHash: string; byteLength: number } | undefined {
     const absolute = this.safeTrashAbsolute(id, allowMissing);
     if (!existsSync(absolute)) return undefined;
     if (statKind(absolute) !== "file") throw new VaultStorageError("A trash entry must be a regular file.", "vault_entry_invalid", 409);
-    const bytes = readRegularFileNoFollow(absolute);
+    const bytes = readRegularFileNoFollow(absolute, maxBytes);
     if (bytes.byteLength > MAX_VAULT_FILE_BYTES) throw new VaultStorageError("A trashed note exceeds the vault file limit.", "vault_file_too_large", 409);
     let body: string;
     try { body = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
     catch { throw new VaultStorageError("A trashed note is not valid UTF-8.", "vault_invalid_encoding", 409); }
     if (body.length > 250_000) throw new VaultStorageError("A trashed note exceeds the index limit.", "vault_file_too_large", 409);
-    return { body, contentHash: hashBytes(bytes) };
+    return { body, contentHash: hashBytes(bytes), byteLength: bytes.byteLength };
   }
 
   private fileInfo(relative: string): { body: string; contentHash: string; key: FileKey; byteLength: number } {
@@ -1354,7 +1367,7 @@ export class FileVault {
       fsyncDirectory(path.dirname(source));
       fsyncDirectory(path.dirname(target));
     });
-    const trashed = this.listTrashedDocuments().find((note) => note.id === id);
+    const trashed = this.listTrashedDocuments(1).find((note) => note.id === id);
     if (!trashed) throw new VaultStorageError("Trashed note was not visible after its durable commit.");
     return trashed;
   }

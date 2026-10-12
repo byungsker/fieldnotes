@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events";
 import { excerptFromMarkdown, extractWikilinkTargets, normalizeTitle } from "./markdown.js";
 import type { ChangeRecord, DocumentRecord, DocumentSummary, FolderRecord } from "./types.js";
 import type { VisualizationTrashNote } from "../shared/visualization.js";
+import { ViewQueryLimitError, VIEW_TRASH_LIMIT_MESSAGE } from "./view-query-limits.js";
 import { FileVault, VaultStorageError, VaultVersionConflictError } from "./vault.js";
 
 type SqlRow = Record<string, string | number | null>;
@@ -614,21 +615,37 @@ export function getDocument(db: DatabaseSync, id: string): DocumentRecord | unde
   return row ? mapDocument(row) : undefined;
 }
 
-export function listTrashDocuments(db: DatabaseSync): VisualizationTrashNote[] {
-  const rows = db.prepare("SELECT id, title, folder_id, body, trashed_at, version FROM trash_documents ORDER BY trashed_at DESC LIMIT 500")
-    .all() as SqlRow[];
-  return rows.map((row) => ({
-    id: String(row.id),
-    title: String(row.title),
-    folderId: row.folder_id === null || row.folder_id === undefined ? null : String(row.folder_id),
-    trashedAt: String(row.trashed_at),
-    version: Number(row.version),
-    excerpt: excerptFromMarkdown(String(row.body ?? ""), 150),
-  }));
+export function listTrashDocuments(db: DatabaseSync, limit = 500, maxBytes = Number.MAX_SAFE_INTEGER): VisualizationTrashNote[] {
+  if (!Number.isSafeInteger(limit) || limit < 0 || limit > 500) throw new RangeError("Trash query limit must be between 0 and 500.");
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError("Trash query byte limit is invalid.");
+  const candidates = db.prepare(`
+    SELECT id, title, folder_id, trashed_at, version, length(CAST(body AS BLOB)) AS body_bytes
+    FROM trash_documents ORDER BY trashed_at DESC LIMIT ?
+  `).all(limit) as SqlRow[];
+  const readBody = db.prepare("SELECT body FROM trash_documents WHERE id = ?");
+  const notes: VisualizationTrashNote[] = [];
+  let scannedBytes = 0;
+  for (const candidate of candidates) {
+    const byteLength = Number(candidate.body_bytes ?? 0);
+    if (scannedBytes + byteLength > maxBytes) {
+      throw new ViewQueryLimitError(VIEW_TRASH_LIMIT_MESSAGE);
+    }
+    const bodyRow = readBody.get(candidate.id) as SqlRow | undefined;
+    scannedBytes += byteLength;
+    notes.push({
+      id: String(candidate.id),
+      title: String(candidate.title),
+      folderId: candidate.folder_id === null || candidate.folder_id === undefined ? null : String(candidate.folder_id),
+      trashedAt: String(candidate.trashed_at),
+      version: Number(candidate.version),
+      excerpt: excerptFromMarkdown(String(bodyRow?.body ?? ""), 150),
+    });
+  }
+  return notes;
 }
 
-export function listTrashedDocuments(database: KnowledgeDatabase): VisualizationTrashNote[] {
-  return database.vault ? database.vault.listTrashedDocuments() : listTrashDocuments(database.db);
+export function listTrashedDocuments(database: KnowledgeDatabase, limit = 500, maxBytes = Number.MAX_SAFE_INTEGER): VisualizationTrashNote[] {
+  return database.vault ? database.vault.listTrashedDocuments(limit, maxBytes) : listTrashDocuments(database.db, limit, maxBytes);
 }
 
 export function trashDocument(database: KnowledgeDatabase, id: string, expectedVersion: number, expectedHash?: string): VisualizationTrashNote {
