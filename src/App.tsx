@@ -24,6 +24,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Settings2,
   Sun,
   Trash2,
   X,
@@ -33,10 +34,12 @@ import { ActionDialog, type ActionDialogConfig, type ActionDialogResult } from "
 import type { AppViewContextValue, WorkspaceScreen } from "./AppViewContext";
 import { MarkdownLiveEditor } from "../packages/markdown-live-editor";
 import { SearchHighlight } from "./SearchHighlight";
+import { VaultSettingsDialog } from "./VaultSettingsDialog";
 import { createFieldnotesEditorAdapters } from "./editor-adapters";
 import { formatDocumentDate } from "./document-date";
 import { resolveMobileDrawerSwipe, resolveMobileDrawerSwipeDrag } from "./mobile-drawer-swipe";
 import { isSidebarToggleShortcut } from "./keyboard-shortcuts";
+import { pushVaultSettingsHistoryEntry } from "./vault-settings-history";
 import {
   AUTOSAVE_DELAY_MS,
   clearLocalDraft,
@@ -289,9 +292,9 @@ export function App() {
   const [folders, setFolders] = useState<FolderRecord[]>([]);
   const [activeFolderId, setActiveFolderId] = useState<ActiveFolder>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(() => new Set());
-  const [creatingFolderParent, setCreatingFolderParent] = useState<string | null | undefined>(undefined);
-  const [newFolderName, setNewFolderName] = useState("");
   const [recentChanges, setRecentChanges] = useState<ChangeRecord[]>([]);
+  const [recentActivityExpanded, setRecentActivityExpanded] = useState(false);
+  const [vaultSettingsOpen, setVaultSettingsOpen] = useState(false);
   const [backlinks, setBacklinks] = useState<DocumentSummary[]>([]);
   const [selectedDocument, setSelectedDocument] = useState<DocumentRecord | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
@@ -352,6 +355,7 @@ export function App() {
   const saveTimersRef = useRef(new Map<string, number>());
   const dialogResolverRef = useRef<((result: ActionDialogResult) => void) | null>(null);
   const navigationPendingRef = useRef(false);
+  const vaultSettingsHistoryEntryRef = useRef(false);
   const historyIndexRef = useRef(initialHistoryIndex);
   const currentRouteRef = useRef(currentRoute);
   const previousRouteRef = useRef(currentRoute);
@@ -370,6 +374,16 @@ export function App() {
   const documentListScrollRef = useRef(new Map<string, DocumentListScrollSnapshot>());
   const currentListViewKey = documentListViewKey(activeFolderId, query, sortOrder);
   const currentListViewKeyRef = useRef(currentListViewKey);
+
+  const openVaultSettings = useCallback(() => {
+    pushVaultSettingsHistoryEntry(window.history, vaultSettingsHistoryEntryRef, window.location.href);
+    setVaultSettingsOpen(true);
+  }, []);
+
+  const closeVaultSettings = useCallback(() => {
+    vaultSettingsHistoryEntryRef.current = false;
+    setVaultSettingsOpen(false);
+  }, []);
 
   selectedRef.current = selectedDocument;
   draftTitleRef.current = draftTitle;
@@ -763,7 +777,7 @@ export function App() {
     setFolders(response.folders);
     if (!folderTreeInitializedRef.current) {
       folderTreeInitializedRef.current = true;
-      setExpandedFolderIds(new Set([...response.folders.filter((folder) => folder.parentId === null).map((folder) => folder.id), UNFILED_TREE_ID]));
+      setExpandedFolderIds(new Set([...response.folders.map((folder) => folder.id), UNFILED_TREE_ID]));
     }
     if (activeFolderRef.current !== null && activeFolderRef.current !== "root" &&
       !response.folders.some((folder) => folder.id === activeFolderRef.current)) {
@@ -1662,25 +1676,17 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [currentRoute, ensureDocumentForRoute, selectFolderForRoute]);
 
-  const beginFolderCreate = (parentId: string | null) => {
-    setCreatingFolderParent(parentId);
-    setNewFolderName("");
-  };
-
-  const createFolderFromForm = async (event: React.FormEvent<HTMLFormElement>): Promise<FolderRecord | null> => {
-    event.preventDefault();
-    const name = newFolderName.trim();
+  const createFolderFromName = async (rawName: string, parentId: string | null): Promise<FolderRecord | null> => {
+    const name = rawName.trim();
     if (!name) return null;
     try {
       const response = await apiRequest<FolderResponse>("/api/folders", jsonRequest("POST", {
         name,
-        parentId: creatingFolderParent ?? null,
+        parentId,
       }));
-      setCreatingFolderParent(undefined);
-      setNewFolderName("");
       setExpandedFolderIds((current) => {
         const next = new Set(current);
-        if (creatingFolderParent) next.add(creatingFolderParent);
+        if (parentId) next.add(parentId);
         next.add(response.folder.id);
         return next;
       });
@@ -2038,10 +2044,20 @@ export function App() {
       if (await deleteActiveFolder()) routeNavigation.replace("Library", {});
     };
 
-    const createFolderAndOpen = async (event: React.FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
+    const beginFolderCreateInWorkspace = async (parentId: string | null) => {
       if (!await confirmDraftLeave()) return;
-      const folder = await createFolderFromForm(event);
+      const parentPath = parentId ? folderPathById.get(parentId) ?? "this folder" : null;
+      const name = await requestText({
+        title: "New folder",
+        description: parentPath ? `Create a subfolder inside ${parentPath}.` : "Create a folder in this vault.",
+        label: "Folder name",
+        initialValue: "",
+        submitLabel: "Create folder",
+        maxLength: 120,
+        centered: true,
+      });
+      if (name === null) return;
+      const folder = await createFolderFromName(name, parentId);
       if (folder) routeNavigation.push("Folder", { folderId: folder.id });
     };
 
@@ -2124,7 +2140,6 @@ export function App() {
     };
 
     const renderFolderBrowser = (surface: "sidebar" | "drawer") => {
-      const folderInputId = "new-folder-name-" + screen.activityId + "-" + surface;
       const queryText = query.trim().toLocaleLowerCase();
       const childrenByParent = new Map<string | null, FolderRecord[]>();
       const documentsByFolder = new Map<string | null, DocumentSummary[]>();
@@ -2264,7 +2279,7 @@ export function App() {
             </label>
             <div className="explorer-create-actions">
               <button type="button" className="explorer-new-note" onClick={() => void createAndOpenNote()}><Plus size={15} /> New note</button>
-              <button type="button" className="explorer-new-folder" onClick={() => beginFolderCreate(null)}><FolderPlus size={15} /> New folder</button>
+              <button type="button" className="explorer-new-folder" onClick={() => void beginFolderCreateInWorkspace(null)}><FolderPlus size={15} /> New folder</button>
             </div>
           </div>
           <div className="folder-browser-header explorer-browser-header">
@@ -2308,17 +2323,10 @@ export function App() {
             {documentListStatus === "loaded" && orderedTreeDocuments.length === 0 && queryText && <p className="explorer-empty">No matching notes.</p>}
             {documentListStatus === "loaded" && documents.length === 0 && !queryText && <p className="explorer-empty">No notes yet. Create one to begin.</p>}
           </div>
-          {creatingFolderParent !== undefined && (
-            <form className="folder-create-form" onSubmit={(event) => void createFolderAndOpen(event)}>
-              <label htmlFor={folderInputId}>{creatingFolderParent ? `New subfolder in ${folderPathById.get(creatingFolderParent) ?? "folder"}` : "New top-level folder"}</label>
-              <input id={folderInputId} value={newFolderName} onChange={(event) => setNewFolderName(event.currentTarget.value)} maxLength={120} autoFocus={surface === "drawer" ? showDrawer : true} required />
-              <div><button type="submit">Create</button><button type="button" onClick={() => setCreatingFolderParent(undefined)}>Cancel</button></div>
-            </form>
-          )}
           {activeFolder && (
             <div className="folder-admin" aria-label={`${activeFolder.name} folder actions`}>
               <div className="folder-admin-actions">
-                <button type="button" onClick={() => beginFolderCreate(activeFolder.id)}><FolderPlus size={13} /> Subfolder</button>
+                <button type="button" onClick={() => void beginFolderCreateInWorkspace(activeFolder.id)}><FolderPlus size={13} /> Subfolder</button>
                 <button type="button" onClick={() => void renameActiveFolder()}>Rename</button>
                 <button type="button" onClick={() => void deleteFolderAndReturn()}>Delete empty</button>
               </div>
@@ -2665,11 +2673,18 @@ export function App() {
           {renderFolderBrowser("drawer")}
         </>}
 
-        <div className="recent-heading">
+        <button
+          type="button"
+          className="recent-heading"
+          aria-expanded={recentActivityExpanded}
+          aria-controls="recent-activity-list"
+          onClick={() => setRecentActivityExpanded((expanded) => !expanded)}
+        >
           <span className="rail-section-label">RECENT ACTIVITY</span>
           <span className="live-dot" aria-hidden="true" />
-        </div>
-        <div className="activity-list">
+          {recentActivityExpanded ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+        </button>
+        {recentActivityExpanded && <div id="recent-activity-list" className="activity-list" role="region" aria-label="Recent Activity">
           {recentChanges.slice(-7).reverse().map((change) => (
             <button
               className="activity-item"
@@ -2686,7 +2701,11 @@ export function App() {
             </button>
           ))}
           {recentChanges.length === 0 && <p className="activity-empty">New edits will appear here.</p>}
-        </div>
+        </div>}
+
+        {workspaceRenderer === "desktop" && <button type="button" className="rail-link vault-settings-link" onClick={openVaultSettings}>
+          <Settings2 size={16} aria-hidden="true" /><span>Vault settings</span>
+        </button>}
 
         {workspaceRenderer === "mobile-stackflow" && (
           <section className="mobile-drawer-secondary" aria-label="More options">
@@ -2699,6 +2718,9 @@ export function App() {
             >
               {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
               <span>{theme === "dark" ? "Light appearance" : "Dark appearance"}</span>
+            </button>
+            <button type="button" className="drawer-action" onClick={openVaultSettings}>
+              <Settings2 size={17} aria-hidden="true" /><span>Vault settings</span>
             </button>
             <div className="mobile-drawer-data-actions">{renderListTools("drawer")}</div>
           </section>
@@ -3074,6 +3096,7 @@ export function App() {
         </Suspense>
       )}
       <ActionDialog config={actionDialog} onResolve={resolveActionDialog} />
+      {vaultSettingsOpen && <VaultSettingsDialog onClose={closeVaultSettings} />}
     </>
   );
 }

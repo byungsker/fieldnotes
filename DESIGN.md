@@ -30,6 +30,8 @@ The reusable Markdown editor keeps its own established tokens: `--mle-ink: #1720
 - Use a 4px spacing rhythm for new layout values.
 - Fieldnotes view blocks remain full-width within the Markdown column, with 12px padding and natural document flow.
 - Tables scroll horizontally on narrow screens. Forms wrap and controls remain touch-friendly at the existing 38px mobile minimum.
+- The desktop folder tree keeps its own bounded scroll region. Folder creation opens a centered native modal above that shell so the tree remains visible behind the backdrop. The mobile variant stays centered inside the visual viewport.
+- The Vault settings dialog has a fixed header and actions around one bounded, independently scrolling server-directory list.
 
 ## 5. Components
 
@@ -37,6 +39,9 @@ The reusable Markdown editor keeps its own established tokens: `--mle-ink: #1720
 - **Trust review:** `.mle-fieldnotes-view-trust` and `.mle-fieldnotes-view-review`; review the exact source before enabling that source fingerprint.
 - **Action feedback:** existing `[role="status"]` and `[role="alert"]` messages stay adjacent to the block.
 - **Controls:** inherit editor color and typography, use the existing border and surface tokens, and retain visible keyboard focus.
+- **Folder creation dialog:** reuse the native `ActionDialog`, centered on desktop and mobile; its backdrop leaves the folder tree visible, and Escape, Cancel, Close, and browser Back share the same cancel path.
+- **Recent activity disclosure:** one semantic button controls a `role="region"`; it starts collapsed on every workspace and reveals activity only after a deliberate toggle.
+- **Vault settings:** show the absolute path reported by the server. Browse only existing, non-symlink folders under the server Mac's `Documents` directory; verify the target before saving it for the next restart. A path change never moves or deletes files.
 
 ## 6. Interaction
 
@@ -44,6 +49,9 @@ The reusable Markdown editor keeps its own established tokens: `--mle-ink: #1720
 - A write begins only from a trusted DOM click, submit, or change event and is validated by the host before the API call.
 - Create, edit, trash, restore, open-note, and search actions report completion or failure in the originating view.
 - Keep actions available by keyboard and touch; no hover-only behavior.
+- Folder creation uses a native modal dialog so focus is contained and restored on close. Escape and browser Back cancel without creating a folder.
+- Recent Activity is collapsed by default and exposes its state with `aria-expanded` and `aria-controls`.
+- A vault target is only saved after server-side validation; the current server path stays active until restart, with no automatic content migration.
 
 ## 7. Motion
 
@@ -54,5 +62,6 @@ The reusable Markdown editor keeps its own established tokens: `--mle-ink: #1720
 
 - Every input has a visible label or an accessible name; controls use semantic button and form elements.
 - Status and error text use live regions. Focus remains visible for keyboard users.
+- Path verification results and selection errors use live regions. Directory rows have names and explicit button labels; the current absolute server path wraps instead of forcing horizontal page overflow.
 - Custom scripts run in an opaque-origin sandbox. The host exposes note metadata and a narrow action bridge, never cookies, host DOM, or arbitrary file access.
 - The sandbox intentionally omits remote images, network APIs, external navigation, and arbitrary HTML attributes.

@@ -9,6 +9,7 @@ export type ActionDialogConfig =
       confirmLabel: string;
       cancelLabel?: string;
       destructive?: boolean;
+      centered?: boolean;
     }
   | {
       kind: "prompt";
@@ -18,6 +19,7 @@ export type ActionDialogConfig =
       initialValue: string;
       submitLabel: string;
       maxLength?: number;
+      centered?: boolean;
     };
 
 export type ActionDialogResult = boolean | string | null;
@@ -153,7 +155,7 @@ export function ActionDialog({
   return (
     <dialog
       ref={dialogRef}
-      className="action-dialog"
+      className={`action-dialog${config?.centered ? " action-dialog-centered" : ""}`}
       aria-labelledby="action-dialog-title"
       aria-describedby={config?.description ? "action-dialog-description" : undefined}
       onCancel={(event) => {

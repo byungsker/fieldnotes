@@ -2,7 +2,9 @@
 
 Fieldnotes starts in SQLite mode unless `KB_VAULT_DIR` is configured. In filesystem mode, UTF-8 `.md` and `.markdown` files plus the hidden `.fieldnotes/state.json` manifest are authoritative. `vault-index.sqlite` is a local, rebuildable index for search, backlinks, and API reads. The manifest keeps stable IDs, folders, hashes, versions, and the durable change sequence; it does not contain note bodies.
 
-The vault must be a Fieldnotes-owned directory under `KB_DATA_DIR`. Do not point it at an Obsidian/iCloud vault. Fieldnotes indexes Markdown files recursively and treats directories as folders. Other regular files are preserved by vault backup but are not indexed. `.fieldnotes` and `.fieldnotes-tmp-*` names are reserved; symbolic links, invalid UTF-8, name collisions that cannot be represented safely, or files over the documented size limit stop reconciliation without overwriting the files.
+By default, the vault is a Fieldnotes-owned directory under `KB_DATA_DIR`. Do not point it at an Obsidian/iCloud vault. Fieldnotes indexes Markdown files recursively and treats directories as folders. Other regular files are preserved by vault backup but are not indexed. `.fieldnotes` and `.fieldnotes-tmp-*` names are reserved; symbolic links, invalid UTF-8, name collisions that cannot be represented safely, or files over the documented size limit stop reconciliation without overwriting the files.
+
+Vault settings in the app report the absolute server path and browse existing directories under the server Mac's `Documents` folder. Only an empty private (mode 700) directory or a valid Fieldnotes vault can be selected. Verification and selection do not create a manifest, import files, move notes, or delete anything; a saved selection is stored privately with the app data and takes effect only after restart. A saved selection overrides `KB_VAULT_DIR`; choose **Use configured vault** to clear it and return to the environment setting. If SQLite mode already contains notes, selecting an empty folder is blocked; complete the offline migration below instead. Backup uses the saved active selection after restart.
 
 ## Convert an existing SQLite library
 

@@ -1,8 +1,10 @@
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { closeDatabase, openDatabase, startVaultMonitor } from "./database.js";
 import { createApp } from "./api.js";
+import { resolveSavedVaultSelection } from "./vault-settings.js";
 
 const isDevelopment = process.argv.includes("--dev");
 const host = process.env.KB_HOST ?? "127.0.0.1";
@@ -42,7 +44,11 @@ closeSync(lockDescriptor);
 
 let database: ReturnType<typeof openDatabase>;
 try {
-  database = openDatabase(dataDir);
+  const documentsRoot = path.join(homedir(), "Documents");
+  const savedVaultSelection = resolveSavedVaultSelection(dataDir, documentsRoot);
+  database = openDatabase(dataDir, savedVaultSelection
+    ? { vaultDir: savedVaultSelection.absolutePath, vaultPathAllowRoot: documentsRoot }
+    : {});
 } catch (error) {
   unlinkSync(lockPath);
   throw error;

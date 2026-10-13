@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  accessSync,
   constants,
   closeSync,
   chmodSync,
@@ -464,6 +465,46 @@ export class FileVault {
   readonly metadataDir: string;
   readonly statePath: string;
   private state: VaultState;
+
+  static inspectTarget(root: string): "empty" | "managed" {
+    const absolute = path.resolve(root);
+    if (!existsSync(absolute)) throw new VaultStorageError("The selected folder no longer exists.", "vault_target_missing", 400);
+    if (statKind(absolute) === "symlink") throw new VaultStorageError("The selected vault folder cannot be a symbolic link.", "vault_symlink", 400);
+    if (statKind(absolute) !== "directory") throw new VaultStorageError("The selected vault path is not a directory.", "vault_target_invalid", 400);
+    try {
+      accessSync(absolute, constants.R_OK | constants.W_OK);
+    } catch {
+      throw new VaultStorageError("The selected vault folder must be readable and writable by the Fieldnotes server.", "vault_target_permissions", 400);
+    }
+    if ((lstatSync(absolute).mode & 0o077) !== 0) {
+      throw new VaultStorageError("The selected vault folder must be private (permissions 700).", "vault_permissions", 400);
+    }
+    const entries = readdirSync(absolute);
+    if (entries.length === 0) return "empty";
+    const metadataEntry = entries.find((entry) => normalizedNameKey(entry) === ".fieldnotes");
+    if (!metadataEntry) throw new VaultStorageError("Choose an empty private folder or an existing Fieldnotes vault. Other files will not be imported.", "vault_target_unmanaged", 400);
+    if (metadataEntry !== ".fieldnotes") throw new VaultStorageError("The selected folder contains a case- or Unicode-equivalent reserved .fieldnotes name.", "vault_reserved_name", 400);
+    const metadataPath = path.join(absolute, metadataEntry);
+    if (statKind(metadataPath) === "symlink") throw new VaultStorageError("The .fieldnotes metadata directory cannot be a symbolic link.", "vault_symlink", 400);
+    if (statKind(metadataPath) !== "directory") throw new VaultStorageError("The selected folder has invalid Fieldnotes metadata.", "vault_state_invalid", 400);
+    if ((lstatSync(metadataPath).mode & 0o077) !== 0) throw new VaultStorageError("Fieldnotes metadata must be private (permissions 700).", "vault_permissions", 400);
+    const stateEntry = readdirSync(metadataPath).find((entry) => normalizedNameKey(entry) === normalizedNameKey(STATE_FILE));
+    if (stateEntry !== STATE_FILE) throw new VaultStorageError("The selected folder does not contain a valid Fieldnotes manifest.", "vault_state_invalid", 400);
+    const statePath = path.join(metadataPath, STATE_FILE);
+    if (statKind(statePath) !== "file") throw new VaultStorageError("Fieldnotes state must be a regular file.", "vault_state_invalid", 400);
+    if ((lstatSync(statePath).mode & 0o077) !== 0) throw new VaultStorageError("Fieldnotes state must be private (permissions 600).", "vault_permissions", 400);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(statePath, "utf8"));
+    } catch {
+      throw new VaultStorageError("The Fieldnotes manifest is unreadable.", "vault_state_invalid", 400);
+    }
+    const migrated = isRecord(parsed) && parsed.schemaVersion === 1
+      ? { ...parsed, schemaVersion: STATE_VERSION, trashedDocuments: [] }
+      : parsed;
+    if (!shallowState(migrated)) throw new VaultStorageError("The Fieldnotes manifest has an unsupported format.", "vault_state_invalid", 400);
+    return "managed";
+  }
 
   static hasState(root: string): boolean {
     const absolute = path.resolve(root);
