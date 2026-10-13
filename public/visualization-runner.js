@@ -8,6 +8,8 @@ const MAX_JAVASCRIPT_CHARS = 16_000;
 const MAX_ELEMENTS = 500;
 const MAX_DEPTH = 20;
 const MAX_ASSET_SOURCES = 50;
+const MIN_FRAME_HEIGHT = 160;
+const MAX_FRAME_HEIGHT = 16_000;
 const NOTE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const NOTE_HASH_PATTERN = /^[0-9a-f]{64}$/i;
 const ALLOWED_TAGS = new Set([
@@ -39,9 +41,38 @@ let activeRequestId;
 let nextEventId = 1;
 let pendingEventId;
 let actionLocked = false;
+let resizeFrameScheduled = false;
 
 function sendToHost(message) {
   if (hostPort) hostPort.postMessage(message);
+}
+
+function reportFrameHeight() {
+  resizeFrameScheduled = false;
+  if (!Number.isSafeInteger(activeRequestId)) return;
+  const height = Math.ceil(Math.max(
+    root.scrollHeight,
+    document.body.scrollHeight,
+    document.documentElement.scrollHeight,
+  ));
+  sendToHost({
+    type: "resize",
+    requestId: activeRequestId,
+    height: Math.min(MAX_FRAME_HEIGHT, Math.max(MIN_FRAME_HEIGHT, height)),
+  });
+}
+
+function scheduleFrameHeightReport() {
+  if (resizeFrameScheduled) return;
+  resizeFrameScheduled = true;
+  requestAnimationFrame(reportFrameHeight);
+}
+
+if (typeof ResizeObserver === "function") {
+  const frameResizeObserver = new ResizeObserver(scheduleFrameHeightReport);
+  frameResizeObserver.observe(root);
+  frameResizeObserver.observe(document.body);
+  frameResizeObserver.observe(document.documentElement);
 }
 
 function stopWorker() {
@@ -313,6 +344,8 @@ function renderResult(message, allowedImageSources) {
       document.head.append(style);
     }
     sendToHost({ type: "complete", requestId: message.requestId });
+    reportFrameHeight();
+    scheduleFrameHeightReport();
   } catch (error) {
     root.textContent = error instanceof Error ? error.message : "Visualization output was blocked.";
     sendToHost({ type: "error", requestId: message.requestId, message: root.textContent });
@@ -414,7 +447,17 @@ function connect(event) {
     return;
   }
   if (event.data?.type !== "fieldnotes-view-connect" || !event.ports[0]) return;
-  window.removeEventListener("message", connect);
+  if (hostPort) {
+    hostPort.onmessage = null;
+    hostPort.close();
+  }
+  stopWorker();
+  activeRequestId = undefined;
+  pendingEventId = undefined;
+  actionLocked = false;
+  delete root.dataset.actionPending;
+  delete root.dataset.actionLocked;
+  root.textContent = "Waiting for the Fieldnotes host…";
   hostPort = event.ports[0];
   hostPort.onmessage = (portEvent) => {
     const message = portEvent.data;

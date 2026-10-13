@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { parseVisualizationUiEvent, type VisualizationNote, type VisualizationTrashNote, type VisualizationUiEvent, type VisualizationValue } from "../../shared/visualization.ts";
 import { acquireVisualizationSlot } from "./visualization-worker-slots.ts";
+import { boundedVisualizationFrameHeight, INITIAL_VISUALIZATION_FRAME_HEIGHT } from "./visualization-frame-height.ts";
 
 type RunnerStatus = {
   requestId?: unknown;
@@ -8,6 +9,7 @@ type RunnerStatus = {
   type: unknown;
   message?: unknown;
   event?: unknown;
+  height?: unknown;
 };
 
 interface SandboxedVisualizationProps {
@@ -30,6 +32,7 @@ function SandboxedVisualization({ javascript, notes, trash, state, onAction }: S
   const releaseSlotRef = useRef<{ requestId: number; release: () => void } | null>(null);
   const responseTimeoutRef = useRef<{ requestId: number; timer: number } | null>(null);
   const [status, setStatus] = useState("Starting isolated preview…");
+  const [frameHeight, setFrameHeight] = useState(INITIAL_VISUALIZATION_FRAME_HEIGHT);
   const [parentOrigin] = useState(() => window.location.origin);
   onActionRef.current = onAction;
 
@@ -89,6 +92,12 @@ function SandboxedVisualization({ javascript, notes, trash, state, onAction }: S
             .finally(() => pendingActionIdsRef.current.delete(eventId));
           return;
         }
+        if (message.type === "resize") {
+          if (message.requestId !== requestIdRef.current) return;
+          const height = boundedVisualizationFrameHeight(message.height);
+          if (height !== null) setFrameHeight(height);
+          return;
+        }
         if (message.requestId !== requestIdRef.current) return;
         if (["complete", "error", "timeout"].includes(message.type) && releaseSlotRef.current?.requestId === message.requestId) {
           releaseSlotRef.current.release();
@@ -139,6 +148,7 @@ function SandboxedVisualization({ javascript, notes, trash, state, onAction }: S
     const abort = new AbortController();
     const requestId = ++requestIdRef.current;
     const payload = { requestId, javascript, notes, trash, state };
+    setFrameHeight(INITIAL_VISUALIZATION_FRAME_HEIGHT);
     pendingRef.current = payload;
     setStatus("Waiting for an isolated preview slot…");
     if (responseTimeoutRef.current) window.clearTimeout(responseTimeoutRef.current.timer);
@@ -181,13 +191,14 @@ function SandboxedVisualization({ javascript, notes, trash, state, onAction }: S
   return (
     <div className="mle-fieldnotes-custom-preview">
       <p className="mle-fieldnotes-view-status" role="status">{status}</p>
-      <p className="mle-fieldnotes-preview-hint">Scroll inside the preview to see the remaining notes and restore actions.</p>
+      <p className="mle-fieldnotes-preview-hint">Scroll the page to see the rest of the dashboard.</p>
       <iframe
         ref={iframeRef}
         title="Custom Fieldnotes visualization"
         sandbox="allow-scripts allow-forms"
         referrerPolicy="no-referrer"
         src={`/visualization-runner.html?parentOrigin=${encodeURIComponent(parentOrigin)}`}
+        style={{ height: `${frameHeight}px` }}
       />
     </div>
   );

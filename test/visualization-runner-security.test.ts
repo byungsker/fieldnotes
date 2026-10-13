@@ -15,6 +15,7 @@ const assetSource = readFileSync(path.join(projectRoot, "server/visualization-as
 const editorSource = readFileSync(path.join(projectRoot, "packages/markdown-live-editor/SandboxedVisualization.tsx"), "utf8");
 const viewBlockSource = readFileSync(path.join(projectRoot, "packages/markdown-live-editor/FieldnotesViewBlock.tsx"), "utf8");
 const adaptersSource = readFileSync(path.join(projectRoot, "src/editor-adapters.ts"), "utf8");
+const frameHeightSource = readFileSync(path.join(projectRoot, "packages/markdown-live-editor/visualization-frame-height.ts"), "utf8");
 const appSource = readFileSync(path.join(projectRoot, "src/App.tsx"), "utf8");
 const runnerScriptHash = `sha256-${createHash("sha256").update(runnerSource).digest("base64")}`;
 
@@ -71,6 +72,60 @@ test("runner CSP permits only the static host script and Blob worker source", ()
   assert.doesNotMatch(editorSource, /sandbox="[^"]*allow-same-origin|sandbox="[^"]*allow-top-navigation/u);
   assert.match(editorSource, /referrerPolicy="no-referrer"/i);
   assert.ok(runnerHtml.includes(`integrity="${runnerScriptHash}"`));
+});
+
+test("runner reconnects when the view block is reopened and reuses its iframe", () => {
+  const parentMessages: unknown[] = [];
+  const handlers = new Map<string, (event: Record<string, unknown>) => void>();
+  const parent = { postMessage: (message: unknown) => parentMessages.push(message) };
+  const root = {
+    textContent: "",
+    dataset: {} as Record<string, string>,
+    scrollHeight: 100,
+    addEventListener: () => undefined,
+  };
+  const context = vm.createContext({
+    URLSearchParams,
+    window: {
+      location: { search: "?parentOrigin=https%3A%2F%2Fnotes.example" },
+      parent,
+      addEventListener: (type: string, handler: (event: Record<string, unknown>) => void) => handlers.set(type, handler),
+      removeEventListener: (type: string) => handlers.delete(type),
+    },
+    document: { getElementById: () => root, body: { scrollHeight: 100 }, documentElement: { scrollHeight: 100 } },
+  });
+  vm.runInContext(runnerSource, context);
+  const onMessage = handlers.get("message");
+  assert.ok(onMessage);
+  const origin = "https://notes.example";
+  onMessage({ source: parent, origin, data: { type: "fieldnotes-view-ping" }, ports: [] });
+  assert.equal((parentMessages[0] as { type?: string }).type, "fieldnotes-view-runner-ready");
+
+  const makePort = () => ({ started: false, closed: false, onmessage: null as null | ((event: { data: unknown }) => void), messages: [] as unknown[], start() { this.started = true; }, close() { this.closed = true; }, postMessage(message: unknown) { this.messages.push(message); } });
+  const firstPort = makePort();
+  onMessage({ source: parent, origin, data: { type: "fieldnotes-view-connect" }, ports: [firstPort] });
+  assert.equal(firstPort.started, true);
+  assert.deepEqual(firstPort.messages.map((message) => (message as { type?: string }).type), ["ready"]);
+
+  const secondPort = makePort();
+  onMessage({ source: parent, origin, data: { type: "fieldnotes-view-connect" }, ports: [secondPort] });
+  assert.equal(firstPort.closed, true);
+  assert.equal(secondPort.started, true);
+  assert.deepEqual(secondPort.messages.map((message) => (message as { type?: string }).type), ["ready"]);
+  assert.equal(handlers.get("message"), onMessage);
+});
+
+test("custom runner reports bounded content height to the host for normal page scrolling", () => {
+  const sandboxSource = readFileSync(path.join(projectRoot, "packages/markdown-live-editor/SandboxedVisualization.tsx"), "utf8");
+  const stylesSource = readFileSync(path.join(projectRoot, "packages/markdown-live-editor/styles.css"), "utf8");
+  assert.match(runnerSource, /new ResizeObserver\(scheduleFrameHeightReport\)/u);
+  assert.match(runnerSource, /type: "resize"/u);
+  assert.match(runnerSource, /sendToHost\(\{ type: "complete", requestId: message\.requestId \}\);\s*reportFrameHeight\(\);\s*scheduleFrameHeightReport\(\);/u);
+  assert.match(sandboxSource, /message\.type === "resize"/u);
+  assert.match(sandboxSource, /boundedVisualizationFrameHeight\(message\.height\)/u);
+  assert.match(frameHeightSource, /MAX_VISUALIZATION_FRAME_HEIGHT = 16_000/u);
+  assert.doesNotMatch(stylesSource, /iframe[^\n]*max-height:\s*\d+vh/u);
+  assert.match(stylesSource, /\.mle-fieldnotes-view-block\s*\{[^}]*overflow-x:\s*clip;[^}]*overflow-y:\s*visible;/su);
 });
 
 test("generated Worker locks global and prototype escape routes before custom code", () => {
