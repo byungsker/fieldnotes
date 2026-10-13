@@ -50,20 +50,12 @@ function sendToHost(message) {
 function reportFrameHeight() {
   resizeFrameScheduled = false;
   if (!Number.isSafeInteger(activeRequestId)) return;
-  let height = Math.max(
+  // Nested scroll containers keep their own scroll range; only visible document flow sizes the frame.
+  const height = Math.ceil(Math.max(
     root.scrollHeight,
     document.body.scrollHeight,
     document.documentElement.scrollHeight,
-  );
-  const rootBounds = root.getBoundingClientRect();
-  for (const element of root.querySelectorAll("*")) {
-    const style = window.getComputedStyle(element);
-    if (!/(?:auto|scroll)/.test(style.overflowY || style.overflow || "")) continue;
-    const bounds = element.getBoundingClientRect();
-    const hiddenContent = Math.max(0, element.scrollHeight - element.clientHeight);
-    height = Math.max(height, bounds.bottom - rootBounds.top + hiddenContent);
-  }
-  height = Math.ceil(height);
+  ));
   sendToHost({
     type: "resize",
     requestId: activeRequestId,
@@ -80,13 +72,21 @@ function scheduleFrameHeightReport() {
 const frameResizeObserver = typeof ResizeObserver === "function"
   ? new ResizeObserver(scheduleFrameHeightReport)
   : undefined;
+const observedFrameElements = new Set();
 
 function observeFrameContent() {
   if (!frameResizeObserver) return;
-  frameResizeObserver.observe(root);
-  frameResizeObserver.observe(document.body);
-  frameResizeObserver.observe(document.documentElement);
-  for (const element of root.querySelectorAll("*")) frameResizeObserver.observe(element);
+  const currentElements = new Set([root, document.body, document.documentElement, ...root.querySelectorAll("*")]);
+  for (const element of observedFrameElements) {
+    if (currentElements.has(element)) continue;
+    frameResizeObserver.unobserve(element);
+    observedFrameElements.delete(element);
+  }
+  for (const element of currentElements) {
+    if (observedFrameElements.has(element)) continue;
+    frameResizeObserver.observe(element);
+    observedFrameElements.add(element);
+  }
 }
 
 observeFrameContent();

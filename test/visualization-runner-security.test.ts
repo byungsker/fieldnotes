@@ -128,35 +128,27 @@ test("custom runner reports bounded content height to the host for normal page s
   assert.match(stylesSource, /\.mle-fieldnotes-view-block\s*\{[^}]*overflow-x:\s*clip;[^}]*overflow-y:\s*visible;/su);
 });
 
-test("custom runner includes vertically scrollable descendants in its reported frame height", () => {
+test("frame height follows page content without adding clipped nested-scroll overflow", () => {
   const sent: Array<{ type?: string; height?: number; requestId?: number }> = [];
   const nestedScroller = {
     scrollHeight: 1_100,
     clientHeight: 200,
-    getBoundingClientRect: () => ({ bottom: 330 }),
+    scrollWidth: 1_100,
+    clientWidth: 370,
   };
   const root = {
     scrollHeight: 300,
     addEventListener: () => undefined,
-    getBoundingClientRect: () => ({ top: 20 }),
     querySelectorAll: () => [nestedScroller],
   };
+  const body = { scrollHeight: 300, addEventListener: () => undefined };
+  const documentElement = { scrollHeight: 300 };
   const context = vm.createContext({
     __sent: sent,
     URLSearchParams,
     requestAnimationFrame: (callback: () => void) => callback(),
-    window: {
-      location: { search: "" },
-      parent: {},
-      getComputedStyle: () => ({ overflowY: "auto", overflow: "auto" }),
-      addEventListener: () => undefined,
-    },
-    document: {
-      getElementById: () => root,
-      body: { scrollHeight: 300, addEventListener: () => undefined },
-      documentElement: { scrollHeight: 300 },
-      head: {},
-    },
+    window: { location: { search: "" }, parent: {}, addEventListener: () => undefined },
+    document: { getElementById: () => root, body, documentElement, head: {} },
   });
   vm.runInContext(runnerSource, context);
   vm.runInContext("activeRequestId = 17; hostPort = { postMessage: (message) => globalThis.__sent.push(message) }; reportFrameHeight();", context);
@@ -164,7 +156,43 @@ test("custom runner includes vertically scrollable descendants in its reported f
   const message = sent[0];
   assert.equal(message?.type, "resize");
   assert.equal(message?.requestId, 17);
-  assert.equal(message?.height, 1_210);
+  assert.equal(message?.height, 300, "a fixed-height nested scroller remains independently scrollable without blank iframe height");
+
+  root.scrollHeight = 1_240;
+  body.scrollHeight = 1_240;
+  documentElement.scrollHeight = 1_240;
+  vm.runInContext("reportFrameHeight()", context);
+  assert.equal(sent[1]?.height, 1_240, "ordinary page content still grows the outer frame");
+});
+
+test("runner unobserves descendants removed by repeated render replacements", () => {
+  const observed = new Set<object>();
+  const children: object[] = [];
+  const root = { addEventListener: () => undefined, querySelectorAll: () => children };
+  const body = {};
+  const documentElement = {};
+  const context = vm.createContext({
+    URLSearchParams,
+    ResizeObserver: class {
+      observe(element: object) { observed.add(element); }
+      unobserve(element: object) { observed.delete(element); }
+    },
+    window: { location: { search: "" }, parent: {}, addEventListener: () => undefined },
+    document: { getElementById: () => root, body, documentElement, head: {} },
+  });
+  vm.runInContext(runnerSource, context);
+
+  const oldTargets = [{}, {}];
+  children.push(...oldTargets);
+  vm.runInContext("observeFrameContent()", context);
+  assert.ok(oldTargets.every((element) => observed.has(element)));
+
+  children.splice(0, children.length, {});
+  const currentTarget = children[0];
+  vm.runInContext("observeFrameContent()", context);
+  assert.ok(oldTargets.every((element) => !observed.has(element)));
+  assert.ok(observed.has(currentTarget));
+  assert.equal(observed.size, 4, "only the root, document surfaces, and current descendant remain observed");
 });
 
 test("generated Worker locks global and prototype escape routes before custom code", () => {
