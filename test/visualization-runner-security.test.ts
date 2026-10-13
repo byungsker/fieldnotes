@@ -155,6 +155,37 @@ test("synthetic custom-view examples follow the render-function-body contract an
   }
 });
 
+test("vault overview example renders a synthetic read-only dashboard with local filters", () => {
+  const examplePath = path.join(projectRoot, "packages/markdown-live-editor/examples/vault-overview-dashboard.md");
+  const markdown = readFileSync(examplePath, "utf8");
+  const fence = markdown.match(/```fieldnotes-view\n([\s\S]*?)\n```/u)?.[0];
+  assert.ok(fence, "dashboard example should contain one Fieldnotes view block");
+  const config = parseFieldnotesViewConfig(fence);
+  assert.equal(config.view, "custom");
+  assert.deepEqual(config.query?.where, [{ field: "frontmatter.demo", operator: "eq", value: true }]);
+  assert.ok(config.js);
+  const notes = [
+    { id: "00000000-0000-4000-8000-000000000001", title: "House Budget", path: "Sample/House Budget.md", updatedAt: new Date().toISOString(), frontmatter: { demo: true, status: "active" } },
+    { id: "00000000-0000-4000-8000-000000000002", title: "Reading queue", path: "Sample/Reading queue.md", updatedAt: new Date().toISOString(), frontmatter: { demo: true, status: "draft" } },
+  ];
+  const input = { requestId: 1, notes, trash: [], state: { status: "all", search: "" } };
+  const { context } = workerContext(config.js);
+  vm.runInContext(`self.onmessage({ data: ${JSON.stringify(input)} });`, context);
+  const message = (context.__messages as Array<{ type: string; html?: string; message?: string }>)[0];
+  assert.equal(message?.type, "result", message?.message);
+  assert.match(message?.html ?? "", /Vault overview/u);
+  assert.match(message?.html ?? "", /House Budget/u);
+  assert.match(message?.html ?? "", /2 of 2 matching demo notes/u);
+  assert.deepEqual([...config.js.matchAll(/data-fn-event="([^"]+)"/gu)].map((match) => match[1]), ["state.set", "state.set"]);
+
+  const filtered = workerContext(config.js);
+  vm.runInContext(`self.onmessage({ data: ${JSON.stringify({ ...input, state: { status: "active", search: "budget" } })} });`, filtered.context);
+  const filteredMessage = (filtered.context.__messages as Array<{ type: string; html?: string }>)[0];
+  assert.equal(filteredMessage?.type, "result");
+  assert.match(filteredMessage?.html ?? "", /House Budget/u);
+  assert.doesNotMatch(filteredMessage?.html ?? "", /Reading queue/u);
+});
+
 test("runner source masks network APIs and drops outbound HTML/CSS surfaces", () => {
   for (const api of [
     '"fetch"', '"XMLHttpRequest"', '"WebSocket"', '"EventSource"', '"WebTransport"',

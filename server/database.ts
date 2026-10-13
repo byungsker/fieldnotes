@@ -10,7 +10,7 @@ import { ViewQueryLimitError, VIEW_TRASH_LIMIT_MESSAGE } from "./view-query-limi
 import { FileVault, VaultStorageError, VaultVersionConflictError } from "./vault.js";
 
 type SqlRow = Record<string, string | number | null>;
-type DatabaseOptions = { seedDemo?: boolean; vaultDir?: string };
+type DatabaseOptions = { seedDemo?: boolean; vaultDir?: string; vaultPathAllowRoot?: string };
 
 export type KnowledgeDatabase = {
   db: DatabaseSync;
@@ -425,12 +425,38 @@ function assertVaultPathWithinDataDir(dataDir: string, vaultDir: string): void {
   }
 }
 
+function assertVaultPathWithinAllowedRoot(root: string, vaultDir: string): void {
+  const resolvedRoot = path.resolve(root);
+  const relative = path.relative(resolvedRoot, vaultDir);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error("The selected vault path must remain inside its approved directory.");
+  }
+  let current = resolvedRoot;
+  try {
+    if (lstatSync(current).isSymbolicLink()) throw new Error("The approved vault directory cannot be a symbolic link.");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  for (const segment of relative ? relative.split(path.sep) : []) {
+    current = path.join(current, segment);
+    try {
+      if (lstatSync(current).isSymbolicLink()) throw new Error("The selected vault path cannot pass through a symbolic link.");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") break;
+      throw error;
+    }
+  }
+}
+
 export function openDatabase(dataDir: string, options: DatabaseOptions = {}): KnowledgeDatabase {
   const resolvedDir = path.resolve(dataDir);
   mkdirSync(resolvedDir, { recursive: true, mode: 0o700 });
   const configuredVault = options.vaultDir ?? process.env.KB_VAULT_DIR;
   const vaultDir = configuredVault ? path.resolve(configuredVault) : undefined;
-  if (vaultDir) assertVaultPathWithinDataDir(resolvedDir, vaultDir);
+  if (vaultDir) {
+    if (options.vaultPathAllowRoot) assertVaultPathWithinAllowedRoot(options.vaultPathAllowRoot, vaultDir);
+    else assertVaultPathWithinDataDir(resolvedDir, vaultDir);
+  }
   const dbPath = path.join(resolvedDir, vaultDir ? "vault-index.sqlite" : "knowledge.sqlite");
   const db = new DatabaseSync(dbPath);
   db.exec("PRAGMA journal_mode = WAL;");

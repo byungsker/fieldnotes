@@ -8,6 +8,11 @@ All routes are under the same origin as the web app. Requests and responses are 
 | --- | --- | --- |
 | `GET` | `/api/health` | Health and database schema version |
 | `GET` | `/api/vault/status` | Active storage mode, counts, and durable vault sequence |
+| `GET` | `/api/vault/settings` | Current absolute server vault path and any saved next-restart selection |
+| `GET` | `/api/vault/settings/directories?relativePath=...` | Browse real, non-symlink subdirectories under the server Mac's `Documents` folder |
+| `POST` | `/api/vault/settings/verify` | Verify `{relativePath}` is an empty private folder or valid Fieldnotes vault |
+| `POST` | `/api/vault/settings/selection` | Save a verified `{relativePath}` for the next server restart |
+| `DELETE` | `/api/vault/settings/selection` | Clear the saved folder and return to the configured `KB_VAULT_DIR` |
 | `GET` | `/api/documents?q=term&folderId=ID` | List or search notes; omit `folderId` for all notes, use `root` for unfiled notes |
 | `POST` | `/api/documents` | Create `{title, body, folderId?, id?}`; `id` is an optional caller-generated UUID for safe retries; omit `folderId` or use `null` for unfiled |
 | `GET` | `/api/documents/:id` | Read a complete note, including `version` |
@@ -28,6 +33,8 @@ All routes are under the same origin as the web app. Requests and responses are 
 | `GET` | `/api/export` | Download versioned JSON export |
 
 IDs are generated UUIDs. Folder names are 1–120 characters and cannot contain path separators or control characters. Duplicate folder names are rejected within the same parent. The hierarchy has no application-defined depth limit; practical limits are available memory, storage, and SQLite's recursive-query/runtime limits. Folder moves reject cycles. Deleting a non-empty folder returns `409` with `folder_not_empty` and never cascades to notes or subfolders.
+
+Vault settings accept relative paths only. The server resolves and checks each directory under its own `Documents` folder, rejects symbolic links and unmanaged contents, and saves the choice privately for startup. The current vault remains active until restart; selection does not move or delete data. In SQLite mode with existing notes, an empty target is rejected until the offline vault migration is completed.
 
 ### Read-only view query
 

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import type { ErrorRequestHandler, Express, Request, Response } from "express";
 import express from "express";
@@ -40,6 +41,7 @@ import { queryVisualizationNotes, validateVisualizationQuery, VisualizationQuery
 import { MAX_VIEW_TRASH_BYTES, MAX_VIEW_TRASH_CANDIDATES, ViewQueryLimitError } from "./view-query-limits.js";
 import { patchFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { MovieSearchProviderError, type MovieSearchAdapter } from "./movie-search.js";
+import { VaultSettingsService } from "./vault-settings.js";
 import type { VisualizationAction, VisualizationValue } from "../shared/visualization.js";
 
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -293,12 +295,21 @@ function currentDocument(database: KnowledgeDatabase, request: Request, response
   return true;
 }
 
-export function createApp(database: KnowledgeDatabase, staticDirectory?: string, adapters: { movieSearch?: MovieSearchAdapter } = {}): Express {
+export function createApp(database: KnowledgeDatabase, staticDirectory?: string, adapters: { movieSearch?: MovieSearchAdapter; vaultSettings?: { documentsRoot?: string; configuredVaultPath?: string | null } } = {}): Express {
   const app = express();
   const resolvedStaticDirectory = staticDirectory ? path.resolve(staticDirectory) : undefined;
   const staticIndex = resolvedStaticDirectory ? path.join(resolvedStaticDirectory, "index.html") : undefined;
   const allowedTailscaleLogin = normalizedLogin(process.env.KB_ALLOWED_TAILSCALE_LOGIN);
   const configuredPublicOrigin = process.env.KB_PUBLIC_ORIGIN?.trim().replace(/\/$/, "") || undefined;
+  const configuredVaultPath = Object.hasOwn(adapters.vaultSettings ?? {}, "configuredVaultPath")
+    ? adapters.vaultSettings?.configuredVaultPath ?? null
+    : process.env.KB_VAULT_DIR?.trim() ? path.resolve(process.env.KB_VAULT_DIR) : null;
+  const vaultSettings = new VaultSettingsService(
+    database.dataDir,
+    database.vault?.rootDir ?? null,
+    adapters.vaultSettings?.documentsRoot ?? path.join(homedir(), "Documents"),
+    configuredVaultPath,
+  );
   const activeResponses = new Set<Promise<void>>();
   const eventStreams = new Set<() => void>();
   let nextEventStreamId = 1;
@@ -435,6 +446,39 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
     }
     const snapshot = database.vault.snapshot();
     response.json({ mode: "filesystem", vaultId: snapshot.vaultId, documentCount: snapshot.documents.length, folderCount: snapshot.folders.length, sequence: snapshot.sequence });
+  });
+
+  app.get("/api/vault/settings", (_request, response) => {
+    response.json({ settings: vaultSettings.getState() });
+  });
+
+  app.get("/api/vault/settings/directories", (request, response) => {
+    response.json({ listing: vaultSettings.listDirectories(request.query.relativePath ?? "") });
+  });
+
+  const verifyVaultSettingsTarget = (relativePath: unknown) => {
+    const result = vaultSettings.verify(relativePath);
+    if (!database.vault && result.state === "empty") {
+      const documentCount = Number((database.db.prepare("SELECT COUNT(*) AS count FROM documents").get() as { count: number }).count);
+      if (documentCount > 0) {
+        throw new VaultStorageError("This SQLite library already contains notes. Complete the documented offline vault migration before selecting an empty folder.", "vault_migration_required", 409);
+      }
+    }
+    return result;
+  };
+
+  app.post("/api/vault/settings/verify", (request, response) => {
+    const result = verifyVaultSettingsTarget(request.body?.relativePath);
+    response.json({ verified: true, path: result.absolutePath, state: result.state, relativePath: request.body?.relativePath ?? "" });
+  });
+
+  app.post("/api/vault/settings/selection", (request, response) => {
+    verifyVaultSettingsTarget(request.body?.relativePath);
+    response.json({ settings: vaultSettings.saveSelection(request.body?.relativePath) });
+  });
+
+  app.delete("/api/vault/settings/selection", (_request, response) => {
+    response.json({ settings: vaultSettings.clearSelection() });
   });
 
   app.get("/api/bookmarks/metadata", async (request, response) => {

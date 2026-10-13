@@ -19,8 +19,10 @@ import {
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { pipeline } from "node:stream/promises";
+import { homedir } from "node:os";
 import { closeDatabase, openDatabase } from "../server/database.js";
 import { FileVault, VaultStorageError } from "../server/vault.js";
+import { resolveSavedVaultSelection } from "../server/vault-settings.js";
 
 function parseArgs(values: string[]): { command?: string; flags: Record<string, string | true> } {
   const [command, ...rest] = values;
@@ -59,7 +61,7 @@ function isInside(root: string, target: string): boolean {
 }
 
 function assertNoSymlinkBelow(root: string, target: string, description: string): void {
-  if (!isInside(root, target)) throw new Error(`${description} must remain inside KB_DATA_DIR.`);
+  if (!isInside(root, target)) throw new Error(`${description} must remain inside its approved root.`);
   let current = root;
   for (const segment of path.relative(root, target).split(path.sep)) {
     current = path.join(current, segment);
@@ -140,11 +142,14 @@ async function main(): Promise<void> {
   const dataDir = path.resolve(process.env.KB_DATA_DIR ?? "./data");
   assertStopped(dataDir, flags);
   if (command === "backup") {
-    const configured = process.env.KB_VAULT_DIR;
-    if (!configured) throw new Error("KB_VAULT_DIR must point to the active Markdown vault before creating a vault backup.");
+    const documentsRoot = path.join(homedir(), "Documents");
+    const savedSelection = resolveSavedVaultSelection(dataDir, documentsRoot);
+    const configured = savedSelection?.absolutePath ?? process.env.KB_VAULT_DIR;
+    if (!configured) throw new Error("No active Markdown vault is configured. Set KB_VAULT_DIR or select a verified folder in Fieldnotes settings.");
     const source = path.resolve(configured);
-    assertNoSymlinkBelow(dataDir, source, "KB_VAULT_DIR");
-    if (!FileVault.hasState(source)) throw new Error("No Fieldnotes vault manifest was found at KB_VAULT_DIR.");
+    const approvedRoot = savedSelection ? documentsRoot : dataDir;
+    assertNoSymlinkBelow(approvedRoot, source, savedSelection ? "Selected vault" : "KB_VAULT_DIR");
+    if (!FileVault.hasState(source)) throw new Error("No Fieldnotes vault manifest was found at the configured active vault path.");
     const backupDir = path.join(dataDir, "private-backups");
     assertNoSymlinkBelow(dataDir, backupDir, "Private backup directory");
     mkdirSync(backupDir, { recursive: true, mode: 0o700 });
@@ -158,7 +163,11 @@ async function main(): Promise<void> {
     mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
     const staging = path.join(path.dirname(destination), `.${path.basename(destination)}.staging-${randomUUID()}`);
     try {
-      const index = openDatabase(dataDir, { seedDemo: false, vaultDir: source });
+      const index = openDatabase(dataDir, {
+        seedDemo: false,
+        vaultDir: source,
+        ...(savedSelection ? { vaultPathAllowRoot: documentsRoot } : {}),
+      });
       closeDatabase(index);
       await copyTree(source, staging);
       const counts = verifyVaults(source, staging);
