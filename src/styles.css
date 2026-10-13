@@ -1522,6 +1522,7 @@ html[data-theme="dark"] select:focus-visible { outline-color: rgba(164, 211, 171
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .action-dialog[open], .action-dialog-centered[open] { animation: dialog-fade .12s ease-out both; }
   .loading-skeleton::after { animation: none; transform: none; }
 }
 

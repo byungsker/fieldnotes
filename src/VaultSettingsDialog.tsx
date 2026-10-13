@@ -176,7 +176,7 @@ export function VaultSettingsDialog({ onClose }: { onClose: () => void }) {
                 </span>
               ))}
             </div>
-            <button type="button" className="vault-verify-button" onClick={() => void verifyCurrent()} disabled={busy || loading || !listing}>
+            <button type="button" className="vault-verify-button" onClick={() => void verifyCurrent()} disabled={busy || loading || !listing || !listing.relativePath}>
               {busy ? <LoaderCircle size={14} className="is-spinning" aria-hidden="true" /> : <FolderOpen size={14} aria-hidden="true" />}
               Verify this folder
             </button>
