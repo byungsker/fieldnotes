@@ -153,6 +153,9 @@ function fieldnotesBlockIndex(editor: NodeViewProps["editor"], getPos: NodeViewP
 }
 
 const SAFE_VIEW_KEY = /^(?!__proto__$|prototype$|constructor$)[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
+const CREATE_ACTION_RETRY_WINDOW_MS = 1_500;
+
+type RecentCreateAction = { fingerprint: string; actionId: string; createdAt: number };
 
 function isVisualizationValue(value: unknown, depth = 0): value is VisualizationValue {
   if (depth > 6) return false;
@@ -212,6 +215,7 @@ function FieldnotesViewNodeView({ node, editor, getPos, updateAttributes, option
   const [trustRevision, setTrustRevision] = useState(0);
   const [viewState, setViewState] = useState<Record<string, VisualizationValue>>({});
   const refreshRef = useRef<(() => void) | null>(null);
+  const recentCreateActionRef = useRef<RecentCreateAction | null>(null);
   const refreshTimerRef = useRef<number | undefined>(undefined);
   const requestGenerationRef = useRef(0);
   const currentControllerRef = useRef<AbortController | null>(null);
@@ -337,13 +341,25 @@ function FieldnotesViewNodeView({ node, editor, getPos, updateAttributes, option
       const title = event.fields.title?.trim();
       if (!title) throw new Error("A title is required to create a note.");
       const frontmatter = recordFromJson(event.fields.frontmatter, "Frontmatter");
-      action = {
-        type: "note.create",
-        actionId: crypto.randomUUID(),
+      const body = Object.hasOwn(event.fields, "body") ? event.fields.body ?? "" : undefined;
+      const folderId = folderIdFromField(event.fields);
+      const payload = {
+        type: "note.create" as const,
         title,
-        ...(Object.hasOwn(event.fields, "body") ? { body: event.fields.body ?? "" } : {}),
+        ...(body === undefined ? {} : { body }),
         ...(frontmatter ? { frontmatter } : {}),
-        ...(folderIdFromField(event.fields) !== undefined ? { folderId: folderIdFromField(event.fields) } : {}),
+        ...(folderId === undefined ? {} : { folderId }),
+      };
+      const fingerprint = JSON.stringify(payload);
+      const now = Date.now();
+      const recent = recentCreateActionRef.current;
+      const actionId = recent && recent.fingerprint === fingerprint && now - recent.createdAt < CREATE_ACTION_RETRY_WINDOW_MS
+        ? recent.actionId
+        : crypto.randomUUID();
+      recentCreateActionRef.current = { fingerprint, actionId, createdAt: now };
+      action = {
+        ...payload,
+        actionId,
       };
       refreshAfter = true;
     } else if (event.type === "note.update" || event.type === "note.frontmatter.patch" || event.type === "note.trash") {
