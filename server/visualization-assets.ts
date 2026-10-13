@@ -73,16 +73,48 @@ function normalizeLocalReference(target: string, markdownPath: string): string |
   return normalized;
 }
 
+function stripFencedCode(markdown: string): string {
+  const lines = markdown.split(/\r\n?|\n/u);
+  let fenceCharacter: "`" | "~" | undefined;
+  let fenceLength = 0;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (!fenceCharacter) {
+      const opening = line.match(/^[ \t]{0,3}(`{3,}|~{3,})([^\r\n]*)$/u);
+      if (!opening) continue;
+      const delimiter = opening[1] ?? "";
+      const info = opening[2] ?? "";
+      if (delimiter[0] === "`" && info.includes("`")) continue;
+      fenceCharacter = delimiter[0] as "`" | "~";
+      fenceLength = delimiter.length;
+      lines[index] = "";
+      continue;
+    }
+
+    const closing = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/u);
+    lines[index] = "";
+    const delimiter = closing?.[1];
+    if (delimiter && delimiter[0] === fenceCharacter && delimiter.length >= fenceLength) {
+      fenceCharacter = undefined;
+      fenceLength = 0;
+    }
+  }
+
+  return lines.join("\n");
+}
+
 /** Extract only explicit, relative raster-image references from a note body. */
 export function extractLocalImageReferences(markdown: string, markdownPath: string): string[] {
+  const withoutFencedCode = stripFencedCode(markdown);
   const paths = new Set<string>();
   const add = (rawTarget: string) => {
     const target = rawTarget.split("|", 1)[0]?.split("#", 1)[0]?.trim() ?? "";
     const normalized = normalizeLocalReference(target, markdownPath);
     if (normalized) paths.add(normalized);
   };
-  for (const match of markdown.matchAll(/!\[\[([^\]\r\n]+)\]\]/gu)) add(match[1] ?? "");
-  for (const match of markdown.matchAll(/!\[[^\]\r\n]*\]\(\s*(?:<([^>\r\n]+)>|([^\s)\r\n]+))(?:\s+[^)]*)?\)/gu)) {
+  for (const match of withoutFencedCode.matchAll(/!\[\[([^\]\r\n]+)\]\]/gu)) add(match[1] ?? "");
+  for (const match of withoutFencedCode.matchAll(/!\[[^\]\r\n]*\]\(\s*(?:<([^>\r\n]+)>|([^\s)\r\n]+))(?:\s+[^)]*)?\)/gu)) {
     add(match[1] ?? match[2] ?? "");
   }
   return [...paths].slice(0, 20);

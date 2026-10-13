@@ -28,6 +28,7 @@ const localNote = createDocument(database, "Synthetic local poster", "---\nkind:
 const publicPosterUrl = "https://image.tmdb.org/t/p/w500/synthetic-poster.jpg";
 const publicNote = createDocument(database, "Synthetic public poster", `---\nposter: ${publicPosterUrl}\n---\nSynthetic fixture.`, recordsFolder.id);
 const unsafeNote = createDocument(database, "Synthetic unsafe poster", "---\nposter: https://image.tmdb.org.evil.example/t/p/w500/nope.jpg\n---\nSynthetic fixture.", recordsFolder.id);
+const fencedNote = createDocument(database, "Synthetic fenced image example", "```markdown\n![[../attachments/synthetic-cover.png]]\n```", recordsFolder.id);
 let posterRequests = 0;
 let receivedPosterRequest: { url: string; init: RequestInit } | undefined;
 const app = createApp(database, undefined, {
@@ -74,6 +75,33 @@ test("local image extraction resolves only explicit relative raster references",
   ]);
   assert.deepEqual(extractLocalImageReferences("![[../../.fieldnotes/state.json]]", "movies/records/fixture.md"), []);
   assert.deepEqual(extractLocalImageReferences("![remote](https://example.invalid/image.svg)", "movies/records/fixture.md"), []);
+});
+
+test("local image extraction ignores fenced code using delimiter-aware boundaries", () => {
+  const markdown = [
+    "![[../attachments/before.png]]",
+    "```md",
+    "![[../attachments/fenced-wiki.png]]",
+    "```label",
+    "![still-fenced](../attachments/fenced-markdown.jpg)",
+    "```",
+    "![[../attachments/after.png]]",
+    "````ts",
+    "![long-fenced](../attachments/long-fenced.webp)",
+    "```",
+    "![[../attachments/still-long-fenced.png]]",
+    "  ````",
+    "~~~text",
+    "![[../attachments/tilde-fenced.png]]",
+    "```",
+    "~~~",
+    "![final](../attachments/final.webp)",
+  ].join("\n");
+  assert.deepEqual(extractLocalImageReferences(markdown, "movies/records/fixture.md"), [
+    "movies/attachments/before.png",
+    "movies/attachments/after.png",
+    "movies/attachments/final.webp",
+  ]);
 });
 
 test("local images require an allowed extension, matching raster bytes, and the size cap", () => {
@@ -132,6 +160,7 @@ test("view asset API serves referenced local images and validated public posters
   assert.equal(queryResponse.status, 200);
   const query = await queryResponse.json() as { notes: Array<{ id: string; assetPaths?: string[] }> };
   assert.deepEqual(query.notes.find((note) => note.id === localNote.id)?.assetPaths, ["movies/attachments/synthetic-cover.png"]);
+  assert.equal(query.notes.find((note) => note.id === fencedNote.id)?.assetPaths, undefined);
 
   const localUrl = `${baseUrl}/api/views/assets/${localNote.id}?asset=${encodeURIComponent("movies/attachments/synthetic-cover.png")}&v=${localNote.contentHash}`;
   const localResponse = await fetch(localUrl);
@@ -147,12 +176,35 @@ test("view asset API serves referenced local images and validated public posters
   assert.notEqual(refreshedLocal.headers.get("etag"), initialLocalEtag);
   assert.deepEqual(Buffer.from(await refreshedLocal.arrayBuffer()), updatedLocalBytes);
 
+  const fencedReference = `${baseUrl}/api/views/assets/${fencedNote.id}?asset=${encodeURIComponent("movies/attachments/synthetic-cover.png")}&v=${fencedNote.contentHash}`;
+  assert.equal((await fetch(fencedReference)).status, 404);
+
   const posterResponse = await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`);
   assert.equal(posterResponse.status, 200);
   assert.equal(posterResponse.headers.get("content-type"), "image/jpeg");
   assert.deepEqual(Buffer.from(await posterResponse.arrayBuffer()), posterBytes);
   const initialEtag = posterResponse.headers.get("etag");
   assert.ok(initialEtag);
+  const entityTagList = await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`, {
+    headers: { "If-None-Match": `"other,opaque", W/${initialEtag}` },
+  });
+  assert.equal(entityTagList.status, 304);
+  const wildcard = await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`, {
+    headers: { "If-None-Match": "*" },
+  });
+  assert.equal(wildcard.status, 304);
+  const quotedWildcard = await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`, {
+    headers: { "If-None-Match": '"*"' },
+  });
+  assert.equal(quotedWildcard.status, 200);
+  const malformedTag = await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`, {
+    headers: { "If-None-Match": `prefix${initialEtag}suffix` },
+  });
+  assert.equal(malformedTag.status, 200);
+  const malformedList = await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`, {
+    headers: { "If-None-Match": `${initialEtag}, malformed` },
+  });
+  assert.equal(malformedList.status, 200);
   servedPosterBytes = Buffer.from([0xff, 0xd8, 0xff, 0x01, 0x02, 0xff, 0xd9]);
   const refreshedPoster = await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`, {
     headers: { "If-None-Match": initialEtag },
@@ -160,13 +212,13 @@ test("view asset API serves referenced local images and validated public posters
   assert.equal(refreshedPoster.status, 200);
   assert.notEqual(refreshedPoster.headers.get("etag"), initialEtag);
   assert.deepEqual(Buffer.from(await refreshedPoster.arrayBuffer()), servedPosterBytes);
-  assert.equal(posterRequests, 2);
+  assert.equal(posterRequests, 7);
   assert.equal(receivedPosterRequest?.url, publicPosterUrl);
   assert.equal(receivedPosterRequest?.init.headers && "Authorization" in (receivedPosterRequest.init.headers as Record<string, string>), false);
 
   const unsafeResponse = await fetch(`${baseUrl}/api/views/assets/${unsafeNote.id}?field=poster&v=${unsafeNote.contentHash}`);
   assert.equal(unsafeResponse.status, 404);
-  assert.equal(posterRequests, 2);
+  assert.equal(posterRequests, 7);
   const unreferencedResponse = await fetch(`${baseUrl}/api/views/assets/${localNote.id}?asset=${encodeURIComponent("movies/attachments/other.png")}&v=${localNote.contentHash}`);
   assert.equal(unreferencedResponse.status, 404);
 });

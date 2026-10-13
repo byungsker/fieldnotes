@@ -165,6 +165,32 @@ function validateRequiredHash(value: unknown): string {
   return hash;
 }
 
+function matchesIfNoneMatch(value: string | undefined, etag: string): boolean {
+  if (value === undefined) return false;
+  const header = value.trim();
+  // The wildcard is special only as the complete field value.
+  if (header === "*") return true;
+
+  const tags: string[] = [];
+  let start = 0;
+  let inQuotes = false;
+  // Opaque tags can contain commas, so split only outside the quoted value.
+  for (let index = 0; index < header.length; index += 1) {
+    if (header[index] === '"') inQuotes = !inQuotes;
+    else if (header[index] === "," && !inQuotes) {
+      tags.push(header.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  if (inQuotes) return false;
+  tags.push(header.slice(start).trim());
+
+  const entityTag = /^(?:W\/)?"[\x21\x23-\x7e\x80-\xff]*"$/u;
+  if (tags.length === 0 || tags.some((tag) => !entityTag.test(tag))) return false;
+  // If-None-Match uses weak comparison for GET and HEAD.
+  return tags.some((tag) => tag.replace(/^W\//u, "") === etag);
+}
+
 function validateSequence(value: unknown, label: string): number {
   const sequence = Number(value);
   if (!Number.isSafeInteger(sequence) || sequence < 0) {
@@ -573,7 +599,7 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
     response.setHeader("Content-Type", image.contentType);
     response.setHeader("Content-Length", image.bytes.byteLength);
     response.setHeader("X-Content-Type-Options", "nosniff");
-    if (request.get("if-none-match") === etag) {
+    if (matchesIfNoneMatch(request.get("if-none-match"), etag)) {
       response.status(304).end();
       return;
     }
