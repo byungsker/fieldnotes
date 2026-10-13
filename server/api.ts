@@ -566,7 +566,8 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
       throw new RequestValidationError("A view asset must name one referenced local image or poster field.");
     }
 
-    const etag = `"${currentHash}"`;
+    const imageHash = createHash("sha256").update(image.bytes).digest("hex");
+    const etag = `"${imageHash}"`;
     response.setHeader("Cache-Control", "private, max-age=300");
     response.setHeader("ETag", etag);
     response.setHeader("Content-Type", image.contentType);
