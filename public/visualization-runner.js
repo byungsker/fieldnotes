@@ -50,11 +50,20 @@ function sendToHost(message) {
 function reportFrameHeight() {
   resizeFrameScheduled = false;
   if (!Number.isSafeInteger(activeRequestId)) return;
-  const height = Math.ceil(Math.max(
+  let height = Math.max(
     root.scrollHeight,
     document.body.scrollHeight,
     document.documentElement.scrollHeight,
-  ));
+  );
+  const rootBounds = root.getBoundingClientRect();
+  for (const element of root.querySelectorAll("*")) {
+    const style = window.getComputedStyle(element);
+    if (!/(?:auto|scroll)/.test(style.overflowY || style.overflow || "")) continue;
+    const bounds = element.getBoundingClientRect();
+    const hiddenContent = Math.max(0, element.scrollHeight - element.clientHeight);
+    height = Math.max(height, bounds.bottom - rootBounds.top + hiddenContent);
+  }
+  height = Math.ceil(height);
   sendToHost({
     type: "resize",
     requestId: activeRequestId,
@@ -68,12 +77,32 @@ function scheduleFrameHeightReport() {
   requestAnimationFrame(reportFrameHeight);
 }
 
-if (typeof ResizeObserver === "function") {
-  const frameResizeObserver = new ResizeObserver(scheduleFrameHeightReport);
+const frameResizeObserver = typeof ResizeObserver === "function"
+  ? new ResizeObserver(scheduleFrameHeightReport)
+  : undefined;
+
+function observeFrameContent() {
+  if (!frameResizeObserver) return;
   frameResizeObserver.observe(root);
   frameResizeObserver.observe(document.body);
   frameResizeObserver.observe(document.documentElement);
+  for (const element of root.querySelectorAll("*")) frameResizeObserver.observe(element);
 }
+
+observeFrameContent();
+
+if (typeof MutationObserver === "function") {
+  const frameMutationObserver = new MutationObserver(() => {
+    observeFrameContent();
+    scheduleFrameHeightReport();
+  });
+  frameMutationObserver.observe(root, { childList: true, subtree: true, characterData: true });
+  frameMutationObserver.observe(document.head, { childList: true, subtree: true, characterData: true });
+}
+
+root.addEventListener("load", scheduleFrameHeightReport, true);
+window.addEventListener("resize", scheduleFrameHeightReport);
+window.visualViewport?.addEventListener("resize", scheduleFrameHeightReport);
 
 function stopWorker() {
   if (workerTimer) clearTimeout(workerTimer);
@@ -335,6 +364,7 @@ function renderResult(message, allowedImageSources) {
     container.className = "fieldnotes-custom-root";
     container.append(content);
     root.replaceChildren(container);
+    observeFrameContent();
     const existing = document.getElementById("user-styles");
     if (existing) existing.remove();
     if (stylesheet) {

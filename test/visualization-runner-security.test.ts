@@ -128,6 +128,45 @@ test("custom runner reports bounded content height to the host for normal page s
   assert.match(stylesSource, /\.mle-fieldnotes-view-block\s*\{[^}]*overflow-x:\s*clip;[^}]*overflow-y:\s*visible;/su);
 });
 
+test("custom runner includes vertically scrollable descendants in its reported frame height", () => {
+  const sent: Array<{ type?: string; height?: number; requestId?: number }> = [];
+  const nestedScroller = {
+    scrollHeight: 1_100,
+    clientHeight: 200,
+    getBoundingClientRect: () => ({ bottom: 330 }),
+  };
+  const root = {
+    scrollHeight: 300,
+    addEventListener: () => undefined,
+    getBoundingClientRect: () => ({ top: 20 }),
+    querySelectorAll: () => [nestedScroller],
+  };
+  const context = vm.createContext({
+    __sent: sent,
+    URLSearchParams,
+    requestAnimationFrame: (callback: () => void) => callback(),
+    window: {
+      location: { search: "" },
+      parent: {},
+      getComputedStyle: () => ({ overflowY: "auto", overflow: "auto" }),
+      addEventListener: () => undefined,
+    },
+    document: {
+      getElementById: () => root,
+      body: { scrollHeight: 300, addEventListener: () => undefined },
+      documentElement: { scrollHeight: 300 },
+      head: {},
+    },
+  });
+  vm.runInContext(runnerSource, context);
+  vm.runInContext("activeRequestId = 17; hostPort = { postMessage: (message) => globalThis.__sent.push(message) }; reportFrameHeight();", context);
+
+  const message = sent[0];
+  assert.equal(message?.type, "resize");
+  assert.equal(message?.requestId, 17);
+  assert.equal(message?.height, 1_210);
+});
+
 test("generated Worker locks global and prototype escape routes before custom code", () => {
   const source = generatedWorkerSource();
   assert.doesNotThrow(() => new vm.Script(source));
@@ -295,6 +334,14 @@ test("custom view execution requires local approval for the exact note, block, a
   assert.match(viewBlockSource, /Trust this source and run/u);
   assert.match(viewBlockSource, /Revoke trust/u);
   assert.match(viewBlockSource, /trusted && !error && result/u);
+
+  const trustedOutputStart = viewBlockSource.indexOf('parsed.config?.view === "custom" && options.enableCustomVisualizations && trusted && !error && result && (');
+  const trustedOutputEnd = viewBlockSource.indexOf('parsed.config?.view === "custom" && options.enableCustomVisualizations && !error && !result && (', trustedOutputStart);
+  assert.ok(trustedOutputStart >= 0 && trustedOutputEnd > trustedOutputStart);
+  const trustedOutput = viewBlockSource.slice(trustedOutputStart, trustedOutputEnd);
+  assert.match(trustedOutput, /<SandboxedVisualization/u);
+  assert.match(trustedOutput, /Revoke trust/u);
+  assert.doesNotMatch(trustedOutput, />\s*Run script\s*</u);
 });
 
 test("changing notes and view inputs cancels stale work and releases runner resources", () => {
