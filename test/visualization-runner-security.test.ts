@@ -290,6 +290,30 @@ test("synthetic custom-view examples follow the render-function-body contract an
   }
 });
 
+test("synthetic calendar runner output keeps all 31 dates inside the grid and summary outside", () => {
+  const renderCalendar = (quoteLiteral: string) => {
+    const source = `
+      const days = Array.from({ length: 31 }, (_, index) => '<div class="day' + ${quoteLiteral} + (index + 1) + '</div>').join("");
+      return { html: '<section><div class="calendar">' + days + '</div><p class="summary">Synthetic summary</p></section>', css: "" };
+    `;
+    const { context } = workerContext(source);
+    vm.runInContext('self.onmessage({ data: { requestId: 31, notes: [], state: {}, trash: [] } });', context);
+    const message = (context.__messages as Array<{ type: string; html?: string; message?: string }>)[0];
+    assert.equal(message?.type, "result", message?.message);
+    return message.html ?? "";
+  };
+  const malformed = renderCalendar('"' + ">" + '"');
+  const corrected = renderCalendar(String.fromCharCode(39, 34, 62, 39));
+
+  assert.match(malformed, /<div class="day>1<\/div>/u, "the regression fixture reproduces the missing class quote");
+  const dateLabels = [...corrected.matchAll(/<div class="day">(\d+)<\/div>/gu)].map((match) => Number(match[1]));
+  assert.deepEqual(dateLabels, Array.from({ length: 31 }, (_, index) => index + 1));
+  const summaryStart = corrected.indexOf('<p class="summary">');
+  const gridEnd = corrected.lastIndexOf("</div>", summaryStart) + "</div>".length;
+  assert.ok(gridEnd > 0 && summaryStart >= gridEnd, "the summary follows the calendar grid as a sibling");
+  assert.doesNotMatch(corrected.slice(0, gridEnd), /class="summary"/u);
+});
+
 test("vault overview example renders a synthetic read-only dashboard with local filters", () => {
   const examplePath = path.join(projectRoot, "packages/markdown-live-editor/examples/vault-overview-dashboard.md");
   const markdown = readFileSync(examplePath, "utf8");
