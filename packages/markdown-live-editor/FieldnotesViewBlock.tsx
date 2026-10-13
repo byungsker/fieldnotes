@@ -440,6 +440,7 @@ function FieldnotesViewNodeView({ node, editor, getPos, updateAttributes, option
       {parsed.config?.view === "custom" && options.enableCustomVisualizations && !error && !trusted && (
         <div className="mle-fieldnotes-view-trust" role="group" aria-label="Trust custom visualization">
           <p>This JavaScript will receive only the selected note data and view state. Review it before running.</p>
+          <p>Approval stays in this browser profile for this note, view position, and exact source. It asks again if one changes, browser data is cleared, or you use another profile or Fieldnotes address.</p>
           {!documentId && <p>Save this note before trusting its script.</p>}
           {!sourceHash && <p>Creating a script fingerprint…</p>}
           <button type="button" disabled={!documentId || !sourceHash} onClick={() => setReviewingSource(true)}>Review script</button>
@@ -466,7 +467,7 @@ function FieldnotesViewNodeView({ node, editor, getPos, updateAttributes, option
       {parsed.config?.view === "custom" && options.enableCustomVisualizations && trusted && !error && result && (
         <div className="mle-fieldnotes-view-approved">
           <div className="mle-fieldnotes-view-trust-status">
-            <span>Trusted for this note and exact source</span>
+            <span>Trusted in this browser profile for this note, view position, and exact source</span>
             <button type="button" onClick={() => {
               try {
                 options.visualizationTrustAdapter.revoke?.(documentId, blockIndex, sourceHash);

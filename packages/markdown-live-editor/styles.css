@@ -19,7 +19,8 @@
   min-width: 0;
   margin: 12px 0;
   padding: 12px;
-  overflow: clip;
+  overflow-x: clip;
+  overflow-y: visible;
   border: 1px solid var(--mle-border);
   border-radius: 10px;
   background: var(--mle-soft);
@@ -101,7 +102,7 @@
 .mle-fieldnotes-calendar-day-number { display: block; margin-bottom: 3px; color: var(--mle-muted); font-size: 10px; }
 .mle-fieldnotes-calendar-event,
 .mle-fieldnotes-calendar-more { display: block; overflow: hidden; color: var(--mle-accent); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.mle-fieldnotes-custom-preview iframe { display: block; width: 100%; height: 480px; max-height: 70vh; border: 1px solid var(--mle-border); border-radius: 7px; background: var(--mle-surface); }
+.mle-fieldnotes-custom-preview iframe { display: block; width: 100%; min-height: 160px; max-height: none; border: 1px solid var(--mle-border); border-radius: 7px; background: var(--mle-surface); }
 
 @media (max-width: 560px) {
   .mle-fieldnotes-view-block { padding: 9px; }
@@ -119,7 +120,6 @@
   .mle-fieldnotes-calendar-day { padding: 3px; }
   .mle-fieldnotes-calendar-event,
   .mle-fieldnotes-calendar-more { font-size: 9px; }
-  .mle-fieldnotes-custom-preview iframe { height: 520px; max-height: 68vh; }
   .mle-toolbar { gap: 7px; overflow-x: visible; }
   .mle-toolbar-group { gap: 8px; }
   .mle-toolbar-group--navigation { margin-left: 0; }

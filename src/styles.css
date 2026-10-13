@@ -268,7 +268,7 @@ button:focus-visible, input:focus-visible, textarea:not(.markdown-editor):focus-
 .conflict-banner strong { font-size: 11px; }
 .conflict-banner span { color: #9b7e6b; font-size: 10px; }
 .conflict-banner button { flex: 0 0 auto; padding: 6px 9px; color: #8a634b; border: 1px solid #ead9cc; border-radius: 6px; background: #fff; font-size: 9px; cursor: pointer; }
-.document-editor { display: flex; flex: 1; flex-direction: column; min-height: 0; padding: 48px clamp(32px, 6vw, 105px) 17px; }
+.document-editor { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: 48px clamp(32px, 6vw, 105px) 17px; }
 .title-input { width: 100%; padding: 0; color: #29342d; border: 0; outline: none; background: transparent; font-family: var(--serif); font-size: clamp(32px, 3.1vw, 42px); font-weight: 400; letter-spacing: -.7px; line-height: 1.2; }
 .title-input:focus-visible { outline: 2px solid rgba(78, 118, 93, .28); outline-offset: 5px; border-radius: 3px; }
 .document-meta { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: #a1a8a1; font-size: 10px; }
