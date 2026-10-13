@@ -131,7 +131,7 @@ test("runner document has a sandbox-specific no-network policy", async () => {
   assert.match(policy, /script-src 'sha256-[A-Za-z0-9+/=]+' blob:/);
   assert.match(policy, /script-src-elem 'sha256-[A-Za-z0-9+/=]+' blob:/);
   assert.doesNotMatch(policy, /script-src 'self'/);
-  assert.match(policy, /img-src 'none'/);
+  assert.match(policy, /img-src 'self'/);
   assert.match(policy, /font-src 'none'/);
   assert.match(policy, /frame-src 'none'/);
   assert.match(policy, /child-src 'none'/);
@@ -140,7 +140,7 @@ test("runner document has a sandbox-specific no-network policy", async () => {
   const html = await response.text();
   assert.match(html, /visualization-runner\.js/);
   assert.match(html, /connect-src 'none'/);
-  assert.match(html, /img-src 'none'/);
+  assert.match(html, /img-src 'self'/);
 });
 
 test("runner script is readable by its opaque frame origin only as a static CORS resource", async () => {

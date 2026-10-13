@@ -624,6 +624,19 @@ export class FileVault {
     return this.getDocumentMeta(id)?.relativePath;
   }
 
+  readAsset(relativePath: string, maxBytes: number): Buffer {
+    const absolute = this.safeAbsolute(relativePath);
+    if (statKind(absolute) !== "file") throw new VaultStorageError("The referenced vault asset is not a regular file.", "vault_entry_invalid", 404);
+    try {
+      return readRegularFileNoFollow(absolute, maxBytes);
+    } catch (error) {
+      if (error instanceof ViewQueryLimitError) {
+        throw new VaultStorageError("The referenced vault image exceeds the view asset size limit.", "vault_asset_too_large", 413);
+      }
+      throw error;
+    }
+  }
+
   getFolderPath(id: string): string | undefined {
     return this.getFolderMeta(id)?.relativePath;
   }

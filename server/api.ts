@@ -39,8 +39,18 @@ import {
 import { VaultStorageError } from "./vault.js";
 import { queryVisualizationNotes, validateVisualizationQuery, VisualizationQueryError } from "./visualizations.js";
 import { MAX_VIEW_TRASH_BYTES, MAX_VIEW_TRASH_CANDIDATES, ViewQueryLimitError } from "./view-query-limits.js";
-import { patchFrontmatter, serializeFrontmatter } from "./frontmatter.js";
+import { parseFrontmatter, patchFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { MovieSearchProviderError, type MovieSearchAdapter } from "./movie-search.js";
+import {
+  extractLocalImageReferences,
+  fetchPublicTmdbPoster,
+  isAllowedTmdbPosterUrl,
+  MAX_VISUALIZATION_IMAGE_BYTES,
+  validateLocalImage,
+  VisualizationAssetError,
+  type PosterImageFetcher,
+  type VisualizationImage,
+} from "./visualization-assets.js";
 import { VaultSettingsService } from "./vault-settings.js";
 import type { VisualizationAction, VisualizationValue } from "../shared/visualization.js";
 
@@ -295,7 +305,7 @@ function currentDocument(database: KnowledgeDatabase, request: Request, response
   return true;
 }
 
-export function createApp(database: KnowledgeDatabase, staticDirectory?: string, adapters: { movieSearch?: MovieSearchAdapter; vaultSettings?: { documentsRoot?: string; configuredVaultPath?: string | null } } = {}): Express {
+export function createApp(database: KnowledgeDatabase, staticDirectory?: string, adapters: { movieSearch?: MovieSearchAdapter; posterImageFetch?: PosterImageFetcher; vaultSettings?: { documentsRoot?: string; configuredVaultPath?: string | null } } = {}): Express {
   const app = express();
   const resolvedStaticDirectory = staticDirectory ? path.resolve(staticDirectory) : undefined;
   const staticIndex = resolvedStaticDirectory ? path.join(resolvedStaticDirectory, "index.html") : undefined;
@@ -367,7 +377,7 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
       response.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     }
     response.setHeader("Content-Security-Policy", visualizationRunner
-      ? "default-src 'none'; script-src 'sha256-Zj6E9h6BgqTfQDv/ONLroQqetsZUZKPZzFVzdsZFDd4=' blob:; script-src-elem 'sha256-Zj6E9h6BgqTfQDv/ONLroQqetsZUZKPZzFVzdsZFDd4=' blob:; style-src 'self' 'unsafe-inline'; img-src 'none'; font-src 'none'; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'; frame-ancestors 'self'; worker-src blob:"
+      ? "default-src 'none'; script-src 'sha256-STFraJHxeuqNMHALCU1Vww4AzZPpLpxHSYjyloiQ+YQ=' blob:; script-src-elem 'sha256-STFraJHxeuqNMHALCU1Vww4AzZPpLpxHSYjyloiQ+YQ=' blob:; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'none'; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'; frame-ancestors 'self'; worker-src blob:"
       : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
 
     if (allowedTailscaleLogin) {
@@ -521,6 +531,52 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
       query,
       query.includeTrash ? listTrashedDocuments(database, MAX_VIEW_TRASH_CANDIDATES, MAX_VIEW_TRASH_BYTES) : [],
     ));
+  });
+
+  app.get("/api/views/assets/:id", async (request, response) => {
+    const id = requestDocumentId(request);
+    const expectedHash = validateHash(request.query.v);
+    if (!expectedHash) throw new RequestValidationError("A note content hash is required for view assets.");
+    const current = getDocument(database.db, id);
+    if (!current) throw new MissingDocumentError();
+    const currentHash = current.contentHash || createHash("sha256").update(current.body, "utf8").digest("hex");
+    if (expectedHash !== currentHash) throw new VersionConflictError(current.version, currentHash);
+
+    let image: VisualizationImage;
+    if (Object.keys(request.query).some((key) => !["v", "asset", "field"].includes(key))) {
+      throw new RequestValidationError("View asset query contains an unsupported option.");
+    }
+    const assetPath = request.query.asset;
+    const field = request.query.field;
+    if (typeof assetPath === "string" && field === undefined) {
+      if (!database.vault || !current.filePath || !extractLocalImageReferences(current.body, current.filePath).includes(assetPath)) {
+        sendError(response, 404, "not_found", "The note does not reference this local image.");
+        return;
+      }
+      const bytes = database.vault.readAsset(assetPath, MAX_VISUALIZATION_IMAGE_BYTES);
+      image = validateLocalImage(bytes, assetPath);
+    } else if (assetPath === undefined && field === "poster") {
+      const poster = parseFrontmatter(current.body).values.poster;
+      if (!isAllowedTmdbPosterUrl(poster)) {
+        sendError(response, 404, "not_found", "The note does not reference an approved public poster.");
+        return;
+      }
+      image = await fetchPublicTmdbPoster(poster, adapters.posterImageFetch);
+    } else {
+      throw new RequestValidationError("A view asset must name one referenced local image or poster field.");
+    }
+
+    const etag = `"${currentHash}"`;
+    response.setHeader("Cache-Control", "private, max-age=300");
+    response.setHeader("ETag", etag);
+    response.setHeader("Content-Type", image.contentType);
+    response.setHeader("Content-Length", image.bytes.byteLength);
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    if (request.get("if-none-match") === etag) {
+      response.status(304).end();
+      return;
+    }
+    response.status(200).end(image.bytes);
   });
 
   app.post("/api/views/actions", async (request, response) => {
@@ -768,6 +824,10 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
     }
     if (error instanceof VisualizationQueryError) {
       sendError(response, error.status, "invalid_view_query", error.message);
+      return;
+    }
+    if (error instanceof VisualizationAssetError) {
+      sendError(response, error.status, error.code, error.message);
       return;
     }
     if (error instanceof ViewQueryLimitError) {

@@ -26,6 +26,8 @@ export type VisualizationNote = {
   contentHash: string;
   excerpt: string;
   frontmatter: Record<string, VisualizationValue>;
+  /** Safe relative raster images explicitly embedded by this note, if any. */
+  assetPaths?: string[];
   frontmatterError?: string;
 };
 

@@ -4,25 +4,29 @@ const MAX_CSS_CHARS = 12_000;
 const MAX_NOTES = 200;
 const MAX_TRASH = 100;
 const MAX_INPUT_CHARS = 1_000_000;
+const MAX_JAVASCRIPT_CHARS = 16_000;
 const MAX_ELEMENTS = 500;
 const MAX_DEPTH = 20;
+const MAX_ASSET_SOURCES = 50;
+const NOTE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const NOTE_HASH_PATTERN = /^[0-9a-f]{64}$/i;
 const ALLOWED_TAGS = new Set([
   "div", "section", "article", "header", "footer", "h1", "h2", "h3", "h4", "p", "span",
-  "strong", "em", "small", "code", "pre", "ul", "ol", "li", "table", "thead", "tbody",
+  "strong", "em", "small", "code", "pre", "ul", "ol", "li", "table", "thead", "tbody", "img",
   "tr", "th", "td", "time", "br", "hr", "button", "form", "label", "input", "textarea", "select", "option",
 ]);
-const DROPPED_TAGS = new Set(["script", "style", "iframe", "img", "svg", "link", "meta", "object", "embed", "video", "audio", "source"]);
+const DROPPED_TAGS = new Set(["script", "style", "iframe", "svg", "link", "meta", "object", "embed", "video", "audio", "source"]);
 const ALLOWED_ATTRIBUTES = new Set([
   "class", "role", "title", "aria-label", "aria-live", "colspan", "rowspan", "scope", "type", "name", "value",
   "placeholder", "checked", "selected", "disabled", "required", "min", "max", "step", "for", "rows",
-  "data-fn-event", "data-note-id", "data-state-key", "data-state-value",
+  "data-fn-event", "data-note-id", "data-state-key", "data-state-value", "src", "alt", "width", "height",
 ]);
 const ALLOWED_PROPERTIES = new Set([
   "color", "background-color", "border", "border-color", "border-radius", "border-width", "border-style", "box-shadow",
   "display", "gap", "row-gap", "column-gap", "grid-template-columns", "grid-template-rows", "grid-column", "grid-row",
   "align-items", "justify-content", "flex", "flex-wrap", "flex-direction", "padding", "padding-block", "padding-inline",
   "padding-top", "padding-right", "padding-bottom", "padding-left", "margin", "margin-block", "margin-inline", "margin-top",
-  "margin-right", "margin-bottom", "margin-left", "font-family", "font-size", "font-weight", "line-height", "text-align",
+  "margin-right", "margin-bottom", "margin-left", "font-family", "font-size", "font-weight", "line-height", "text-align", "object-fit",
   "text-decoration", "max-width", "min-width", "width", "min-height", "height", "opacity", "overflow", "white-space",
 ]);
 const root = document.getElementById("root");
@@ -49,7 +53,7 @@ function stopWorker() {
   workerUrl = undefined;
 }
 
-function sanitizeMarkup(markup) {
+function sanitizeMarkup(markup, allowedImageSources = new Set()) {
   if (markup.length > MAX_HTML_CHARS) throw new Error("HTML output is larger than 48 KB.");
   const parsed = new DOMParser().parseFromString(markup, "text/html");
   const output = document.createDocumentFragment();
@@ -64,6 +68,7 @@ function sanitizeMarkup(markup) {
       if (child.nodeType !== Node.ELEMENT_NODE) continue;
       const name = child.localName.toLowerCase();
       if (DROPPED_TAGS.has(name)) continue;
+      if (name === "img" && ![...child.attributes].some((attribute) => attribute.name.toLowerCase() === "src" && allowedImageSources.has(attribute.value))) continue;
       if (!ALLOWED_TAGS.has(name)) {
         copyChildren(child, destination, depth + 1);
         continue;
@@ -74,9 +79,12 @@ function sanitizeMarkup(markup) {
       for (const attribute of child.attributes) {
         const attributeName = attribute.name.toLowerCase();
         if (!ALLOWED_ATTRIBUTES.has(attributeName)) continue;
+        if (attributeName === "src" && (name !== "img" || !allowedImageSources.has(attribute.value))) continue;
         if (attributeName === "class" && !/^[A-Za-z0-9 _-]{0,160}$/.test(attribute.value)) continue;
         if (attributeName.startsWith("aria-") && attribute.value.length > 160) continue;
         if (["colspan", "rowspan"].includes(attributeName) && !/^[1-9]\d?$/.test(attribute.value)) continue;
+        if (["width", "height"].includes(attributeName) && (!/^[1-9]\d{0,3}$/.test(attribute.value) || Number(attribute.value) > 2_048)) continue;
+        if (attributeName === "alt" && attribute.value.length > 500) continue;
         if (attributeName === "type" && name === "input" && !["text", "search", "number", "date", "checkbox", "hidden"].includes(attribute.value.toLowerCase())) continue;
         if (attributeName === "name" && !/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(attribute.value)) continue;
         if (["data-note-id"].includes(attributeName) && !/^[0-9a-f-]{36}$/i.test(attribute.value)) continue;
@@ -89,7 +97,7 @@ function sanitizeMarkup(markup) {
         element.setAttribute(attributeName, attribute.value);
       }
       destination.append(element);
-      if (!["br", "hr"].includes(name)) copyChildren(child, element, depth + 1);
+      if (!["br", "hr", "img"].includes(name)) copyChildren(child, element, depth + 1);
     }
   };
   copyChildren(parsed.body, output, 0);
@@ -277,7 +285,7 @@ function buildWorkerSource(javascript) {
   })();`;
 }
 
-function renderResult(message) {
+function renderResult(message, allowedImageSources) {
   if (message.type === "error") {
     root.textContent = message.message || "Visualization script failed.";
     sendToHost({ type: "error", requestId: message.requestId, message: root.textContent });
@@ -290,7 +298,7 @@ function renderResult(message) {
     return;
   }
   try {
-    const content = sanitizeMarkup(message.html);
+    const content = sanitizeMarkup(message.html, allowedImageSources);
     const stylesheet = sanitizeStyles(message.css);
     const container = document.createElement("div");
     container.className = "fieldnotes-custom-root";
@@ -320,11 +328,12 @@ function runVisualization(message) {
   root.textContent = "Running visualization…";
   if (!Array.isArray(message.notes) || message.notes.length > MAX_NOTES || !Array.isArray(message.trash) || message.trash.length > MAX_TRASH
     || !message.state || typeof message.state !== "object" || Array.isArray(message.state)
-    || typeof message.javascript !== "string" || message.javascript.length > 12_000) {
+    || typeof message.javascript !== "string" || message.javascript.length > MAX_JAVASCRIPT_CHARS) {
     root.textContent = "Visualization input exceeded its size limit.";
     sendToHost({ type: "error", requestId: message.requestId, message: root.textContent });
     return;
   }
+  const allowedImageSources = buildAllowedImageSources(message.notes);
   const serialized = JSON.stringify({ notes: message.notes, trash: message.trash, state: message.state });
   if (serialized.length > MAX_INPUT_CHARS) {
     root.textContent = "Visualization input is larger than 1 MB.";
@@ -343,7 +352,7 @@ function runVisualization(message) {
   worker.onmessage = (event) => {
     if (activeRequestId !== message.requestId || event.data?.requestId !== message.requestId) return;
     stopWorker();
-    renderResult(event.data);
+    renderResult(event.data, allowedImageSources);
   };
   pendingEventId = undefined;
   delete root.dataset.actionPending;
@@ -354,6 +363,48 @@ function runVisualization(message) {
     root.textContent = "Visualization stopped after 700 ms.";
     sendToHost({ type: "timeout", requestId: message.requestId });
   }, MAX_EXECUTION_MS);
+}
+
+function isSafePublicPosterReference(value) {
+  if (typeof value !== "string" || value.length > 2_048 || [...value].some((character) => {
+    const point = character.codePointAt(0) || 0;
+    return point < 32 || point === 32 || point === 127;
+  })) return false;
+  let url;
+  try { url = new URL(value); } catch { return false; }
+  return url.origin === "https://image.tmdb.org" && !url.username && !url.password && !url.port
+    && !url.search && !url.hash && /^\/t\/p\/(?:w\d{1,4}|original)\/[A-Za-z0-9._/-]{1,1200}$/.test(url.pathname)
+    && !url.pathname.split("/").some((segment) => segment === "." || segment === "..") && url.href === value;
+}
+
+function safeAssetPath(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 1_024
+    && !value.includes("\\") && ![...value].some((character) => {
+      const point = character.codePointAt(0) || 0;
+      return point < 32 || point === 127;
+    }) && !/[?#]/.test(value) && !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(value)
+    && !value.split("/").some((segment) => !segment || segment === "." || segment === ".." || segment === ".fieldnotes" || segment.startsWith(".fieldnotes-tmp-"))
+    && /\.(?:jpe?g|png|webp)$/i.test(value);
+}
+
+function buildAllowedImageSources(notes) {
+  const sources = new Set();
+  for (const note of notes) {
+    if (!note || !NOTE_ID_PATTERN.test(note.id || "") || !NOTE_HASH_PATTERN.test(note.contentHash || "")) continue;
+    if (isSafePublicPosterReference(note.frontmatter?.poster)) {
+      sources.add(`/api/views/assets/${note.id}?field=poster&v=${note.contentHash}`);
+    }
+    if (Array.isArray(note.assetPaths)) {
+      for (const assetPath of note.assetPaths.slice(0, 20)) {
+        if (sources.size >= MAX_ASSET_SOURCES) return sources;
+        if (safeAssetPath(assetPath)) {
+          sources.add(`/api/views/assets/${note.id}?asset=${encodeURIComponent(assetPath)}&v=${note.contentHash}`);
+        }
+      }
+    }
+    if (sources.size >= MAX_ASSET_SOURCES) break;
+  }
+  return sources;
 }
 
 function connect(event) {

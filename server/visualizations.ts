@@ -10,6 +10,7 @@ import type {
 } from "../shared/visualization.js";
 import { getDocument, getLatestChangeSequence } from "./database.js";
 import { parseFrontmatter } from "./frontmatter.js";
+import { extractLocalImageReferences } from "./visualization-assets.js";
 import { MAX_VIEW_TRASH_CANDIDATES } from "./view-query-limits.js";
 
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -196,6 +197,7 @@ export function queryVisualizationNotes(
       throw new VisualizationQueryError("This view would read too much note text. Choose a folder to narrow it.", 413);
     }
     const parsed = parseFrontmatter(document.body);
+    const assetPaths = document.filePath ? extractLocalImageReferences(document.body, document.filePath) : [];
     const note: VisualizationNote = {
       id: document.id,
       title: document.title,
@@ -206,6 +208,7 @@ export function queryVisualizationNotes(
       contentHash: document.contentHash ?? createHash("sha256").update(document.body, "utf8").digest("hex"),
       excerpt: document.excerpt,
       frontmatter: parsed.values,
+      ...(assetPaths.length ? { assetPaths } : {}),
       ...(parsed.error ? { frontmatterError: parsed.error } : {}),
     };
     if (query.where?.some((filter) => !matchesFilter(note, filter))) continue;

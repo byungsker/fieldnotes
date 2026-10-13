@@ -1,0 +1,130 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { after, before, test } from "node:test";
+import { createApp } from "../server/api.js";
+import { closeDatabase, createDocument, createFolder, openDatabase } from "../server/database.js";
+import {
+  extractLocalImageReferences,
+  fetchPublicTmdbPoster,
+  isAllowedTmdbPosterUrl,
+  MAX_VISUALIZATION_IMAGE_BYTES,
+  validateLocalImage,
+} from "../server/visualization-assets.js";
+
+const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), "fieldnotes-view-assets-"));
+const database = openDatabase(path.join(temporaryRoot, "data"), { seedDemo: false, vaultDir: path.join(temporaryRoot, "data", "vault") });
+const moviesFolder = createFolder(database, "movies", null);
+const recordsFolder = createFolder(database, "records", moviesFolder.id);
+createFolder(database, "attachments", moviesFolder.id);
+const posterBytes = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+const localBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lS8AAAAASUVORK5CYII=", "base64");
+const localPath = path.join(database.vault!.rootDir, "movies", "attachments", "synthetic-cover.png");
+writeFileSync(localPath, localBytes);
+const localNote = createDocument(database, "Synthetic local poster", "---\nkind: fixture\n---\n\n![[../attachments/synthetic-cover.png]]", recordsFolder.id);
+const publicPosterUrl = "https://image.tmdb.org/t/p/w500/synthetic-poster.jpg";
+const publicNote = createDocument(database, "Synthetic public poster", `---\nposter: ${publicPosterUrl}\n---\nSynthetic fixture.`, recordsFolder.id);
+const unsafeNote = createDocument(database, "Synthetic unsafe poster", "---\nposter: https://image.tmdb.org.evil.example/t/p/w500/nope.jpg\n---\nSynthetic fixture.", recordsFolder.id);
+let posterRequests = 0;
+let receivedPosterRequest: { url: string; init: RequestInit } | undefined;
+const app = createApp(database, undefined, {
+  posterImageFetch: async (url, init) => {
+    posterRequests += 1;
+    receivedPosterRequest = { url: url.href, init };
+    return new Response(posterBytes, { status: 200, headers: { "content-type": "image/jpeg", "content-length": String(posterBytes.byteLength) } });
+  },
+});
+const server = app.listen(0, "127.0.0.1");
+let baseUrl = "";
+
+before(async () => {
+  await new Promise<void>((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  baseUrl = `http://127.0.0.1:${address.port}`;
+});
+
+after(async () => {
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  closeDatabase(database);
+  rmSync(temporaryRoot, { recursive: true, force: true });
+});
+
+test("public poster validation accepts only credential-free TMDb image references", () => {
+  assert.equal(isAllowedTmdbPosterUrl(publicPosterUrl), true);
+  for (const value of [
+    "http://image.tmdb.org/t/p/w500/example.jpg",
+    "https://image.tmdb.org.evil.example/t/p/w500/example.jpg",
+    "https://user@image.tmdb.org/t/p/w500/example.jpg",
+    "https://image.tmdb.org:444/t/p/w500/example.jpg",
+    "https://image.tmdb.org/t/p/w500/example.jpg?token=secret",
+    "https://image.tmdb.org/t/p/w500/../private.jpg",
+  ]) assert.equal(isAllowedTmdbPosterUrl(value), false);
+});
+
+test("local image extraction resolves only explicit relative raster references", () => {
+  assert.deepEqual(extractLocalImageReferences("![[../attachments/synthetic-cover.png]]", "movies/records/fixture.md"), [
+    "movies/attachments/synthetic-cover.png",
+  ]);
+  assert.deepEqual(extractLocalImageReferences("![[../../.fieldnotes/state.json]]", "movies/records/fixture.md"), []);
+  assert.deepEqual(extractLocalImageReferences("![remote](https://example.invalid/image.svg)", "movies/records/fixture.md"), []);
+});
+
+test("local images require an allowed extension, matching raster bytes, and the size cap", () => {
+  const image = validateLocalImage(localBytes, "cover.png");
+  assert.equal(image.contentType, "image/png");
+  assert.throws(() => validateLocalImage(localBytes, "cover.jpg"), /verified JPEG/u);
+  assert.throws(() => validateLocalImage(Buffer.alloc(MAX_VISUALIZATION_IMAGE_BYTES + 1), "cover.png"), /1 MB/u);
+});
+
+test("public poster fetch is credential-free, redirect-free, and byte-bounded", async () => {
+  let request: { url: string; init: RequestInit } | undefined;
+  const image = await fetchPublicTmdbPoster(publicPosterUrl, async (url, init) => {
+    request = { url: url.href, init };
+    return new Response(posterBytes, { status: 200, headers: { "content-type": "image/jpeg" } });
+  });
+  assert.equal(image.contentType, "image/jpeg");
+  assert.deepEqual(image.bytes, posterBytes);
+  assert.equal(request?.url, publicPosterUrl);
+  assert.equal(request?.init.redirect, "manual");
+  assert.deepEqual(request?.init.headers, { Accept: "image/jpeg, image/png, image/webp" });
+  assert.equal(await fetchPublicTmdbPoster(publicPosterUrl, async () => new Response("redirect", { status: 302, headers: { location: "https://example.invalid/" } })).then(() => false, () => true), true);
+  await assert.rejects(fetchPublicTmdbPoster("https://image.tmdb.org.evil.example/t/p/w500/nope.jpg", async () => {
+    throw new Error("must not fetch invalid host");
+  }), /approved public image/u);
+});
+
+test("view asset API serves referenced local images and validated public posters from synthetic notes only", async () => {
+  const queryResponse = await fetch(`${baseUrl}/api/views/query`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query: { folderId: recordsFolder.id, limit: 20 } }),
+  });
+  assert.equal(queryResponse.status, 200);
+  const query = await queryResponse.json() as { notes: Array<{ id: string; assetPaths?: string[] }> };
+  assert.deepEqual(query.notes.find((note) => note.id === localNote.id)?.assetPaths, ["movies/attachments/synthetic-cover.png"]);
+
+  const localUrl = `${baseUrl}/api/views/assets/${localNote.id}?asset=${encodeURIComponent("movies/attachments/synthetic-cover.png")}&v=${localNote.contentHash}`;
+  const localResponse = await fetch(localUrl);
+  assert.equal(localResponse.status, 200);
+  assert.equal(localResponse.headers.get("content-type"), "image/png");
+  assert.deepEqual(Buffer.from(await localResponse.arrayBuffer()), localBytes);
+
+  const posterResponse = await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`);
+  assert.equal(posterResponse.status, 200);
+  assert.equal(posterResponse.headers.get("content-type"), "image/jpeg");
+  assert.deepEqual(Buffer.from(await posterResponse.arrayBuffer()), posterBytes);
+  assert.equal(posterRequests, 1);
+  assert.equal(receivedPosterRequest?.url, publicPosterUrl);
+  assert.equal(receivedPosterRequest?.init.headers && "Authorization" in (receivedPosterRequest.init.headers as Record<string, string>), false);
+
+  const unsafeResponse = await fetch(`${baseUrl}/api/views/assets/${unsafeNote.id}?field=poster&v=${unsafeNote.contentHash}`);
+  assert.equal(unsafeResponse.status, 404);
+  assert.equal(posterRequests, 1);
+  const unreferencedResponse = await fetch(`${baseUrl}/api/views/assets/${localNote.id}?asset=${encodeURIComponent("movies/attachments/other.png")}&v=${localNote.contentHash}`);
+  assert.equal(unreferencedResponse.status, 404);
+});
