@@ -1,6 +1,6 @@
 # Markdown Live Editor
 
-A reusable controlled Markdown editor for React 19. It accepts Markdown as a string and keeps persistence, image handling, bookmark metadata, and snippets behind injected adapters.
+A reusable controlled Markdown editor for React 19. It accepts Markdown as a string and keeps persistence, view queries, live-change subscriptions, image handling, bookmark metadata, and snippets behind injected adapters.
 
 ## Public API
 
@@ -14,6 +14,9 @@ const adapters: MarkdownLiveEditorAdapters = {
   listSnippets: () => applicationApi.listSnippets(),
   saveSnippet: (snippet) => applicationApi.saveSnippet(snippet),
   deleteSnippet: (id) => applicationApi.deleteSnippet(id),
+  queryVisualization: (query, signal) => applicationApi.queryVisualization(query, signal),
+  subscribeToVaultChanges: (onChange) => applicationApi.subscribeToVaultChanges(onChange),
+  enableCustomVisualizations: false,
 };
 
 <MarkdownLiveEditor
@@ -40,8 +43,11 @@ All adapter functions are optional. No adapter means no upload, metadata lookup,
 - Supported `[[target]]`, `[[target#fragment]]`, `[[target|alias]]`, and `[[target#fragment|alias]]` forms use atomic wikilink nodes and serialize to their exact original token. If a Markdown block changes under the parser/serializer, it appears as a clearly labeled read-only preservation card containing its original text. Neighboring supported blocks remain editable and saving preserves the card's source exactly. Remove is an explicit action on the card.
 - Plain-text Markdown paste uses the same preservation parser, so unsupported blocks are inserted as read-only cards rather than held in the clipboard. The same parser handles initial loads, external updates, and snippets.
 - A closed leading YAML frontmatter block and its following blank separator lines are removed from the editable body and preserved byte-for-byte as a protected prefix, including their line endings and BOM. The editor shows a preserved-frontmatter badge. Host document properties remain independent of that prefix.
+- A fenced `fieldnotes-view` block is represented as one atomic TipTap node with its complete raw Markdown fence stored in an attribute. The editor serializes that source exactly, offers an explicit source editor, and renders native tables/calendars from an injected query adapter. Custom JavaScript runs only after an explicit, revocable approval of that exact note, block, and source fingerprint.
 
 The Markdown extension is the official `@tiptap/markdown` 3.31.4 package. It is still marked beta by its maintainers and does not promise support for every Markdown dialect. The editor checks each block before displaying it as rich content. Blocks the editor cannot round-trip exactly become read-only preservation cards, including a whole-note card if parsing cannot safely segment the document. Mixed LF/CRLF or bare-CR input is kept in a whole-note card rather than normalized. Uniform LF and CRLF are restored after edits. This package supports a deliberate Markdown subset and does not claim full Obsidian compatibility. Wikilink nodes retain the raw token while the host provides title resolution and navigation in its own preview.
+
+`fieldnotes-view` is a Fieldnotes format and does not implement Dataview or `dv` APIs. The host query adapter returns bounded note metadata and safe-subset frontmatter. Custom JS expects a synchronous `fieldnotesRender(notes, escapeHtml, state, trash)` function body that returns `{ html, css }`. It runs in a disposable Worker with browser APIs masked and a CSP that limits dynamic script loading to Blob URLs; it has no DOM, app storage, file-write, or network API. The editor checks local approval for the exact source before it runs. Sanitized buttons and forms can emit only typed, size-limited actions over a dedicated `MessagePort`; the server independently validates action IDs, allowed fields, and expected versions/hashes before writing. The server does not use the browser's local trust record as authorization. The sandbox limits note input to 200 records / 1 MB, source to 12 KB, HTML to 48 KB, CSS to 12 KB, execution to 700 ms, and concurrent Workers to 2 (6 queued). Browsers do not provide a portable hard per-Worker memory quota. See the [security notes](../../docs/fieldnotes-visualizations-security.md).
 
 In controlled use, an echo of the editor's own latest value does not reset the ProseMirror document or selection. Opaque preservation nodes retain their exact Markdown through parse, edit, paste, and serialization. `onSerializationSafetyChange(false)` is reserved for an unexpected serializer failure; hosts should disable persistence and show the failure until it clears. Unsupported Markdown does not trigger a source-mode switch or pause saving.
 

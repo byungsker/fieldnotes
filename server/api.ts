@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { ErrorRequestHandler, Express, Request, Response } from "express";
@@ -18,6 +19,7 @@ import {
   getRecentChanges,
   importDocuments,
   listDocuments,
+  listTrashedDocuments,
   listFolders,
   reconcileVault,
   DuplicateFolderNameError,
@@ -27,11 +29,18 @@ import {
   MissingDocumentError,
   updateFolder,
   updateDocument,
+  trashDocument,
+  restoreTrashedDocument,
   VersionConflictError,
   type ImportedDocument,
   type KnowledgeDatabase,
 } from "./database.js";
 import { VaultStorageError } from "./vault.js";
+import { queryVisualizationNotes, validateVisualizationQuery, VisualizationQueryError } from "./visualizations.js";
+import { MAX_VIEW_TRASH_BYTES, MAX_VIEW_TRASH_CANDIDATES, ViewQueryLimitError } from "./view-query-limits.js";
+import { patchFrontmatter, serializeFrontmatter } from "./frontmatter.js";
+import { MovieSearchProviderError, type MovieSearchAdapter } from "./movie-search.js";
+import type { VisualizationAction, VisualizationValue } from "../shared/visualization.js";
 
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_TITLE_LENGTH = 160;
@@ -39,6 +48,7 @@ const MAX_FOLDER_NAME_LENGTH = 120;
 const MAX_BODY_LENGTH = 250_000;
 const MAX_IMPORT_FILES = 100;
 const MAX_IMPORT_BYTES = 5_000_000;
+const MAX_VIEW_ACTION_BYTES = 300_000;
 
 class RequestValidationError extends Error {
   constructor(message: string) {
@@ -137,12 +147,114 @@ function validateHash(value: unknown): string | undefined {
   return value.toLowerCase();
 }
 
+function validateRequiredHash(value: unknown): string {
+  const hash = validateHash(value);
+  if (!hash) throw new RequestValidationError("expectedHash must be a SHA-256 hex digest.");
+  return hash;
+}
+
 function validateSequence(value: unknown, label: string): number {
   const sequence = Number(value);
   if (!Number.isSafeInteger(sequence) || sequence < 0) {
     throw new RequestValidationError(`${label} must be a non-negative integer.`);
   }
   return sequence;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function assertOnlyKeys(record: Record<string, unknown>, allowed: string[], label: string): void {
+  if (Object.keys(record).some((key) => !allowed.includes(key))) throw new RequestValidationError(`${label} contains an unsupported field.`);
+}
+
+const SAFE_VIEW_KEY = /^(?!__proto__$|prototype$|constructor$)[A-Za-z0-9_.-]{1,80}$/;
+
+function validateViewValue(value: unknown, depth = 0): VisualizationValue {
+  if (depth > 6) throw new RequestValidationError("View values are nested too deeply.");
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    if (typeof value === "string" && value.length > 4_000) throw new RequestValidationError("A view value is too long.");
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) {
+    if (value.length > 50) throw new RequestValidationError("View arrays may contain at most 50 items.");
+    return value.map((item) => validateViewValue(item, depth + 1));
+  }
+  if (!isRecord(value)) throw new RequestValidationError("View values must be JSON scalars, arrays, or objects.");
+  const entries = Object.entries(value);
+  if (entries.length > 50 || entries.some(([key]) => !SAFE_VIEW_KEY.test(key))) throw new RequestValidationError("View objects may contain up to 50 simple fields.");
+  const record: Record<string, VisualizationValue> = {};
+  for (const [key, item] of entries) record[key] = validateViewValue(item, depth + 1);
+  return record;
+}
+
+function validateViewRecord(value: unknown, label: string): Record<string, VisualizationValue> {
+  if (!isRecord(value)) throw new RequestValidationError(`${label} must be a JSON object.`);
+  const entries = Object.entries(value);
+  if (entries.length > 50 || entries.some(([key]) => !SAFE_VIEW_KEY.test(key))) throw new RequestValidationError(`${label} may contain up to 50 simple fields.`);
+  const record: Record<string, VisualizationValue> = {};
+  for (const [key, item] of entries) record[key] = validateViewValue(item, 1);
+  return record;
+}
+
+function validateVisualizationAction(value: unknown): VisualizationAction {
+  if (!isRecord(value) || typeof value.type !== "string") throw new RequestValidationError("A visualization action type is required.");
+  const action = value;
+  switch (action.type) {
+    case "note.create":
+      assertOnlyKeys(action, ["type", "actionId", "title", "body", "frontmatter", "folderId"], "Create action");
+      if (typeof action.actionId !== "string" || !ID_PATTERN.test(action.actionId)) throw new RequestValidationError("actionId must be a UUID.");
+      return {
+        type: "note.create", actionId: action.actionId, title: validateTitle(action.title),
+        ...(action.body === undefined ? {} : { body: validateBody(action.body) }),
+        ...(action.frontmatter === undefined ? {} : { frontmatter: validateViewRecord(action.frontmatter, "Frontmatter") }),
+        ...(Object.hasOwn(action, "folderId") ? { folderId: action.folderId === null ? null : validateFolderId(action.folderId) } : {}),
+      };
+    case "note.update":
+      assertOnlyKeys(action, ["type", "id", "expectedVersion", "expectedHash", "title", "body", "frontmatterPatch", "folderId"], "Update action");
+      if (action.title === undefined && action.body === undefined && action.frontmatterPatch === undefined && action.folderId === undefined) {
+        throw new RequestValidationError("Provide a note field to update.");
+      }
+      return {
+        type: "note.update", id: validateDocumentId(String(action.id)), expectedVersion: validateVersion(action.expectedVersion),
+        expectedHash: validateRequiredHash(action.expectedHash),
+        ...(action.title === undefined ? {} : { title: validateTitle(action.title) }),
+        ...(action.body === undefined ? {} : { body: validateBody(action.body) }),
+        ...(action.frontmatterPatch === undefined ? {} : { frontmatterPatch: validateViewRecord(action.frontmatterPatch, "Frontmatter patch") }),
+        ...(Object.hasOwn(action, "folderId") ? { folderId: action.folderId === null ? null : validateFolderId(action.folderId) } : {}),
+      };
+    case "note.frontmatter.patch":
+      assertOnlyKeys(action, ["type", "id", "expectedVersion", "expectedHash", "patch"], "Frontmatter patch action");
+      return {
+        type: "note.frontmatter.patch", id: validateDocumentId(String(action.id)),
+        expectedVersion: validateVersion(action.expectedVersion), expectedHash: validateRequiredHash(action.expectedHash),
+        patch: validateViewRecord(action.patch, "Frontmatter patch"),
+      };
+    case "note.trash":
+      assertOnlyKeys(action, ["type", "id", "expectedVersion", "expectedHash"], "Trash action");
+      return {
+        type: "note.trash", id: validateDocumentId(String(action.id)),
+        expectedVersion: validateVersion(action.expectedVersion), expectedHash: validateRequiredHash(action.expectedHash),
+      };
+    case "trash.restore":
+      assertOnlyKeys(action, ["type", "id", "expectedVersion", "folderId"], "Restore action");
+      return {
+        type: "trash.restore", id: validateDocumentId(String(action.id)), expectedVersion: validateVersion(action.expectedVersion),
+        ...(Object.hasOwn(action, "folderId") ? { folderId: action.folderId === null ? null : validateFolderId(action.folderId) } : {}),
+      };
+    case "movies.search": {
+      assertOnlyKeys(action, ["type", "provider", "query", "language"], "Movie search action");
+      if (action.provider !== "tmdb") throw new RequestValidationError("Only the TMDb movie search adapter is supported.");
+      if (typeof action.query !== "string" || !action.query.trim() || action.query.length > 120) throw new RequestValidationError("Movie search query must be 1–120 characters.");
+      const language = action.language === undefined ? "en-US" : action.language;
+      if (typeof language !== "string" || !/^[a-z]{2}(?:-[A-Z]{2})?$/u.test(language)) throw new RequestValidationError("Movie search language is invalid.");
+      return { type: "movies.search", provider: "tmdb", query: action.query.trim(), language };
+    }
+    default:
+      throw new RequestValidationError("This visualization action is not supported.");
+  }
 }
 
 function validateImport(value: unknown): ImportedDocument[] {
@@ -181,7 +293,7 @@ function currentDocument(database: KnowledgeDatabase, request: Request, response
   return true;
 }
 
-export function createApp(database: KnowledgeDatabase, staticDirectory?: string): Express {
+export function createApp(database: KnowledgeDatabase, staticDirectory?: string, adapters: { movieSearch?: MovieSearchAdapter } = {}): Express {
   const app = express();
   const resolvedStaticDirectory = staticDirectory ? path.resolve(staticDirectory) : undefined;
   const staticIndex = resolvedStaticDirectory ? path.join(resolvedStaticDirectory, "index.html") : undefined;
@@ -235,12 +347,17 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
   app.disable("x-powered-by");
   app.use((request, response, next) => {
     response.setHeader("X-Content-Type-Options", "nosniff");
-    response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-    response.setHeader("X-Frame-Options", "DENY");
-    response.setHeader(
-      "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
-    );
+    const visualizationRunner = request.path === "/visualization-runner.html";
+    const visualizationRunnerScript = request.path === "/visualization-runner.js";
+    response.setHeader("Referrer-Policy", visualizationRunner ? "no-referrer" : "strict-origin-when-cross-origin");
+    response.setHeader("X-Frame-Options", visualizationRunner ? "SAMEORIGIN" : "DENY");
+    if (visualizationRunnerScript) {
+      response.setHeader("Access-Control-Allow-Origin", "null");
+      response.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    }
+    response.setHeader("Content-Security-Policy", visualizationRunner
+      ? "default-src 'none'; script-src 'sha256-Zj6E9h6BgqTfQDv/ONLroQqetsZUZKPZzFVzdsZFDd4=' blob:; script-src-elem 'sha256-Zj6E9h6BgqTfQDv/ONLroQqetsZUZKPZzFVzdsZFDd4=' blob:; style-src 'self' 'unsafe-inline'; img-src 'none'; font-src 'none'; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'; frame-ancestors 'self'; worker-src blob:"
+      : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
 
     if (allowedTailscaleLogin) {
       // Tailscale Serve is the trusted proxy: it removes client-supplied identity headers
@@ -264,7 +381,10 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
     const origin = request.get("origin");
     if (origin) {
       const expectedOrigin = `${request.protocol}://${request.get("host")}`;
-      if (origin !== expectedOrigin && origin !== configuredPublicOrigin) {
+      const sandboxRunnerScript = origin === "null"
+        && request.method === "GET"
+        && request.path === "/visualization-runner.js";
+      if (origin !== expectedOrigin && origin !== configuredPublicOrigin && !sandboxRunnerScript) {
         sendError(response, 403, "origin_rejected", "Cross-origin requests are not allowed.");
         return;
       }
@@ -281,6 +401,13 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
   app.use(express.json({ limit: "8mb", strict: true }));
 
   app.use("/api", (request, response, next) => {
+    // View queries read from the reconciled index. The filesystem watcher updates
+    // that index when Markdown changes, so rewalking the entire vault on every
+    // render would defeat the query route's candidate and byte limits.
+    if (request.method === "POST" && request.path === "/views/query") {
+      next();
+      return;
+    }
     try {
       reconcileVault(database);
       next();
@@ -337,6 +464,82 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
 
   app.get("/api/documents/:id", (request, response) => {
     currentDocument(database, request, response);
+  });
+
+  app.post("/api/views/query", (request, response) => {
+    const serialized = JSON.stringify(request.body?.query);
+    if (!serialized || Buffer.byteLength(serialized, "utf8") > 16_000) {
+      throw new RequestValidationError("query must be a JSON object smaller than 16 KB.");
+    }
+    const query = validateVisualizationQuery(request.body.query);
+    response.json(queryVisualizationNotes(
+      database.db,
+      query,
+      query.includeTrash ? listTrashedDocuments(database, MAX_VIEW_TRASH_CANDIDATES, MAX_VIEW_TRASH_BYTES) : [],
+    ));
+  });
+
+  app.post("/api/views/actions", async (request, response) => {
+    const serialized = JSON.stringify(request.body);
+    if (!serialized || Buffer.byteLength(serialized, "utf8") > MAX_VIEW_ACTION_BYTES) {
+      throw new RequestValidationError("Visualization actions must be smaller than 300 KB.");
+    }
+    const action = validateVisualizationAction(request.body);
+    if (action.type === "movies.search") {
+      if (!adapters.movieSearch) {
+        sendError(response, 503, "movie_search_unavailable", "Movie search is disabled until an approved provider is configured.");
+        return;
+      }
+      response.json({ results: await adapters.movieSearch.search(action.query, action.language ?? "en-US") });
+      return;
+    }
+    if (action.type === "note.create") {
+      let frontmatter: string;
+      try { frontmatter = action.frontmatter ? serializeFrontmatter(action.frontmatter) : ""; }
+      catch (error) { throw new RequestValidationError(error instanceof Error ? error.message : "Frontmatter is not supported."); }
+      const body = frontmatter ? `---\n${frontmatter}\n---\n${action.body ?? ""}` : action.body ?? "";
+      const existing = getDocument(database.db, action.actionId);
+      if (existing) {
+        if (existing.title !== action.title || existing.body !== body || existing.folderId !== (action.folderId ?? null)) {
+          throw new VersionConflictError(existing.version, existing.contentHash);
+        }
+        response.json({ note: { id: existing.id, title: existing.title, version: existing.version, path: existing.filePath ?? "" } });
+        return;
+      }
+      const created = createDocument(database, action.title, body, action.folderId ?? null, action.actionId);
+      response.status(201).json({ note: { id: created.id, title: created.title, version: created.version, path: created.filePath ?? "" } });
+      return;
+    }
+    if (action.type === "trash.restore") {
+      const restored = restoreTrashedDocument(database, action.id, action.expectedVersion);
+      response.json({ note: { id: restored.id, title: restored.title, version: restored.version, path: restored.filePath ?? "" } });
+      return;
+    }
+
+    const current = getDocument(database.db, action.id);
+    if (!current) throw new MissingDocumentError();
+    const currentHash = current.contentHash || createHash("sha256").update(current.body, "utf8").digest("hex");
+    if (current.version !== action.expectedVersion || currentHash !== action.expectedHash) {
+      throw new VersionConflictError(current.version, currentHash);
+    }
+    if (action.type === "note.trash") {
+      const note = trashDocument(database, action.id, action.expectedVersion, action.expectedHash);
+      response.json({ trashed: { id: note.id, title: note.title, version: note.version, trashedAt: note.trashedAt } });
+      return;
+    }
+    let body = current.body;
+    if (action.type === "note.update" && action.body !== undefined) body = action.body;
+    if (action.type === "note.frontmatter.patch") {
+      try { body = patchFrontmatter(body, action.patch); }
+      catch (error) { throw new RequestValidationError(error instanceof Error ? error.message : "Frontmatter could not be patched safely."); }
+    } else if (action.type === "note.update" && action.frontmatterPatch) {
+      try { body = patchFrontmatter(body, action.frontmatterPatch); }
+      catch (error) { throw new RequestValidationError(error instanceof Error ? error.message : "Frontmatter could not be patched safely."); }
+    }
+    const title = action.type === "note.update" ? action.title ?? current.title : current.title;
+    const folderId = action.type === "note.update" ? action.folderId : undefined;
+    const updated = updateDocument(database, current.id, current.version, title, body, folderId, currentHash);
+    response.json({ note: { id: updated.id, title: updated.title, version: updated.version, path: updated.filePath ?? "" } });
   });
 
   app.put("/api/documents/:id", (request, response) => {
@@ -519,12 +722,24 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string)
       sendError(response, 400, "invalid_request", error.message);
       return;
     }
+    if (error instanceof VisualizationQueryError) {
+      sendError(response, error.status, "invalid_view_query", error.message);
+      return;
+    }
+    if (error instanceof ViewQueryLimitError) {
+      sendError(response, 413, "invalid_view_query", error.message);
+      return;
+    }
     if (error instanceof UnsafeBookmarkUrlError) {
       sendError(response, 400, "invalid_bookmark_url", error.message);
       return;
     }
     if (error instanceof BookmarkMetadataFetchError) {
       sendError(response, 502, "bookmark_metadata_unavailable", error.message);
+      return;
+    }
+    if (error instanceof MovieSearchProviderError) {
+      sendError(response, 502, "movie_search_failed", error.message);
       return;
     }
     if (error instanceof VersionConflictError) {

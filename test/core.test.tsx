@@ -647,7 +647,7 @@ test("schema v1 migrates forward without changing existing note IDs, Markdown, o
 
   const upgraded = openDatabase(legacyDirectory, { seedDemo: false });
   try {
-    assert.equal(Number(upgraded.db.prepare("PRAGMA user_version").get()?.user_version), 3);
+    assert.equal(Number(upgraded.db.prepare("PRAGMA user_version").get()?.user_version), 4);
     const existing = upgraded.db.prepare("SELECT id, title, body, version, folder_id FROM documents WHERE id = ?").get(legacyId) as Record<string, unknown>;
     assert.equal(existing.id, legacyId);
     assert.equal(existing.title, "Existing note");

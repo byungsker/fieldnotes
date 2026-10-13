@@ -58,3 +58,7 @@ test("mobile note detail follows the reference's compact header and property-fir
   assert.match(stylesheet, /\.app-shell\.route-document \.editor-status \{[\s\S]*?position: sticky;/);
   assert.match(stylesheet, /html\[data-theme="dark"\] \.app-shell\.route-document \.editor-pane[\s\S]*?background: #191919;/);
 });
+
+test("mobile search control stays inside the note column", () => {
+  assert.match(stylesheet, /@media \(max-width: 520px\)\s*\{\s*\.note-column > \.search-area\s*\{\s*width: calc\(100% - 32px\);/);
+});

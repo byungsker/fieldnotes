@@ -1,5 +1,6 @@
 export { MarkdownLiveEditor } from "./MarkdownLiveEditor.tsx";
 export { BookmarkCard } from "./BookmarkCardExtension.tsx";
+export { FieldnotesViewBlock } from "./FieldnotesViewBlock.tsx";
 export { MarkdownPreview } from "./MarkdownPreview.tsx";
 export { WikiLink } from "./WikiLinkExtension.tsx";
 export {
@@ -18,3 +19,4 @@ export type {
   MarkdownLiveEditorProps,
   NewEditorSnippet,
 } from "./types.ts";
+export type { FieldnotesViewConfig, VisualizationFilter, VisualizationNote, VisualizationQuery, VisualizationQueryResponse, VisualizationValue } from "../../shared/visualization.ts";

@@ -8,6 +8,7 @@ import Image from "@tiptap/extension-image";
 import { common, createLowlight } from "lowlight";
 import type { JSONContent } from "@tiptap/core";
 import { BookmarkCard } from "./BookmarkCardExtension.tsx";
+import { FieldnotesViewBlock } from "./FieldnotesViewBlock.tsx";
 import { PreservedMarkdown, PreservedWhitespace } from "./PreservedMarkdownExtension.tsx";
 import { MarkdownDocument } from "./MarkdownDocumentExtension.ts";
 import { WikiLink } from "./WikiLinkExtension.tsx";
@@ -48,6 +49,7 @@ function createTiptapMarkdownApi(): MarkdownManager {
     extensions: [
       StarterKit.configure({ codeBlock: false, link: false, document: false }),
       MarkdownDocument,
+      FieldnotesViewBlock,
       CodeBlockLowlight.configure({ lowlight, defaultLanguage: "plaintext" }),
       Link.configure({ openOnClick: false, autolink: true, linkOnPaste: false, protocols: ["http", "https"] }),
       Image.configure({ inline: false, allowBase64: false }),
@@ -61,6 +63,19 @@ function createTiptapMarkdownApi(): MarkdownManager {
   });
   return manager;
 }
+
+test("fieldnotes-view fences keep their exact Markdown source through TipTap parsing", () => {
+  const manager = createTiptapMarkdownApi();
+  const sources = [
+    '```fieldnotes-view\n{"version":1,"view":"table","columns":["title","frontmatter.status"]}\n```',
+    '~~~fieldnotes-view\n{"version":1,"view":"calendar","dateField":"frontmatter.due"}\n~~~',
+  ];
+  for (const source of sources) {
+    const parsed = manager.parse(source);
+    assert.equal(parsed.content?.[0]?.type, "fieldnotesView");
+    assert.equal(manager.serialize(parsed), source);
+  }
+});
 
 test("allows canonical block spacing when parsed content is unchanged", () => {
   assert.equal(hasContentPreservingMarkdownRoundTrip(blockMarkdown, "## 야 이게 뭐야\n장난하니"), true);

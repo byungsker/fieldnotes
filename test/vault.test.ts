@@ -6,7 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
 import { createApp } from "../server/api.js";
-import { closeDatabase, createDocument, createFolder, openDatabase } from "../server/database.js";
+import { closeDatabase, createDocument, createFolder, openDatabase, trashDocument } from "../server/database.js";
 import { FileVault } from "../server/vault.js";
 
 const projectDirectory = path.resolve(import.meta.dirname, "..");
@@ -64,7 +64,7 @@ test("filesystem mode keeps Markdown authoritative across API, CLI, external edi
     const health = await json(live.baseUrl, "/api/health");
     assert.equal(health.response.status, 200);
     assert.equal(health.body.storageMode, "filesystem");
-    assert.equal(health.body.schemaVersion, 3);
+    assert.equal(health.body.schemaVersion, 4);
 
     const folderResult = await json(live.baseUrl, "/api/folders", postJson("POST", { name: "Research" }));
     assert.equal(folderResult.response.status, 201);
@@ -214,7 +214,7 @@ test("filesystem mode keeps Markdown authoritative across API, CLI, external edi
     const backupDb = new DatabaseSync(indexBackup, { readOnly: true });
     try {
       assert.equal(Number(backupDb.prepare("SELECT COUNT(*) AS count FROM documents").get()?.count), 2);
-      assert.equal(Number(backupDb.prepare("PRAGMA user_version").get()?.user_version), 3);
+      assert.equal(Number(backupDb.prepare("PRAGMA user_version").get()?.user_version), 4);
     } finally {
       backupDb.close();
     }
@@ -258,6 +258,8 @@ test("migration CLI verifies a backup then preserves every document, folder, and
   const first = createDocument(source, "../A: research", "# Exact body\r\n\r\nA path-safe Markdown note.", child.id);
   const duplicate = createDocument(source, "../A: research", "Second exact body.", child.id);
   const long = createDocument(source, longTitle, "Long Unicode filename.", null);
+  const trashed = createDocument(source, "Recover me", "Preserved in the native trash.", child.id);
+  const trashEntry = trashDocument(source, trashed.id, trashed.version);
   const original = [first, duplicate, long];
   closeDatabase(source);
 
@@ -286,10 +288,12 @@ test("migration CLI verifies a backup then preserves every document, folder, and
   assert.equal(migrated.documents.find((document) => document.id === first.id)?.body, first.body);
   assert.equal(migrated.documents.find((document) => document.id === duplicate.id)?.body, duplicate.body);
   assert.ok(migrated.documents.find((document) => document.id === long.id)?.filePath);
+  assert.deepEqual(new FileVault(vaultDir).listTrashedDocuments().map((entry) => [entry.id, entry.version]), [[trashed.id, trashEntry.version]]);
+  assert.equal(readFileSync(path.join(vaultDir, ".fieldnotes", "trash", `${trashed.id}.md`), "utf8"), "Preserved in the native trash.");
 
   const opened = openDatabase(dataDir, { seedDemo: false, vaultDir });
   try {
-    assert.equal(Number(opened.db.prepare("PRAGMA user_version").get()?.user_version), 3);
+    assert.equal(Number(opened.db.prepare("PRAGMA user_version").get()?.user_version), 4);
     assert.equal(Number(opened.db.prepare("SELECT COUNT(*) AS count FROM documents").get()?.count), original.length);
     const indexedFolder = opened.db.prepare("SELECT name, file_path FROM folders WHERE id = ?").get(child.id) as { name: string; file_path: string };
     assert.equal(indexedFolder.name, child.name);
@@ -318,6 +322,7 @@ test("migration CLI verifies a backup then preserves every document, folder, and
     new Map(new FileVault(restoredVault).snapshot().documents.map((document) => [document.id, document.body])),
     new Map(new FileVault(vaultDir).snapshot().documents.map((document) => [document.id, document.body])),
   );
+  assert.deepEqual(new FileVault(restoredVault).listTrashedDocuments().map((entry) => [entry.id, entry.version]), [[trashed.id, trashEntry.version]]);
 });
 
 test("vault refuses symlinks and case-variant reserved metadata names", () => {

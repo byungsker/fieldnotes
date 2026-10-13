@@ -1,0 +1,204 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import vm from "node:vm";
+import { fileURLToPath } from "node:url";
+import { parseFieldnotesViewConfig } from "../packages/markdown-live-editor/fieldnotes-view-config.ts";
+
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const runnerSource = readFileSync(path.join(projectRoot, "public/visualization-runner.js"), "utf8");
+const runnerHtml = readFileSync(path.join(projectRoot, "public/visualization-runner.html"), "utf8");
+const apiSource = readFileSync(path.join(projectRoot, "server/api.ts"), "utf8");
+const editorSource = readFileSync(path.join(projectRoot, "packages/markdown-live-editor/SandboxedVisualization.tsx"), "utf8");
+const viewBlockSource = readFileSync(path.join(projectRoot, "packages/markdown-live-editor/FieldnotesViewBlock.tsx"), "utf8");
+const adaptersSource = readFileSync(path.join(projectRoot, "src/editor-adapters.ts"), "utf8");
+const appSource = readFileSync(path.join(projectRoot, "src/App.tsx"), "utf8");
+const runnerScriptHash = `sha256-${createHash("sha256").update(runnerSource).digest("base64")}`;
+
+function generatedWorkerSource(javascript = 'return { html: "<p>fixture</p>", css: "" };'): string {
+  const context = vm.createContext({
+    URLSearchParams,
+    window: { location: { search: "" }, parent: {}, addEventListener: () => undefined },
+    document: { getElementById: () => ({ textContent: "", replaceChildren: () => undefined, addEventListener: () => undefined }) },
+  });
+  vm.runInContext(`${runnerSource}\n;globalThis.__generatedWorker = buildWorkerSource(${JSON.stringify(javascript)});`, context);
+  return context.__generatedWorker as string;
+}
+
+function workerContext(renderSource: string): { context: vm.Context; source: string } {
+  const context = vm.createContext({
+    __messages: [] as unknown[],
+    Blob: class Blob { constructor(readonly parts: unknown[]) {} },
+    URL: { createObjectURL: () => "blob:synthetic", revokeObjectURL: () => undefined },
+  });
+  vm.runInContext(`
+    self = globalThis;
+    const simulatedWorkerPrototype = Object.create(Object.getPrototypeOf(self));
+    simulatedWorkerPrototype.fetch = () => "blocked inherited fetch";
+    simulatedWorkerPrototype.WebSocket = function WebSocket() {};
+    simulatedWorkerPrototype.importScripts = () => "blocked inherited importScripts";
+    Object.setPrototypeOf(self, simulatedWorkerPrototype);
+    self.postMessage = (message) => __messages.push(message);
+    self.importScripts = () => {
+      self.fieldnotesRender = function(notes, escapeHtml, state, trash) { ${renderSource} };
+    };
+  `, context);
+  const source = generatedWorkerSource(renderSource);
+  new vm.Script(source).runInContext(context);
+  return { context, source };
+}
+
+test("runner CSP permits only the static host script and Blob worker source", () => {
+  const header = apiSource.match(/visualizationRunner\s*\n\s*\?\s*"([^"]+)"/)?.[1];
+  const meta = runnerHtml.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)?.[1];
+  assert.ok(header);
+  assert.ok(meta);
+  for (const policy of [header, meta]) {
+    assert.ok(policy.includes(`script-src '${runnerScriptHash}' blob:`));
+    assert.ok(policy.includes(`script-src-elem '${runnerScriptHash}' blob:`));
+    assert.doesNotMatch(policy, /script-src 'self'/);
+    assert.doesNotMatch(policy, /script-src-elem 'self'/);
+    for (const directive of ["connect-src 'none'", "img-src 'none'", "font-src 'none'", "media-src 'none'", "frame-src 'none'", "child-src 'none'", "worker-src blob:"]) {
+      assert.ok(policy.includes(directive), `missing CSP directive ${directive}`);
+    }
+    assert.doesNotMatch(policy, /unsafe-eval/);
+  }
+  assert.match(header, /frame-ancestors 'self'/);
+  assert.match(editorSource, /sandbox="allow-scripts allow-forms"/);
+  assert.doesNotMatch(editorSource, /sandbox="[^"]*allow-same-origin|sandbox="[^"]*allow-top-navigation/u);
+  assert.match(editorSource, /referrerPolicy="no-referrer"/i);
+  assert.ok(runnerHtml.includes(`integrity="${runnerScriptHash}"`));
+});
+
+test("generated Worker locks global and prototype escape routes before custom code", () => {
+  const source = generatedWorkerSource();
+  assert.doesNotThrow(() => new vm.Script(source));
+  assert.ok(source.indexOf("lockdownWorker(self)") < source.indexOf("loadScript("));
+  const { context } = workerContext('return { html: "<p>fixture</p>", css: "" };');
+  const access = vm.runInContext(`({
+    globalThis: typeof globalThis, self: typeof self, object: typeof Object,
+    fetch: typeof self.fetch, inheritedFetch: typeof Object.getPrototypeOf(self).fetch,
+    inheritedWebSocket: typeof Object.getPrototypeOf(self).WebSocket,
+    inheritedImportScripts: typeof Object.getPrototypeOf(self).importScripts,
+    postMessage: typeof self.postMessage, importScripts: typeof self.importScripts,
+    worker: typeof self.Worker, sharedWorker: typeof self.SharedWorker, xhr: typeof self.XMLHttpRequest,
+    socket: typeof self.WebSocket, eventSource: typeof self.EventSource, webTransport: typeof self.WebTransport,
+    rtc: typeof self.RTCPeerConnection, storage: typeof self.localStorage, filePicker: typeof self.showSaveFilePicker,
+    blob: typeof self.Blob, url: typeof self.URL, globalConstructor: typeof self.constructor,
+    functionGlobal: typeof self.Function, objectConstructorPath: typeof Object.constructor,
+    functionConstructor: typeof (function () {}).constructor,
+    asyncConstructor: typeof (async function () {}).constructor,
+    generatorConstructor: typeof (function* () {}).constructor,
+    asyncGeneratorConstructor: typeof (async function* () {}).constructor,
+  })`, context) as Record<string, string>;
+  assert.equal(access.globalThis, "object");
+  assert.equal(access.self, "object");
+  assert.equal(access.object, "function");
+  for (const [name, value] of Object.entries(access)) {
+    if (["globalThis", "self", "object"].includes(name)) continue;
+    assert.equal(value, "undefined", `${name} should be blocked`);
+  }
+  vm.runInContext("self.onmessage({ data: { requestId: 7, notes: [] } }); self.onmessage({ data: { requestId: 8, notes: [] } });", context);
+  const messages = context.__messages as Array<{ type: string; requestId: number; html?: string }>;
+  assert.equal(messages.length, 1, "a Worker accepts only one render request");
+  assert.equal(messages[0]?.type, "result");
+  assert.equal(messages[0]?.requestId, 7);
+  assert.equal(messages[0]?.html, "<p>fixture</p>");
+});
+
+test("generated Worker rejects excessive HTML and CSS before posting output", () => {
+  for (const renderSource of [
+    'return { html: "x".repeat(48_001), css: "" };',
+    'return { html: "<p>ok</p>", css: "x".repeat(12_001) };',
+  ]) {
+    const { context } = workerContext(renderSource);
+    vm.runInContext("self.onmessage({ data: { requestId: 9, notes: [] } })", context);
+    const messages = context.__messages as Array<{ type: string; message?: string }>;
+    assert.equal(messages[0]?.type, "error");
+    assert.equal(messages[0]?.message, "Visualization output exceeded its size limit.");
+  }
+});
+
+test("synthetic custom-view examples follow the render-function-body contract and produce HTML", () => {
+  const examples = [
+    ["articles-dashboard.md", "Continue writing"],
+    ["babies-dashboard.md", "Add milestone"],
+    ["goals-dashboard.md", "Add goal"],
+    ["movies-dashboard.md", "Search TMDb"],
+  ] as const;
+  const input = {
+    requestId: 11,
+    notes: [{ id: "11111111-1111-4111-8111-111111111111", title: "Synthetic example note", frontmatter: { type: "goal", status: "active" } }],
+    trash: [{ id: "22222222-2222-4222-8222-222222222222", title: "Archived synthetic goal", version: 1, folderId: null, trashedAt: "2026-10-12T00:00:00.000Z", excerpt: "" }],
+    state: {},
+  };
+
+  for (const [filename, expectedContent] of examples) {
+    const markdown = readFileSync(path.join(projectRoot, "test/fixtures/native-visualizations", filename), "utf8");
+    const block = [...markdown.matchAll(/```fieldnotes-view\n[\s\S]*?\n```/gu)]
+      .map((match) => match[0] ?? "")
+      .find((candidate) => parseFieldnotesViewConfig(candidate).view === "custom");
+    assert.ok(block, `${filename} should contain a view block`);
+    const config = parseFieldnotesViewConfig(block);
+    assert.equal(config.view, "custom");
+    assert.ok(config.js);
+    assert.doesNotMatch(config.js, /^\s*function fieldnotesRender\b/u, `${filename} must store a function body, not a nested declaration`);
+
+    const { context } = workerContext(config.js);
+    vm.runInContext(`self.onmessage({ data: ${JSON.stringify(input)} });`, context);
+    const message = (context.__messages as Array<{ type: string; html?: string; message?: string }>)[0];
+    assert.equal(message?.type, "result", `${filename}: ${message?.message ?? "render did not return a result"}`);
+    assert.ok(message?.html?.includes(expectedContent), `${filename} should render its expected controls`);
+    if (filename === "goals-dashboard.md") assert.match(message?.html ?? "", /aria-label="New goal title"/u);
+  }
+});
+
+test("runner source masks network APIs and drops outbound HTML/CSS surfaces", () => {
+  for (const api of [
+    '"fetch"', '"XMLHttpRequest"', '"WebSocket"', '"EventSource"', '"WebTransport"',
+    '"RTCPeerConnection"', '"Worker"', '"SharedWorker"', '"importScripts"', '"indexedDB"',
+    '"localStorage"', '"showSaveFilePicker"', '"OffscreenCanvas"', '"constructor"',
+  ]) assert.ok(runnerSource.includes(api), `missing blocked API ${api}`);
+  assert.match(runnerSource, /const MAX_EXECUTION_MS = 700/);
+  assert.match(runnerSource, /const MAX_NOTES = 200/);
+  assert.match(runnerSource, /const MAX_INPUT_CHARS = 1_000_000/);
+  assert.match(runnerSource, /const MAX_HTML_CHARS = 48_000/);
+  assert.match(runnerSource, /const MAX_CSS_CHARS = 12_000/);
+  assert.match(runnerSource, /const MAX_ELEMENTS = 500/);
+  assert.match(runnerSource, /const MAX_DEPTH = 20/);
+  assert.match(runnerSource, /const ALLOWED_TAGS = new Set\(\[.*"form".*"input"/s);
+  assert.match(runnerSource, /const DROPPED_TAGS = new Set\(\[.*"script".*"iframe".*"img".*"object"/s);
+  assert.match(runnerSource, /url\\s\*\\\(/);
+  assert.match(runnerSource, /@import/);
+  assert.doesNotMatch(runnerSource, /ALLOWED_ATTRIBUTES = new Set\(\[[^\]]*\b(?:href|src|action|formaction)\b/);
+  assert.equal(runnerSource.match(/if \(!event\.isTrusted\) return;/gu)?.length, 3, "click, submit, and change actions require trusted input");
+  assert.match(runnerSource, /event\.source !== window\.parent/);
+  assert.match(runnerSource, /event\.origin !== expectedParentOrigin/);
+  assert.match(runnerSource, /activeRequestId !== message\.requestId/);
+  assert.match(runnerSource, /if \(!event\.isTrusted\) return/u);
+  assert.match(runnerSource, /const ALLOWED_EVENTS = new Set\(\[/u);
+  assert.match(runnerSource, /event\.data\?\.type !== "fieldnotes-view-connect"/u);
+});
+
+test("custom view execution requires local approval for the exact note, block, and source fingerprint", () => {
+  assert.match(adaptersSource, /fieldnotes:trusted-view:v1:/u);
+  assert.match(adaptersSource, /isVisualizationTrusted\(documentId: string, blockIndex: number, sourceHash: string\)/u);
+  assert.match(adaptersSource, /enableCustomVisualizations: true/u);
+  assert.match(viewBlockSource, /sourceDigest\(raw\)/u);
+  assert.match(viewBlockSource, /options\.visualizationTrustAdapter\.isTrusted\(documentId, blockIndex, sourceHash\)/u);
+  assert.match(viewBlockSource, /Trust this source and run/u);
+  assert.match(viewBlockSource, /Revoke trust/u);
+  assert.match(viewBlockSource, /trusted && !error && result/u);
+});
+
+test("changing notes and view inputs cancels stale work and releases runner resources", () => {
+  assert.match(viewBlockSource, /generation === requestGenerationRef\.current/u);
+  assert.match(viewBlockSource, /currentControllerRef\.current\?\.abort\(\)/u);
+  assert.match(appSource, /key=\{displayDocument\.id\}/u);
+  assert.match(editorSource, /portRef\.current\?\.postMessage\(\{ type: "cancel"/u);
+  assert.match(editorSource, /portRef\.current\?\.close\(\)/u);
+  assert.match(runnerSource, /worker\.terminate\(\)/u);
+  assert.match(runnerSource, /\}, MAX_EXECUTION_MS\)/u);
+});

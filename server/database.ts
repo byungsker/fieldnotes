@@ -1,11 +1,13 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, watch, type FSWatcher } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { EventEmitter } from "node:events";
 import { excerptFromMarkdown, extractWikilinkTargets, normalizeTitle } from "./markdown.js";
 import type { ChangeRecord, DocumentRecord, DocumentSummary, FolderRecord } from "./types.js";
-import { FileVault, VaultVersionConflictError } from "./vault.js";
+import type { VisualizationTrashNote } from "../shared/visualization.js";
+import { ViewQueryLimitError, VIEW_TRASH_LIMIT_MESSAGE } from "./view-query-limits.js";
+import { FileVault, VaultStorageError, VaultVersionConflictError } from "./vault.js";
 
 type SqlRow = Record<string, string | number | null>;
 type DatabaseOptions = { seedDemo?: boolean; vaultDir?: string };
@@ -127,7 +129,7 @@ function mapChange(row: SqlRow): ChangeRecord {
 function migrate(db: DatabaseSync): void {
   const row = db.prepare("PRAGMA user_version").get() as SqlRow | undefined;
   let version = Number(row?.user_version ?? 0);
-  if (version > 3) throw new Error(`Database schema ${version} is newer than this app supports.`);
+  if (version > 4) throw new Error(`Database schema ${version} is newer than this app supports.`);
   if (version === 0) {
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -199,6 +201,32 @@ function migrate(db: DatabaseSync): void {
         ALTER TABLE documents ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';
         ALTER TABLE folders ADD COLUMN file_path TEXT NOT NULL DEFAULT '';
         PRAGMA user_version = 3;
+      `);
+      db.exec("COMMIT");
+      version = 3;
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  if (version === 3) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(`
+        CREATE TABLE trash_documents (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 160),
+          body TEXT NOT NULL CHECK(length(body) <= 250000),
+          folder_id TEXT,
+          file_path TEXT NOT NULL DEFAULT '',
+          content_hash TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          trashed_at TEXT NOT NULL,
+          version INTEGER NOT NULL CHECK(version >= 1)
+        );
+        CREATE INDEX trash_documents_trashed_at ON trash_documents(trashed_at DESC);
+        PRAGMA user_version = 4;
       `);
       db.exec("COMMIT");
     } catch (error) {
@@ -585,6 +613,113 @@ export function listDocuments(db: DatabaseSync, query = "", folderId?: string | 
 export function getDocument(db: DatabaseSync, id: string): DocumentRecord | undefined {
   const row = db.prepare("SELECT * FROM documents WHERE id = ?").get(id) as SqlRow | undefined;
   return row ? mapDocument(row) : undefined;
+}
+
+export function listTrashDocuments(db: DatabaseSync, limit = 500, maxBytes = Number.MAX_SAFE_INTEGER): VisualizationTrashNote[] {
+  if (!Number.isSafeInteger(limit) || limit < 0 || limit > 500) throw new RangeError("Trash query limit must be between 0 and 500.");
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError("Trash query byte limit is invalid.");
+  const candidates = db.prepare(`
+    SELECT id, title, folder_id, trashed_at, version, length(CAST(body AS BLOB)) AS body_bytes
+    FROM trash_documents ORDER BY trashed_at DESC LIMIT ?
+  `).all(limit) as SqlRow[];
+  const readBody = db.prepare("SELECT body FROM trash_documents WHERE id = ?");
+  const notes: VisualizationTrashNote[] = [];
+  let scannedBytes = 0;
+  for (const candidate of candidates) {
+    const byteLength = Number(candidate.body_bytes ?? 0);
+    if (scannedBytes + byteLength > maxBytes) {
+      throw new ViewQueryLimitError(VIEW_TRASH_LIMIT_MESSAGE);
+    }
+    const bodyRow = readBody.get(candidate.id) as SqlRow | undefined;
+    scannedBytes += byteLength;
+    notes.push({
+      id: String(candidate.id),
+      title: String(candidate.title),
+      folderId: candidate.folder_id === null || candidate.folder_id === undefined ? null : String(candidate.folder_id),
+      trashedAt: String(candidate.trashed_at),
+      version: Number(candidate.version),
+      excerpt: excerptFromMarkdown(String(bodyRow?.body ?? ""), 150),
+    });
+  }
+  return notes;
+}
+
+export function listTrashedDocuments(database: KnowledgeDatabase, limit = 500, maxBytes = Number.MAX_SAFE_INTEGER): VisualizationTrashNote[] {
+  return database.vault ? database.vault.listTrashedDocuments(limit, maxBytes) : listTrashDocuments(database.db, limit, maxBytes);
+}
+
+export function trashDocument(database: KnowledgeDatabase, id: string, expectedVersion: number, expectedHash?: string): VisualizationTrashNote {
+  if (database.vault) {
+    const current = getDocument(database.db, id);
+    if (!current) throw new MissingDocumentError();
+    if (current.version !== expectedVersion || (expectedHash && current.contentHash && expectedHash !== current.contentHash)) {
+      throw new VersionConflictError(current.version, current.contentHash);
+    }
+    try {
+      const trashed = database.vault.trashDocument(id, expectedVersion, expectedHash);
+      rebuildVaultIndex(database);
+      return trashed;
+    } catch (error) {
+      if (error instanceof VaultVersionConflictError) throw new VersionConflictError(error.currentVersion, error.currentHash);
+      throw error;
+    }
+  } else {
+    transact(database, () => {
+      const current = getDocument(database.db, id);
+      if (!current) throw new MissingDocumentError();
+      const contentHash = current.contentHash || createHash("sha256").update(current.body, "utf8").digest("hex");
+      if (current.version !== expectedVersion || (expectedHash && expectedHash !== contentHash)) throw new VersionConflictError(current.version, contentHash);
+      const trashedAt = new Date().toISOString();
+      database.db.prepare(`
+        INSERT INTO trash_documents (id, title, body, folder_id, file_path, content_hash, created_at, updated_at, trashed_at, version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(current.id, current.title, current.body, current.folderId, current.filePath ?? "", contentHash, current.createdAt, current.updatedAt, trashedAt, current.version);
+      database.db.prepare("DELETE FROM documents WHERE id = ?").run(id);
+      const change = insertChange(database.db, id, current.title, "deleted", current.version + 1, trashedAt);
+      return { value: undefined, change };
+    });
+  }
+  const row = database.db.prepare("SELECT id, title, folder_id, trashed_at, version, body FROM trash_documents WHERE id = ?").get(id) as SqlRow | undefined;
+  if (!row) throw new MissingDocumentError();
+  return {
+    id: String(row.id),
+    title: String(row.title),
+    folderId: row.folder_id === null || row.folder_id === undefined ? null : String(row.folder_id),
+    trashedAt: String(row.trashed_at),
+    version: Number(row.version),
+    excerpt: excerptFromMarkdown(String(row.body ?? ""), 150),
+  };
+}
+
+export function restoreTrashedDocument(database: KnowledgeDatabase, id: string, expectedVersion: number): DocumentRecord {
+  if (database.vault) {
+    try {
+      const result = database.vault.restoreTrashedDocument(id, expectedVersion);
+      rebuildVaultIndex(database);
+      return getDocument(database.db, id) ?? result.document;
+    } catch (error) {
+      if (error instanceof VaultVersionConflictError) throw new VersionConflictError(error.currentVersion, error.currentHash);
+      if (error instanceof VaultStorageError && error.status === 404) throw new MissingDocumentError();
+      throw error;
+    }
+  }
+  return transact(database, () => {
+    const row = database.db.prepare("SELECT * FROM trash_documents WHERE id = ?").get(id) as SqlRow | undefined;
+    if (!row) throw new MissingDocumentError();
+    const currentVersion = Number(row.version);
+    if (currentVersion !== expectedVersion) throw new VersionConflictError(currentVersion, String(row.content_hash ?? ""));
+    const requestedFolderId = row.folder_id === null || row.folder_id === undefined ? null : String(row.folder_id);
+    const folderId = requestedFolderId && !getFolder(database.db, requestedFolderId) ? null : requestedFolderId;
+    const version = currentVersion + 1;
+    const timestamp = new Date().toISOString();
+    database.db.prepare(`
+      INSERT INTO documents (id, title, body, folder_id, file_path, content_hash, created_at, updated_at, version)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(row.id, row.title, row.body, folderId, row.file_path, row.content_hash, row.created_at, timestamp, version);
+    database.db.prepare("DELETE FROM trash_documents WHERE id = ?").run(id);
+    const change = insertChange(database.db, id, String(row.title), "created", version, timestamp);
+    return { value: getDocument(database.db, id) as DocumentRecord, change };
+  });
 }
 
 export function createDocument(
