@@ -17,7 +17,7 @@ type VerifyResponse = { verified: true; path: string; state: "empty" | "managed"
 export function VaultSettingsDialog({ onClose }: { onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
-  const historyEntryRef = useRef(false);
+  const historyEntryRef = useRef(true);
   const closePendingRef = useRef(false);
   const onCloseRef = useRef(onClose);
   const listingRequestRef = useRef(0);
@@ -53,8 +53,6 @@ export function VaultSettingsDialog({ onClose }: { onClose: () => void }) {
     openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialog.showModal();
     window.requestAnimationFrame(() => dialog.querySelector<HTMLButtonElement>("[data-initial-focus]")?.focus());
-    window.history.pushState({ ...(window.history.state ?? {}), fieldnotesVaultSettings: true }, "", window.location.href);
-    historyEntryRef.current = true;
     const handlePopState = () => {
       if (!historyEntryRef.current) return;
       historyEntryRef.current = false;
@@ -68,10 +66,6 @@ export function VaultSettingsDialog({ onClose }: { onClose: () => void }) {
     void loadDirectory("");
     return () => {
       window.removeEventListener("popstate", handlePopState);
-      if (historyEntryRef.current) {
-        historyEntryRef.current = false;
-        window.history.back();
-      }
       if (dialog.open) dialog.close();
       openerRef.current?.focus({ preventScroll: true });
       openerRef.current = null;

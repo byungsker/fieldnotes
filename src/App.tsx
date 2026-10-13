@@ -39,6 +39,7 @@ import { createFieldnotesEditorAdapters } from "./editor-adapters";
 import { formatDocumentDate } from "./document-date";
 import { resolveMobileDrawerSwipe, resolveMobileDrawerSwipeDrag } from "./mobile-drawer-swipe";
 import { isSidebarToggleShortcut } from "./keyboard-shortcuts";
+import { pushVaultSettingsHistoryEntry } from "./vault-settings-history";
 import {
   AUTOSAVE_DELAY_MS,
   clearLocalDraft,
@@ -354,6 +355,7 @@ export function App() {
   const saveTimersRef = useRef(new Map<string, number>());
   const dialogResolverRef = useRef<((result: ActionDialogResult) => void) | null>(null);
   const navigationPendingRef = useRef(false);
+  const vaultSettingsHistoryEntryRef = useRef(false);
   const historyIndexRef = useRef(initialHistoryIndex);
   const currentRouteRef = useRef(currentRoute);
   const previousRouteRef = useRef(currentRoute);
@@ -372,6 +374,16 @@ export function App() {
   const documentListScrollRef = useRef(new Map<string, DocumentListScrollSnapshot>());
   const currentListViewKey = documentListViewKey(activeFolderId, query, sortOrder);
   const currentListViewKeyRef = useRef(currentListViewKey);
+
+  const openVaultSettings = useCallback(() => {
+    pushVaultSettingsHistoryEntry(window.history, vaultSettingsHistoryEntryRef, window.location.href);
+    setVaultSettingsOpen(true);
+  }, []);
+
+  const closeVaultSettings = useCallback(() => {
+    vaultSettingsHistoryEntryRef.current = false;
+    setVaultSettingsOpen(false);
+  }, []);
 
   selectedRef.current = selectedDocument;
   draftTitleRef.current = draftTitle;
@@ -2691,7 +2703,7 @@ export function App() {
           {recentChanges.length === 0 && <p className="activity-empty">New edits will appear here.</p>}
         </div>}
 
-        {workspaceRenderer === "desktop" && <button type="button" className="rail-link vault-settings-link" onClick={() => setVaultSettingsOpen(true)}>
+        {workspaceRenderer === "desktop" && <button type="button" className="rail-link vault-settings-link" onClick={openVaultSettings}>
           <Settings2 size={16} aria-hidden="true" /><span>Vault settings</span>
         </button>}
 
@@ -2707,7 +2719,7 @@ export function App() {
               {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
               <span>{theme === "dark" ? "Light appearance" : "Dark appearance"}</span>
             </button>
-            <button type="button" className="drawer-action" onClick={() => setVaultSettingsOpen(true)}>
+            <button type="button" className="drawer-action" onClick={openVaultSettings}>
               <Settings2 size={17} aria-hidden="true" /><span>Vault settings</span>
             </button>
             <div className="mobile-drawer-data-actions">{renderListTools("drawer")}</div>
@@ -3084,7 +3096,7 @@ export function App() {
         </Suspense>
       )}
       <ActionDialog config={actionDialog} onResolve={resolveActionDialog} />
-      {vaultSettingsOpen && <VaultSettingsDialog onClose={() => setVaultSettingsOpen(false)} />}
+      {vaultSettingsOpen && <VaultSettingsDialog onClose={closeVaultSettings} />}
     </>
   );
 }
