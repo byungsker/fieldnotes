@@ -2978,6 +2978,7 @@ export function App() {
                   visualizationDocumentId={displayDocument.id}
                   openVisualizationNote={(noteId) => navigateToDocument(noteId)}
                   ariaLabel="Markdown body"
+                  showToolbar={false}
                   minHeight={230}
                   onFocus={() => {
                     const control = document.activeElement;

@@ -43,6 +43,10 @@ export interface MarkdownLiveEditorProps {
   adapters?: MarkdownLiveEditorAdapters;
   ariaLabel?: string;
   minHeight?: number | string;
+  /** Hide document action controls while keeping the editable document surface. */
+  showToolbar?: boolean;
+  /** Hide the built-in outline when the host renders its own table of contents. */
+  showOutline?: boolean;
   onFocus?: () => void;
   /** Reports an unexpected serializer failure so the host can keep an unsafe draft from being saved. */
   onSerializationSafetyChange?: (safe: boolean) => void;

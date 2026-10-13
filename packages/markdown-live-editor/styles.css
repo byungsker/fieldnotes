@@ -239,6 +239,12 @@
   flex: 1 0 8px;
 }
 
+.mle-outline-compact {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 10px 0;
+}
+
 .mle-editor-content,
 .mle-preview {
   min-height: var(--mle-min-height, 420px);

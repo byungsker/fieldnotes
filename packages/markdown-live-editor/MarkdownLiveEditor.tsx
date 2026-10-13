@@ -104,6 +104,8 @@ export function MarkdownLiveEditor({
   adapters,
   ariaLabel = "Markdown editor",
   minHeight = 420,
+  showToolbar = true,
+  showOutline = true,
   onFocus,
   onSerializationSafetyChange,
   visualizationDocumentId,
@@ -615,7 +617,7 @@ export function MarkdownLiveEditor({
 
       {editor && (
         <>
-          <div className="mle-toolbar" role="toolbar" aria-label="Document actions">
+          {showToolbar && <div className="mle-toolbar" role="toolbar" aria-label="Document actions">
             <div className="mle-toolbar-group mle-toolbar-group--editing" role="group" aria-label="Editing actions">
             <ToolbarButton label="Code block" onClick={() => editor.chain().focus().toggleCodeBlock().run()}><Terminal /></ToolbarButton>
             <ToolbarButton label="Insert link (Command or Control K)" onClick={() => {
@@ -663,14 +665,20 @@ export function MarkdownLiveEditor({
             )}
             </div>
             <div className="mle-toolbar-group mle-toolbar-group--navigation" role="group" aria-label="Navigation and snippets">
-            <ToolbarButton label="Table of contents" disabled={headings.length === 0} onClick={() => setMenu(menu === "toc" ? null : "toc")}><ListTree /><span>Outline</span></ToolbarButton>
+            {showOutline && <ToolbarButton label="Table of contents" disabled={headings.length === 0} onClick={() => setMenu(menu === "toc" ? null : "toc")}><ListTree /><span>Outline</span></ToolbarButton>}
             {canManageSnippets && (
               <ToolbarButton label="Snippets" onClick={() => setMenu(menu === "snippets" ? null : "snippets")}>Snips</ToolbarButton>
             )}
             </div>
-          </div>
+          </div>}
 
-          {menu === "toc" && (
+          {!showToolbar && showOutline && (
+            <div className="mle-outline-compact">
+              <ToolbarButton label="Table of contents" disabled={headings.length === 0} onClick={() => setMenu(menu === "toc" ? null : "toc")}><ListTree /></ToolbarButton>
+            </div>
+          )}
+
+          {showOutline && menu === "toc" && (
             <nav className="mle-popover mle-toc" aria-label="Table of contents">
               {headings.length ? headings.map((heading) => (
                 <button key={heading.index} type="button" className="mle-toc-item" data-level={heading.level} onMouseDown={(event) => event.preventDefault()} onClick={() => scrollToHeading(heading.index)}>
