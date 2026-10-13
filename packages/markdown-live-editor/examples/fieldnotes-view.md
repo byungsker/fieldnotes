@@ -42,4 +42,4 @@ In local development, `notes` is a frozen array of query results and `escapeHtml
 }
 ```
 
-Custom JavaScript is disabled in production builds. It runs only in a sandboxed frame and a disposable Worker during local development; file access, app storage, and network requests are blocked.
+Custom JavaScript runs only after you review and approve the exact source for this note and block. Changed source needs approval again, and you can revoke approval. It runs in an opaque sandboxed frame and a disposable Worker; file access, app storage, and network requests are blocked.

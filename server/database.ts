@@ -679,7 +679,16 @@ export function trashDocument(database: KnowledgeDatabase, id: string, expectedV
       return { value: undefined, change };
     });
   }
-  return listTrashDocuments(database.db).find((note) => note.id === id) as VisualizationTrashNote;
+  const row = database.db.prepare("SELECT id, title, folder_id, trashed_at, version, body FROM trash_documents WHERE id = ?").get(id) as SqlRow | undefined;
+  if (!row) throw new MissingDocumentError();
+  return {
+    id: String(row.id),
+    title: String(row.title),
+    folderId: row.folder_id === null || row.folder_id === undefined ? null : String(row.folder_id),
+    trashedAt: String(row.trashed_at),
+    version: Number(row.version),
+    excerpt: excerptFromMarkdown(String(row.body ?? ""), 150),
+  };
 }
 
 export function restoreTrashedDocument(database: KnowledgeDatabase, id: string, expectedVersion: number): DocumentRecord {

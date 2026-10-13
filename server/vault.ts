@@ -1367,9 +1367,17 @@ export class FileVault {
       fsyncDirectory(path.dirname(source));
       fsyncDirectory(path.dirname(target));
     });
-    const trashed = this.listTrashedDocuments(1).find((note) => note.id === id);
-    if (!trashed) throw new VaultStorageError("Trashed note was not visible after its durable commit.");
-    return trashed;
+    const meta = this.state.trashedDocuments.find((note) => note.id === id);
+    const trashInfo = meta ? this.trashFileInfo(id) : undefined;
+    if (!meta || !trashInfo) throw new VaultStorageError("Trashed note was not visible after its durable commit.");
+    return {
+      id,
+      title: meta.title,
+      folderId: meta.folderId,
+      trashedAt: meta.trashedAt,
+      version: meta.version,
+      excerpt: excerptFromMarkdown(trashInfo.body, 150),
+    };
   }
 
   restoreTrashedDocument(id: string, expectedVersion: number): { document: DocumentRecord; change: ChangeRecord } {

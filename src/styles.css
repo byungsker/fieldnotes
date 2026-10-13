@@ -1454,3 +1454,7 @@ html[data-theme="dark"] select:focus-visible { outline-color: rgba(164, 211, 171
 @media (prefers-reduced-motion: reduce) {
   .loading-skeleton::after { animation: none; transform: none; }
 }
+
+@media (max-width: 520px) {
+  .note-column > .search-area { width: calc(100% - 32px); }
+}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Node } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
-import type { FieldnotesViewConfig, VisualizationAction, VisualizationNote, VisualizationQueryResponse, VisualizationUiEvent, VisualizationValue } from "../../shared/visualization.ts";
+import type { FieldnotesViewConfig, VisualizationAction, VisualizationNote, VisualizationQueryResponse, VisualizationTrashNote, VisualizationUiEvent, VisualizationValue } from "../../shared/visualization.ts";
 import { parseFieldnotesViewConfig } from "./fieldnotes-view-config.ts";
 import { SandboxedVisualization } from "./SandboxedVisualization.tsx";
 import type { MarkdownLiveEditorAdapters } from "./types.ts";
@@ -17,6 +17,9 @@ type FieldnotesViewOptions = Pick<MarkdownLiveEditorAdapters,
     runVisualizationAction: (action: VisualizationAction) => Promise<Record<string, unknown>>;
     openVisualizationNote: (noteId: string) => Promise<void>;
   };
+
+const EMPTY_VISUALIZATION_NOTES: VisualizationNote[] = [];
+const EMPTY_VISUALIZATION_TRASH: VisualizationTrashNote[] = [];
 
 function valueAt(note: VisualizationNote, field: string): VisualizationValue | undefined {
   if (field === "title" || field === "path" || field === "createdAt" || field === "updatedAt" || field === "excerpt") return note[field];
@@ -408,7 +411,8 @@ function FieldnotesViewNodeView({ node, editor, getPos, updateAttributes, option
     return response;
   }
 
-  const notes = result?.notes ?? [];
+  const notes = result?.notes ?? EMPTY_VISUALIZATION_NOTES;
+  const trash = result?.trash ?? EMPTY_VISUALIZATION_TRASH;
   return (
     <NodeViewWrapper className="mle-fieldnotes-view-block" contentEditable={false} data-view={parsed.config?.view ?? "invalid"}>
       <div className="mle-fieldnotes-view-heading">
@@ -471,7 +475,7 @@ function FieldnotesViewNodeView({ node, editor, getPos, updateAttributes, option
               } catch (caught) { setActionError(caught instanceof Error ? caught.message : "Could not revoke trust."); }
             }}>Revoke trust</button>
           </div>
-          <SandboxedVisualization javascript={parsed.config.js ?? ""} notes={notes} trash={result.trash ?? []} state={viewState} onAction={handleSandboxEvent} />
+          <SandboxedVisualization javascript={parsed.config.js ?? ""} notes={notes} trash={trash} state={viewState} onAction={handleSandboxEvent} />
         </div>
       )}
       {parsed.config?.view === "custom" && options.enableCustomVisualizations && !error && !result && (
