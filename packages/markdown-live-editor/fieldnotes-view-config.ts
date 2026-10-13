@@ -23,8 +23,8 @@ function parseFieldnotesViewConfig(raw: string): FieldnotesViewConfig {
     throw new Error("Use version 1 and choose table, calendar, or custom.");
   }
   if (parsed.query !== undefined && !isRecord(parsed.query)) throw new Error("query must be an object.");
-  if (parsed.view === "custom" && (typeof parsed.js !== "string" || parsed.js.length === 0 || parsed.js.length > 12_000)) {
-    throw new Error("Custom view JavaScript must be between 1 and 12 KB.");
+  if (parsed.view === "custom" && (typeof parsed.js !== "string" || parsed.js.length === 0 || parsed.js.length > 16_000)) {
+    throw new Error("Custom view JavaScript must be between 1 and 16 KB.");
   }
   if (parsed.columns !== undefined && (!Array.isArray(parsed.columns) || parsed.columns.length > 8
     || !parsed.columns.every((column) => typeof column === "string" && /^(?:title|path|createdAt|updatedAt|excerpt|frontmatter\.[A-Za-z0-9_.-]{1,120})$/.test(column)))) {

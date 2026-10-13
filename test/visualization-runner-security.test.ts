@@ -11,6 +11,7 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const runnerSource = readFileSync(path.join(projectRoot, "public/visualization-runner.js"), "utf8");
 const runnerHtml = readFileSync(path.join(projectRoot, "public/visualization-runner.html"), "utf8");
 const apiSource = readFileSync(path.join(projectRoot, "server/api.ts"), "utf8");
+const assetSource = readFileSync(path.join(projectRoot, "server/visualization-assets.ts"), "utf8");
 const editorSource = readFileSync(path.join(projectRoot, "packages/markdown-live-editor/SandboxedVisualization.tsx"), "utf8");
 const viewBlockSource = readFileSync(path.join(projectRoot, "packages/markdown-live-editor/FieldnotesViewBlock.tsx"), "utf8");
 const adaptersSource = readFileSync(path.join(projectRoot, "src/editor-adapters.ts"), "utf8");
@@ -60,7 +61,7 @@ test("runner CSP permits only the static host script and Blob worker source", ()
     assert.ok(policy.includes(`script-src-elem '${runnerScriptHash}' blob:`));
     assert.doesNotMatch(policy, /script-src 'self'/);
     assert.doesNotMatch(policy, /script-src-elem 'self'/);
-    for (const directive of ["connect-src 'none'", "img-src 'none'", "font-src 'none'", "media-src 'none'", "frame-src 'none'", "child-src 'none'", "worker-src blob:"]) {
+    for (const directive of ["connect-src 'none'", "img-src 'self'", "font-src 'none'", "media-src 'none'", "frame-src 'none'", "child-src 'none'", "worker-src blob:"]) {
       assert.ok(policy.includes(directive), `missing CSP directive ${directive}`);
     }
     assert.doesNotMatch(policy, /unsafe-eval/);
@@ -106,6 +107,18 @@ test("generated Worker locks global and prototype escape routes before custom co
   assert.equal(messages[0]?.type, "result");
   assert.equal(messages[0]?.requestId, 7);
   assert.equal(messages[0]?.html, "<p>fixture</p>");
+});
+
+test("sandbox images are limited to note-scoped same-origin asset routes", () => {
+  assert.match(runnerSource, /function buildAllowedImageSources\(notes\)/u);
+  assert.match(runnerSource, /sources\.add\(`\/api\/views\/assets\/\$\{note\.id\}\?field=poster&v=\$\{note\.contentHash\}`\)/u);
+  assert.match(runnerSource, /allowedImageSources\.has\(attribute\.value\)/u);
+  assert.match(runnerSource, /url\.origin === "https:\/\/image\.tmdb\.org"/u);
+  assert.match(runnerSource, /MAX_ASSET_SOURCES = 50/u);
+  assert.doesNotMatch(runnerHtml, /img-src 'none'/u);
+  assert.match(apiSource, /img-src 'self'/u);
+  assert.match(assetSource, /redirect: "manual"/u);
+  assert.match(apiSource, /Content-Length/u);
 });
 
 test("generated Worker rejects excessive HTML and CSS before posting output", () => {
@@ -195,15 +208,20 @@ test("runner source masks network APIs and drops outbound HTML/CSS surfaces", ()
   assert.match(runnerSource, /const MAX_EXECUTION_MS = 700/);
   assert.match(runnerSource, /const MAX_NOTES = 200/);
   assert.match(runnerSource, /const MAX_INPUT_CHARS = 1_000_000/);
+  assert.match(runnerSource, /const MAX_JAVASCRIPT_CHARS = 16_000/);
   assert.match(runnerSource, /const MAX_HTML_CHARS = 48_000/);
   assert.match(runnerSource, /const MAX_CSS_CHARS = 12_000/);
   assert.match(runnerSource, /const MAX_ELEMENTS = 500/);
   assert.match(runnerSource, /const MAX_DEPTH = 20/);
   assert.match(runnerSource, /const ALLOWED_TAGS = new Set\(\[.*"form".*"input"/s);
-  assert.match(runnerSource, /const DROPPED_TAGS = new Set\(\[.*"script".*"iframe".*"img".*"object"/s);
+  assert.match(runnerSource, /const DROPPED_TAGS = new Set\(\[.*"script".*"iframe".*"object"/s);
+  assert.match(runnerSource, /const ALLOWED_TAGS = new Set\(\[.*"img"/s);
   assert.match(runnerSource, /url\\s\*\\\(/);
   assert.match(runnerSource, /@import/);
-  assert.doesNotMatch(runnerSource, /ALLOWED_ATTRIBUTES = new Set\(\[[^\]]*\b(?:href|src|action|formaction)\b/);
+  const allowedAttributes = runnerSource.match(/const ALLOWED_ATTRIBUTES = new Set\(\[([\s\S]*?)\]\);/)?.[1] ?? "";
+  assert.match(allowedAttributes, /"src"/);
+  assert.doesNotMatch(allowedAttributes, /\b(?:href|action|formaction)\b/);
+  assert.match(runnerSource, /attributeName === "src" && \(name !== "img" \|\| !allowedImageSources\.has\(attribute\.value\)\)/);
   assert.equal(runnerSource.match(/if \(!event\.isTrusted\) return;/gu)?.length, 3, "click, submit, and change actions require trusted input");
   assert.match(runnerSource, /event\.source !== window\.parent/);
   assert.match(runnerSource, /event\.origin !== expectedParentOrigin/);

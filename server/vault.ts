@@ -11,11 +11,14 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  realpathSync,
   readFileSync,
+  readSync,
   readdirSync,
   rmSync,
   renameSync,
   rmdirSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -306,18 +309,64 @@ function writeNewDurable(absolutePath: string, bytes: Buffer, mode = 0o600): voi
   }
 }
 
-function readRegularFileNoFollow(absolutePath: string, maxBytes = MAX_VAULT_FILE_BYTES): Buffer {
+export function readDescriptorBounded(
+  descriptor: number,
+  maxBytes: number,
+  reader: (fd: number, buffer: Buffer, offset: number, length: number, position: number | null) => number = readSync,
+): { bytes: Buffer; exceededLimit: boolean } {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_VAULT_FILE_BYTES) {
+    throw new RangeError("The bounded descriptor read limit is outside the vault file size range.");
+  }
+  const buffer = Buffer.allocUnsafe(maxBytes + 1);
+  let total = 0;
+  while (total < buffer.byteLength) {
+    const bytesRead = reader(descriptor, buffer, total, buffer.byteLength - total, null);
+    if (bytesRead === 0) break;
+    if (!Number.isInteger(bytesRead) || bytesRead < 0 || bytesRead > buffer.byteLength - total) {
+      throw new VaultStorageError("The vault file could not be read safely.", "vault_read_failed", 500);
+    }
+    total += bytesRead;
+  }
+  return { bytes: buffer.subarray(0, Math.min(total, maxBytes)), exceededLimit: total > maxBytes };
+}
+
+function assertOpenedPathWithinRoot(absolutePath: string, allowedRoot: string, descriptorStat: { dev: bigint; ino: bigint }): void {
+  try {
+    const resolvedRoot = realpathSync(allowedRoot);
+    const resolvedFile = realpathSync(absolutePath);
+    const relative = path.relative(resolvedRoot, resolvedFile);
+    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new VaultStorageError("The referenced vault asset changed path while it was opened.", "vault_path_changed", 409);
+    }
+    const pathStat = statSync(resolvedFile, { bigint: true });
+    if (!pathStat.isFile() || pathStat.dev !== descriptorStat.dev || pathStat.ino !== descriptorStat.ino) {
+      throw new VaultStorageError("The referenced vault asset changed path while it was opened.", "vault_path_changed", 409);
+    }
+  } catch (error) {
+    if (error instanceof VaultStorageError) throw error;
+    throw new VaultStorageError("The referenced vault asset changed path while it was opened.", "vault_path_changed", 409);
+  }
+}
+
+function readRegularFileNoFollow(absolutePath: string, maxBytes = MAX_VAULT_FILE_BYTES, allowedRoot?: string): Buffer {
   let descriptor: number | undefined;
   try {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError("The vault file size limit is invalid.");
     descriptor = openSync(absolutePath, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const stat = fstatSync(descriptor);
+    const stat = fstatSync(descriptor, { bigint: true });
     if (!stat.isFile()) throw new VaultStorageError("Expected a regular file; symbolic links are not followed.", "vault_symlink", 409);
     const effectiveMaxBytes = Math.min(maxBytes, MAX_VAULT_FILE_BYTES);
-    if (stat.size > effectiveMaxBytes) {
+    if (stat.size > BigInt(effectiveMaxBytes)) {
       if (maxBytes < MAX_VAULT_FILE_BYTES) throw new ViewQueryLimitError(VIEW_TRASH_LIMIT_MESSAGE);
       throw new VaultStorageError(`Markdown file exceeds the ${MAX_VAULT_FILE_BYTES} byte vault limit.`, "vault_file_too_large", 409);
     }
-    return readFileSync(descriptor);
+    if (allowedRoot) assertOpenedPathWithinRoot(absolutePath, allowedRoot, stat);
+    const result = readDescriptorBounded(descriptor, effectiveMaxBytes);
+    if (result.exceededLimit) {
+      if (maxBytes < MAX_VAULT_FILE_BYTES) throw new ViewQueryLimitError(VIEW_TRASH_LIMIT_MESSAGE);
+      throw new VaultStorageError(`Markdown file exceeds the ${MAX_VAULT_FILE_BYTES} byte vault limit.`, "vault_file_too_large", 409);
+    }
+    return result.bytes;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ELOOP") {
       throw new VaultStorageError("Symbolic links are not allowed inside a Fieldnotes vault.", "vault_symlink", 409);
@@ -622,6 +671,19 @@ export class FileVault {
 
   getDocumentPath(id: string): string | undefined {
     return this.getDocumentMeta(id)?.relativePath;
+  }
+
+  readAsset(relativePath: string, maxBytes: number): Buffer {
+    const absolute = this.safeAbsolute(relativePath);
+    if (statKind(absolute) !== "file") throw new VaultStorageError("The referenced vault asset is not a regular file.", "vault_entry_invalid", 404);
+    try {
+      return readRegularFileNoFollow(absolute, maxBytes, this.rootDir);
+    } catch (error) {
+      if (error instanceof ViewQueryLimitError) {
+        throw new VaultStorageError("The referenced vault image exceeds the view asset size limit.", "vault_asset_too_large", 413);
+      }
+      throw error;
+    }
   }
 
   getFolderPath(id: string): string | undefined {
