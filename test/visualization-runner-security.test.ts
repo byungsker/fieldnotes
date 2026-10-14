@@ -131,6 +131,11 @@ function countSyntheticDomElements(node: SyntheticDomNode): number {
   return (node.nodeType === 1 ? 1 : 0) + node.childNodes.reduce((count, child) => count + countSyntheticDomElements(child), 0);
 }
 
+function countSyntheticDomElementsNamed(node: SyntheticDomNode, localName: string): number {
+  return (node.nodeType === 1 && node.localName === localName ? 1 : 0)
+    + node.childNodes.reduce((count, child) => count + countSyntheticDomElementsNamed(child, localName), 0);
+}
+
 test("runner CSP permits only the static host script and Blob worker source", () => {
   const header = apiSource.match(/visualizationRunner\s*\n\s*\?\s*"([^"]+)"/)?.[1];
   const meta = runnerHtml.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)?.[1];
@@ -399,28 +404,46 @@ test("full-size synthetic movie dashboard fits host, worker, asset, and sanitize
     title: `Synthetic record ${index + 1}`,
     path: `movies/records/record-${index + 1}.md`,
     contentHash: "a".repeat(64),
-    assetPaths: [`synthetic/poster-${index + 1}.png`],
-    frontmatter: {},
+    assetPaths: [`movies/posters/record-${index + 1}.jpg`],
+    frontmatter: {
+      fixture: "movie-dashboard-synthetic",
+      kind: "record",
+      year: 2024,
+      rating: 7.4,
+      status: "watched",
+      tags: ["synthetic", "catalog"],
+    },
   }));
   const watchlist = Array.from({ length: 2 }, (_, index) => ({
     id: `00000000-0000-4000-8000-${String(index + 42).padStart(12, "0")}`,
     title: `Synthetic watchlist ${index + 1}`,
     path: `movies/watchlist/watch-${index + 1}.md`,
     contentHash: "b".repeat(64),
-    assetPaths: [`synthetic/watch-${index + 1}.png`],
-    frontmatter: {},
+    assetPaths: [`movies/posters/watch-${index + 1}.jpg`],
+    frontmatter: {
+      fixture: "movie-dashboard-synthetic",
+      kind: "watchlist",
+      year: 2025,
+      status: "planned",
+      tags: ["synthetic", "watchlist"],
+    },
   }));
   const notes = [...records, ...watchlist, {
     id: "00000000-0000-4000-8000-000000000044",
     title: "Synthetic dashboard",
     path: "movies/dashboard.md",
     contentHash: "c".repeat(64),
-    frontmatter: {},
+    frontmatter: {
+      fixture: "movie-dashboard-synthetic",
+      kind: "dashboard",
+      month: "2025-01",
+      tags: ["synthetic", "dashboard"],
+    },
   }];
   const renderSource = `
     const records = notes.filter((note) => note.path.includes("/records/"));
     const watchlist = notes.filter((note) => note.path.includes("/watchlist/"));
-    const imageFor = (note) => '<img src="/api/views/assets/' + note.id + '?field=poster&v=' + note.contentHash + '" alt="Synthetic poster">';
+    const imageFor = (note) => '<img src="/api/views/assets/' + note.id + '?asset=' + encodeURIComponent(note.assetPaths[0]) + '&v=' + note.contentHash + '" alt="Synthetic poster">';
     const headers = Array.from({ length: 12 }, (_, index) => '<th scope="col">Column ' + (index + 1) + '</th>').join("");
     const rows = records.map((note) => '<tr>' + Array.from({ length: 12 }, (_, index) => '<td>' + (index === 0 ? imageFor(note) : escapeHtml(note.title)) + '</td>').join("") + '</tr>').join("");
     const weekdays = Array.from({ length: 7 }, (_, index) => '<span>Weekday ' + (index + 1) + '</span>').join("");
@@ -432,14 +455,11 @@ test("full-size synthetic movie dashboard fits host, worker, asset, and sanitize
   `;
   const input = { requestId: 44, notes, trash: [], state: {} };
   const serializedInput = JSON.stringify(input);
-  const allowedImageSources = new Set(notes.flatMap((note) => note.assetPaths?.map(() => `/api/views/assets/${note.id}?field=poster&v=${note.contentHash}`) ?? []));
   assert.equal(notes.length, 44);
   assert.equal(records.length, 41);
   assert.equal(watchlist.length, 2);
   assert.ok(notes.length <= 200, "the fixture fits the runner note cap");
   assert.ok(serializedInput.length < 1_000_000, "the fixture fits the runner input cap");
-  assert.equal(allowedImageSources.size, 43);
-  assert.ok(allowedImageSources.size <= 50, "the fixture fits the allowed asset-source cap");
 
   const { context } = workerContext(renderSource);
   vm.runInContext(`self.onmessage({ data: ${serializedInput} });`, context);
@@ -447,16 +467,25 @@ test("full-size synthetic movie dashboard fits host, worker, asset, and sanitize
   assert.equal(result?.type, "result", result?.message);
   const html = result?.html ?? "";
   assert.ok(html.length < 48_000, "the fixture fits the runner HTML byte cap");
-  const elementCount = parseSyntheticMarkup(html).reduce((count, node) => count + countSyntheticDomElements(node), 0);
-  assert.equal(elementCount, 711, "the fixture covers 41 twelve-column records, 44 posters, calendar, stats, and watchlist");
+  const parsedHtml = parseSyntheticMarkup(html);
+  const elementCount = parsedHtml.reduce((count, node) => count + countSyntheticDomElements(node), 0);
+  assert.equal(elementCount, 711, "the fixture covers 41 twelve-column records, calendar, stats, and watchlist");
+  assert.equal(parsedHtml.reduce((count, node) => count + countSyntheticDomElementsNamed(node, "img"), 0), 74,
+    "the fixture renders 41 catalog, 31 calendar, and 2 watchlist poster instances");
   assert.ok(elementCount > 500, `fixture should reproduce the former cap, got ${elementCount} elements`);
   assert.ok(elementCount <= 1_000, `fixture should remain inside the bounded sanitizer cap, got ${elementCount} elements`);
+  assert.doesNotMatch(html, /\?field=poster/u, "local poster files must use the host's asset query shape");
 
   const sanitizer = sanitizerContext();
   sanitizer.__fixtureHtml = html;
+  sanitizer.__fixtureNotes = notes;
+  const allowedImageSources = vm.runInContext("buildAllowedImageSources(__fixtureNotes)", sanitizer) as Set<string>;
+  assert.equal(allowedImageSources.size, 43, "the actual runner builder derives one local asset URL per image note");
+  assert.ok(allowedImageSources.size <= 50, "the actual builder stays within the allowed asset-source cap");
   sanitizer.__allowedImageSources = allowedImageSources;
   const sanitized = vm.runInContext("sanitizeMarkup(__fixtureHtml, __allowedImageSources)", sanitizer) as SyntheticDomNode;
   assert.equal(countSyntheticDomElements(sanitized), elementCount, "all fixture elements remain within the sanitizer policy");
+  assert.equal(countSyntheticDomElementsNamed(sanitized, "img"), 74, "all local poster instances survive the real allowlist and sanitizer");
 
   sanitizer.__fixtureHtml = Array.from({ length: 1_001 }, () => "<div></div>").join("");
   let boundedRejection = "";
