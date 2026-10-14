@@ -85,6 +85,46 @@ test("view query is read-only and filters, sorts, and limits fixture notes", asy
   assert.equal(afterSequence, beforeSequence);
 });
 
+test("host returns a realistic 44-note dashboard fixture within query-result limits", async () => {
+  const categories = [
+    ...Array.from({ length: 41 }, () => "record"),
+    "watchlist",
+    "watchlist",
+    "dashboard",
+  ];
+  categories.forEach((kind, index) => {
+    createDocument(database, `Synthetic movie note ${index + 1}`, [
+      "---",
+      "fixture: movie-dashboard-synthetic",
+      `kind: ${kind}`,
+      `syntheticIndex: ${index + 1}`,
+      "year: 2024",
+      "tags: [synthetic, catalog]",
+      "---",
+      "Synthetic metadata for the full-size host query fixture.",
+    ].join("\n"));
+  });
+
+  const response = await fetch(`${baseUrl}/api/views/query`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query: {
+      where: [{ field: "frontmatter.fixture", operator: "eq", value: "movie-dashboard-synthetic" }],
+      limit: 100,
+    } }),
+    signal: AbortSignal.timeout(5_000),
+  });
+  assert.equal(response.status, 200);
+  const result = await response.json() as { notes: Array<{ frontmatter: { kind?: string } }>; sequence: number };
+  assert.equal(result.notes.length, 44);
+  assert.equal(result.notes.filter((note) => note.frontmatter.kind === "record").length, 41);
+  assert.equal(result.notes.filter((note) => note.frontmatter.kind === "watchlist").length, 2);
+  assert.equal(result.notes.filter((note) => note.frontmatter.kind === "dashboard").length, 1);
+  assert.ok(Buffer.byteLength(JSON.stringify(result), "utf8") < 1_500_000, "host result fits MAX_RESULT_BYTES");
+  assert.ok(JSON.stringify(result).length < 1_000_000, "host result fits the runner input cap");
+  assert.ok(result.notes.every((note) => !Object.hasOwn(note, "body")), "query results stay metadata-only");
+});
+
 test("view query follows newly saved notes on the next read", async () => {
   const created = await fetch(`${baseUrl}/api/documents`, {
     method: "POST",
