@@ -52,6 +52,85 @@ function workerContext(renderSource: string): { context: vm.Context; source: str
   return { context, source };
 }
 
+type SyntheticDomNode = {
+  nodeType: number;
+  localName: string;
+  attributes: Array<{ name: string; value: string }>;
+  childNodes: SyntheticDomNode[];
+  append(node: SyntheticDomNode): void;
+  setAttribute(name: string, value: string): void;
+};
+
+function syntheticDomNode(nodeType: number, localName: string, attributes: Array<{ name: string; value: string }> = []): SyntheticDomNode {
+  const node: SyntheticDomNode = {
+    nodeType,
+    localName,
+    attributes,
+    childNodes: [],
+    append(child) { this.childNodes.push(child); },
+    setAttribute(name, value) { this.attributes.push({ name, value }); },
+  };
+  return node;
+}
+
+function parseSyntheticMarkup(markup: string): SyntheticDomNode[] {
+  const body = syntheticDomNode(1, "body");
+  const stack = [body];
+  const voidTags = new Set(["br", "hr", "img", "input"]);
+  for (const match of markup.matchAll(/<\/?([A-Za-z][A-Za-z0-9-]*)\b([^>]*)>/gu)) {
+    const token = match[0] ?? "";
+    const name = (match[1] ?? "").toLowerCase();
+    if (token.startsWith("</")) {
+      for (let index = stack.length - 1; index > 0; index -= 1) {
+        if (stack[index]?.localName === name) {
+          stack.length = index;
+          break;
+        }
+      }
+      continue;
+    }
+    const attributes = [...(match[2] ?? "").matchAll(/([A-Za-z][A-Za-z0-9-]*)="([^"]*)"/gu)]
+      .map((attribute) => ({ name: (attribute[1] ?? "").toLowerCase(), value: attribute[2] ?? "" }));
+    const element = syntheticDomNode(1, name, attributes);
+    stack.at(-1)?.append(element);
+    if (!voidTags.has(name)) stack.push(element);
+  }
+  return body.childNodes;
+}
+
+function sanitizerContext(): vm.Context {
+  const root = Object.assign(syntheticDomNode(1, "div"), {
+    addEventListener: () => undefined,
+    querySelectorAll: () => [],
+  });
+  const body = syntheticDomNode(1, "body");
+  const documentElement = syntheticDomNode(1, "html");
+  const head = syntheticDomNode(1, "head");
+  const context = vm.createContext({
+    URLSearchParams,
+    Node: { TEXT_NODE: 3, ELEMENT_NODE: 1 },
+    window: { location: { search: "" }, parent: {}, addEventListener: () => undefined },
+    document: {
+      getElementById: (id: string) => id === "root" ? root : null,
+      body,
+      documentElement,
+      head,
+      createDocumentFragment: () => syntheticDomNode(11, "#fragment"),
+      createTextNode: () => syntheticDomNode(3, "#text"),
+      createElement: (name: string) => syntheticDomNode(1, name),
+    },
+    DOMParser: class {
+      parseFromString(markup: string) { return { body: { childNodes: parseSyntheticMarkup(markup) } }; }
+    },
+  });
+  vm.runInContext(runnerSource, context);
+  return context;
+}
+
+function countSyntheticDomElements(node: SyntheticDomNode): number {
+  return (node.nodeType === 1 ? 1 : 0) + node.childNodes.reduce((count, child) => count + countSyntheticDomElements(child), 0);
+}
+
 test("runner CSP permits only the static host script and Blob worker source", () => {
   const header = apiSource.match(/visualizationRunner\s*\n\s*\?\s*"([^"]+)"/)?.[1];
   const meta = runnerHtml.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)?.[1];
@@ -314,6 +393,81 @@ test("synthetic calendar runner output keeps all 31 dates inside the grid and su
   assert.doesNotMatch(corrected.slice(0, gridEnd), /class="summary"/u);
 });
 
+test("full-size synthetic movie dashboard fits host, worker, asset, and sanitizer limits", () => {
+  const records = Array.from({ length: 41 }, (_, index) => ({
+    id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+    title: `Synthetic record ${index + 1}`,
+    path: `movies/records/record-${index + 1}.md`,
+    contentHash: "a".repeat(64),
+    assetPaths: [`synthetic/poster-${index + 1}.png`],
+    frontmatter: {},
+  }));
+  const watchlist = Array.from({ length: 2 }, (_, index) => ({
+    id: `00000000-0000-4000-8000-${String(index + 42).padStart(12, "0")}`,
+    title: `Synthetic watchlist ${index + 1}`,
+    path: `movies/watchlist/watch-${index + 1}.md`,
+    contentHash: "b".repeat(64),
+    assetPaths: [`synthetic/watch-${index + 1}.png`],
+    frontmatter: {},
+  }));
+  const notes = [...records, ...watchlist, {
+    id: "00000000-0000-4000-8000-000000000044",
+    title: "Synthetic dashboard",
+    path: "movies/dashboard.md",
+    contentHash: "c".repeat(64),
+    frontmatter: {},
+  }];
+  const renderSource = `
+    const records = notes.filter((note) => note.path.includes("/records/"));
+    const watchlist = notes.filter((note) => note.path.includes("/watchlist/"));
+    const imageFor = (note) => '<img src="/api/views/assets/' + note.id + '?field=poster&v=' + note.contentHash + '" alt="Synthetic poster">';
+    const headers = Array.from({ length: 12 }, (_, index) => '<th scope="col">Column ' + (index + 1) + '</th>').join("");
+    const rows = records.map((note) => '<tr>' + Array.from({ length: 12 }, (_, index) => '<td>' + (index === 0 ? imageFor(note) : escapeHtml(note.title)) + '</td>').join("") + '</tr>').join("");
+    const weekdays = Array.from({ length: 7 }, (_, index) => '<span>Weekday ' + (index + 1) + '</span>').join("");
+    const calendar = Array.from({ length: 31 }, (_, index) => '<div class="day">' + (index + 1) + (records[index] ? imageFor(records[index]) : "") + '</div>').join("");
+    const stats = Array.from({ length: 12 }, (_, index) => '<div class="stat"><strong>Stat ' + (index + 1) + '</strong><span>Value</span></div>').join("");
+    const cards = watchlist.map((note) => '<article>' + imageFor(note) + '<h3>' + escapeHtml(note.title) + '</h3><p>Synthetic</p></article>').join("");
+    const html = '<section class="dash"><section class="catalog"><h2>Synthetic catalog</h2><div class="table-wrap"><table><thead><tr>' + headers + '</tr></thead><tbody>' + rows + '</tbody></table></div></section><section class="calendar-panel"><div class="calendar">' + weekdays + calendar + '</div></section><section class="stats">' + stats + '</section><section class="watchlist">' + cards + '</section></section>';
+    return { html, css: "" };
+  `;
+  const input = { requestId: 44, notes, trash: [], state: {} };
+  const serializedInput = JSON.stringify(input);
+  const allowedImageSources = new Set(notes.flatMap((note) => note.assetPaths?.map(() => `/api/views/assets/${note.id}?field=poster&v=${note.contentHash}`) ?? []));
+  assert.equal(notes.length, 44);
+  assert.equal(records.length, 41);
+  assert.equal(watchlist.length, 2);
+  assert.ok(notes.length <= 200, "the fixture fits the runner note cap");
+  assert.ok(serializedInput.length < 1_000_000, "the fixture fits the runner input cap");
+  assert.equal(allowedImageSources.size, 43);
+  assert.ok(allowedImageSources.size <= 50, "the fixture fits the allowed asset-source cap");
+
+  const { context } = workerContext(renderSource);
+  vm.runInContext(`self.onmessage({ data: ${serializedInput} });`, context);
+  const result = (context.__messages as Array<{ type: string; html?: string; message?: string }>)[0];
+  assert.equal(result?.type, "result", result?.message);
+  const html = result?.html ?? "";
+  assert.ok(html.length < 48_000, "the fixture fits the runner HTML byte cap");
+  const elementCount = parseSyntheticMarkup(html).reduce((count, node) => count + countSyntheticDomElements(node), 0);
+  assert.equal(elementCount, 711, "the fixture covers 41 twelve-column records, 44 posters, calendar, stats, and watchlist");
+  assert.ok(elementCount > 500, `fixture should reproduce the former cap, got ${elementCount} elements`);
+  assert.ok(elementCount <= 1_000, `fixture should remain inside the bounded sanitizer cap, got ${elementCount} elements`);
+
+  const sanitizer = sanitizerContext();
+  sanitizer.__fixtureHtml = html;
+  sanitizer.__allowedImageSources = allowedImageSources;
+  const sanitized = vm.runInContext("sanitizeMarkup(__fixtureHtml, __allowedImageSources)", sanitizer) as SyntheticDomNode;
+  assert.equal(countSyntheticDomElements(sanitized), elementCount, "all fixture elements remain within the sanitizer policy");
+
+  sanitizer.__fixtureHtml = Array.from({ length: 1_001 }, () => "<div></div>").join("");
+  let boundedRejection = "";
+  try {
+    vm.runInContext("sanitizeMarkup(__fixtureHtml, new Set())", sanitizer);
+  } catch (error) {
+    boundedRejection = String(error);
+  }
+  assert.match(boundedRejection, /HTML output has too many elements/u, "the sanitizer must keep a hard element ceiling");
+});
+
 test("vault overview example renders a synthetic read-only dashboard with local filters", () => {
   const examplePath = path.join(projectRoot, "packages/markdown-live-editor/examples/vault-overview-dashboard.md");
   const markdown = readFileSync(examplePath, "utf8");
@@ -357,7 +511,7 @@ test("runner source masks network APIs and drops outbound HTML/CSS surfaces", ()
   assert.match(runnerSource, /const MAX_JAVASCRIPT_CHARS = 16_000/);
   assert.match(runnerSource, /const MAX_HTML_CHARS = 48_000/);
   assert.match(runnerSource, /const MAX_CSS_CHARS = 12_000/);
-  assert.match(runnerSource, /const MAX_ELEMENTS = 500/);
+  assert.match(runnerSource, /const MAX_ELEMENTS = 1_000/);
   assert.match(runnerSource, /const MAX_DEPTH = 20/);
   assert.match(runnerSource, /const ALLOWED_TAGS = new Set\(\[.*"form".*"input"/s);
   assert.match(runnerSource, /const DROPPED_TAGS = new Set\(\[.*"script".*"iframe".*"object"/s);
