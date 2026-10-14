@@ -5,7 +5,7 @@ const MAX_NOTES = 200;
 const MAX_TRASH = 100;
 const MAX_INPUT_CHARS = 1_000_000;
 const MAX_JAVASCRIPT_CHARS = 16_000;
-const MAX_ELEMENTS = 500;
+const MAX_ELEMENTS = 1_000;
 const MAX_DEPTH = 20;
 const MAX_ASSET_SOURCES = 50;
 const MIN_FRAME_HEIGHT = 160;
@@ -50,6 +50,7 @@ function sendToHost(message) {
 function reportFrameHeight() {
   resizeFrameScheduled = false;
   if (!Number.isSafeInteger(activeRequestId)) return;
+  // Nested scroll containers keep their own scroll range; only visible document flow sizes the frame.
   const height = Math.ceil(Math.max(
     root.scrollHeight,
     document.body.scrollHeight,
@@ -68,12 +69,40 @@ function scheduleFrameHeightReport() {
   requestAnimationFrame(reportFrameHeight);
 }
 
-if (typeof ResizeObserver === "function") {
-  const frameResizeObserver = new ResizeObserver(scheduleFrameHeightReport);
-  frameResizeObserver.observe(root);
-  frameResizeObserver.observe(document.body);
-  frameResizeObserver.observe(document.documentElement);
+const frameResizeObserver = typeof ResizeObserver === "function"
+  ? new ResizeObserver(scheduleFrameHeightReport)
+  : undefined;
+const observedFrameElements = new Set();
+
+function observeFrameContent() {
+  if (!frameResizeObserver) return;
+  const currentElements = new Set([root, document.body, document.documentElement, ...root.querySelectorAll("*")]);
+  for (const element of observedFrameElements) {
+    if (currentElements.has(element)) continue;
+    frameResizeObserver.unobserve(element);
+    observedFrameElements.delete(element);
+  }
+  for (const element of currentElements) {
+    if (observedFrameElements.has(element)) continue;
+    frameResizeObserver.observe(element);
+    observedFrameElements.add(element);
+  }
 }
+
+observeFrameContent();
+
+if (typeof MutationObserver === "function") {
+  const frameMutationObserver = new MutationObserver(() => {
+    observeFrameContent();
+    scheduleFrameHeightReport();
+  });
+  frameMutationObserver.observe(root, { childList: true, subtree: true, characterData: true });
+  frameMutationObserver.observe(document.head, { childList: true, subtree: true, characterData: true });
+}
+
+root.addEventListener("load", scheduleFrameHeightReport, true);
+window.addEventListener("resize", scheduleFrameHeightReport);
+window.visualViewport?.addEventListener("resize", scheduleFrameHeightReport);
 
 function stopWorker() {
   if (workerTimer) clearTimeout(workerTimer);
@@ -335,6 +364,7 @@ function renderResult(message, allowedImageSources) {
     container.className = "fieldnotes-custom-root";
     container.append(content);
     root.replaceChildren(container);
+    observeFrameContent();
     const existing = document.getElementById("user-styles");
     if (existing) existing.remove();
     if (stylesheet) {

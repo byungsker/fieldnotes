@@ -77,6 +77,21 @@ test("fieldnotes-view fences keep their exact Markdown source through TipTap par
   }
 });
 
+test("Markdown images are not split into standalone bookmark URL tokens", () => {
+  const manager = createTiptapMarkdownApi();
+  const source = "# Imported note\n\n![poster](https://example.com/poster.jpg)\n\n## Details\n- **Type**: drama\n- **Year**: 2025";
+  const tokens = new manager.instance.Lexer(manager.instance.defaults).lex(source);
+  const document = parseMarkdownWithPreservedBlocks(manager, source) as JSONContent;
+  const nodeTypes = document.content?.map((node) => node.type) ?? [];
+
+  assert.equal(tokens.some((token) => token.type === "bookmarkCard"), false);
+  assert.ok(nodeTypes.includes("image"));
+  assert.ok(nodeTypes.includes("heading"));
+  assert.ok(nodeTypes.includes("bulletList"));
+  assert.equal(nodeTypes.includes("preservedMarkdown"), false);
+  assert.equal(manager.serialize(document), source);
+});
+
 test("allows canonical block spacing when parsed content is unchanged", () => {
   assert.equal(hasContentPreservingMarkdownRoundTrip(blockMarkdown, "## 야 이게 뭐야\n장난하니"), true);
   assert.equal(hasContentPreservingMarkdownRoundTrip(blockMarkdown, "## heading\n\n\nparagraph"), true);

@@ -3,6 +3,7 @@ import { after, before, test } from "node:test";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import vm from "node:vm";
 import { createApp } from "../server/api.js";
 import { closeDatabase, createDocument, openDatabase } from "../server/database.js";
 import { parseFrontmatter } from "../server/frontmatter.js";
@@ -34,6 +35,70 @@ after(async () => {
   closeDatabase(database);
   rmSync(temporaryRoot, { recursive: true, force: true });
 });
+
+type RunnerFixtureNode = {
+  nodeType: number;
+  localName: string;
+  attributes: Array<{ name: string; value: string }>;
+  childNodes: RunnerFixtureNode[];
+  append(node: RunnerFixtureNode): void;
+  setAttribute(name: string, value: string): void;
+};
+
+function runnerFixtureNode(nodeType: number, localName: string, attributes: Array<{ name: string; value: string }> = []): RunnerFixtureNode {
+  return {
+    nodeType,
+    localName,
+    attributes,
+    childNodes: [],
+    append(node) { this.childNodes.push(node); },
+    setAttribute(name, value) { this.attributes.push({ name, value }); },
+  };
+}
+
+function runnerFixtureContext(): vm.Context {
+  const root = Object.assign(runnerFixtureNode(1, "div"), {
+    addEventListener: () => undefined,
+    querySelectorAll: () => [],
+    dataset: {},
+  });
+  const body = runnerFixtureNode(1, "body");
+  const documentElement = runnerFixtureNode(1, "html");
+  const head = runnerFixtureNode(1, "head");
+  const context = vm.createContext({
+    URLSearchParams,
+    Node: { ELEMENT_NODE: 1, TEXT_NODE: 3 },
+    window: { location: { search: "" }, parent: {}, addEventListener: () => undefined },
+    document: {
+      getElementById: (id: string) => id === "root" ? root : null,
+      body,
+      documentElement,
+      head,
+      createDocumentFragment: () => runnerFixtureNode(11, "#fragment"),
+      createTextNode: () => runnerFixtureNode(3, "#text"),
+      createElement: (name: string) => runnerFixtureNode(1, name),
+    },
+    DOMParser: class {
+      parseFromString(markup: string) {
+        const parsedBody = runnerFixtureNode(1, "body");
+        for (const match of markup.matchAll(/<img\b([^>]*)>/giu)) {
+          const attributes = [...(match[1] ?? "").matchAll(/([A-Za-z][A-Za-z0-9-]*)="([^"]*)"/gu)]
+            .map((attribute) => ({ name: (attribute[1] ?? "").toLowerCase(), value: attribute[2] ?? "" }));
+          parsedBody.append(runnerFixtureNode(1, "img", attributes));
+        }
+        return { body: parsedBody };
+      }
+    },
+  });
+  const runnerSource = readFileSync(path.join(process.cwd(), "public", "visualization-runner.js"), "utf8");
+  vm.runInContext(runnerSource, context);
+  return context;
+}
+
+function countRunnerFixtureNodesNamed(node: RunnerFixtureNode, localName: string): number {
+  return (node.nodeType === 1 && node.localName === localName ? 1 : 0)
+    + node.childNodes.reduce((count, child) => count + countRunnerFixtureNodesNamed(child, localName), 0);
+}
 
 test("frontmatter reads safe scalars, lists, quoted values, and nested mappings", () => {
   const parsed = parseFrontmatter([
@@ -83,6 +148,80 @@ test("view query is read-only and filters, sorts, and limits fixture notes", asy
   const afterSequence = Number((database.db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM changes").get() as { seq: number }).seq);
   assert.equal(result.sequence, beforeSequence);
   assert.equal(afterSequence, beforeSequence);
+});
+
+test("host returns a realistic 44-note dashboard fixture within query-result limits", async () => {
+  const categories = [
+    ...Array.from({ length: 41 }, () => "record"),
+    "watchlist",
+    "watchlist",
+    "dashboard",
+  ];
+  categories.forEach((kind, index) => {
+    const notePath = kind === "record"
+      ? `movies/records/record-${index + 1}.md`
+      : kind === "watchlist"
+        ? `movies/watchlist/watch-${index + 1}.md`
+        : "movies/dashboard.md";
+    const created = createDocument(database, `Synthetic movie note ${index + 1}`, [
+      "---",
+      "fixture: movie-dashboard-synthetic",
+      `kind: ${kind}`,
+      `syntheticIndex: ${index + 1}`,
+      ...(kind === "dashboard"
+        ? ["month: 2025-01", "tags: [synthetic, dashboard]"]
+        : [
+          `year: ${kind === "record" ? 2024 : 2025}`,
+          `status: ${kind === "record" ? "watched" : "planned"}`,
+          "rating: 7.4",
+          "tags: [synthetic, catalog]",
+        ]),
+      "---",
+      kind === "dashboard"
+        ? "Synthetic metadata for the full-size dashboard query fixture."
+        : `![Poster](../posters/${kind}-${index + 1}.jpg)`,
+    ].join("\n"));
+    database.db.prepare("UPDATE documents SET file_path = ? WHERE id = ?").run(notePath, created.id);
+  });
+
+  const response = await fetch(`${baseUrl}/api/views/query`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query: {
+      where: [{ field: "frontmatter.fixture", operator: "eq", value: "movie-dashboard-synthetic" }],
+      limit: 100,
+    } }),
+    signal: AbortSignal.timeout(5_000),
+  });
+  assert.equal(response.status, 200);
+  const result = await response.json() as {
+    notes: Array<{ id: string; contentHash: string; frontmatter: { kind?: string }; path: string; assetPaths?: string[] }>;
+    sequence: number;
+  };
+  assert.equal(result.notes.length, 44);
+  assert.equal(result.notes.filter((note) => note.frontmatter.kind === "record").length, 41);
+  assert.equal(result.notes.filter((note) => note.frontmatter.kind === "watchlist").length, 2);
+  assert.equal(result.notes.filter((note) => note.frontmatter.kind === "dashboard").length, 1);
+  const imageNotes = result.notes.filter((note) => note.frontmatter.kind !== "dashboard");
+  assert.equal(imageNotes.length, 43);
+  assert.ok(imageNotes.every((note) => note.assetPaths?.length === 1), "host query derives local image metadata from note Markdown");
+  assert.ok(imageNotes.every((note) => note.assetPaths?.[0]?.startsWith("movies/posters/")), "asset paths are vault-relative normalized paths");
+  assert.ok(result.notes.every((note) => Object.keys(note.frontmatter).length > 0), "the fixture uses parsed movie metadata");
+
+  const fixtureRunner = runnerFixtureContext();
+  fixtureRunner.__fixtureNotes = result.notes;
+  fixtureRunner.__fixtureHtml = imageNotes.map((note) => {
+    const assetPath = note.assetPaths?.[0];
+    assert.ok(assetPath);
+    return `<img src="/api/views/assets/${note.id}?asset=${encodeURIComponent(assetPath)}&v=${note.contentHash}" alt="Synthetic poster">`;
+  }).join("");
+  const allowedImageSources = vm.runInContext("buildAllowedImageSources(__fixtureNotes)", fixtureRunner) as Set<string>;
+  assert.equal(allowedImageSources.size, 43, "the actual runner builder derives asset URLs from actual host query metadata");
+  const sanitized = vm.runInContext("sanitizeMarkup(__fixtureHtml, buildAllowedImageSources(__fixtureNotes))", fixtureRunner) as RunnerFixtureNode;
+  assert.equal(countRunnerFixtureNodesNamed(sanitized, "img"), 43, "all host-derived local posters survive the real sanitizer");
+  assert.ok(Buffer.byteLength(JSON.stringify(result), "utf8") < 1_500_000, "host result fits MAX_RESULT_BYTES");
+  assert.ok(JSON.stringify(result).length < 1_000_000, "host result fits the runner input cap");
+  assert.ok(result.notes.every((note) => !Object.hasOwn(note, "body")), "query results stay metadata-only");
 });
 
 test("view query follows newly saved notes on the next read", async () => {

@@ -10,7 +10,7 @@ function preservedSourceDocument(source: string): JSONContent {
 }
 
 function splitTrailingBlankLines(source: string): { content: string; suffix: string } {
-  const match = /(\n[^\S\n]*(?:\n[^\S\n]*)+)$/u.exec(source);
+  const match = /(\n[^\S\n]*(?:\n[^\S\n]*)*)$/u.exec(source);
   if (!match) return { content: source, suffix: "" };
   return { content: source.slice(0, match.index), suffix: match[1] || "" };
 }

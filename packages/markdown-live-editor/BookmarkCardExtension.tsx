@@ -176,11 +176,14 @@ export const BookmarkCard = Node.create<BookmarkCardOptions>({
     name: "bookmarkCard",
     level: "block",
     start: (source) => {
-      const http = source.indexOf("http://");
-      const https = source.indexOf("https://");
-      if (http < 0) return https;
-      if (https < 0) return http;
-      return Math.min(http, https);
+      const urlPattern = /https?:\/\//gi;
+      for (const match of source.matchAll(urlPattern)) {
+        const position = match.index;
+        if (typeof position !== "number") continue;
+        const lineStart = source.lastIndexOf("\n", position - 1) + 1;
+        if (/^[ \t]*$/.test(source.slice(lineStart, position))) return position;
+      }
+      return -1;
     },
     tokenize: (source) => {
       const match = /^(https?:\/\/[^\s<>]+)(?:[ \t]*\r?\n|$)/i.exec(source);
