@@ -22,6 +22,21 @@ export interface NewEditorSnippet {
   shortcut?: string | null;
 }
 
+export interface PreviewDocument {
+  id: string;
+  title: string;
+  filePath?: string;
+  updatedAt?: string;
+  body?: string;
+}
+
+export interface MarkdownPreviewContext {
+  documentId?: string;
+  documentPath?: string;
+  recordsFolderId?: string;
+  onOpenDocument?: (documentId: string) => void;
+}
+
 export interface MarkdownLiveEditorAdapters {
   uploadImage?: (file: File) => Promise<string>;
   fetchBookmarkMetadata?: (url: string, signal: AbortSignal) => Promise<BookmarkMetadata | null>;
@@ -35,12 +50,16 @@ export interface MarkdownLiveEditorAdapters {
   isVisualizationTrusted?: (documentId: string, blockIndex: number, sourceHash: string) => boolean;
   trustVisualization?: (documentId: string, blockIndex: number, sourceHash: string) => void;
   revokeVisualizationTrust?: (documentId: string, blockIndex: number, sourceHash: string) => void;
+  loadBabyPreviewDocuments?: (signal: AbortSignal) => Promise<PreviewDocument[]>;
+  createPreviewDocument?: (input: { title: string; body: string; folderId: string }) => Promise<PreviewDocument>;
+  resolveVaultAsset?: (documentId: string, source: string) => string;
 }
 
 export interface MarkdownLiveEditorProps {
   value: string;
   onChange: (value: string) => void;
   adapters?: MarkdownLiveEditorAdapters;
+  previewContext?: MarkdownPreviewContext;
   ariaLabel?: string;
   minHeight?: number | string;
   /** Hide document action controls while keeping the editable document surface. */

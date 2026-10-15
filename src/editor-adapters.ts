@@ -4,6 +4,7 @@ import type {
   EditorSnippet,
   MarkdownLiveEditorAdapters,
   NewEditorSnippet,
+  PreviewDocument,
 } from "../packages/markdown-live-editor";
 import type { VisualizationAction, VisualizationQuery, VisualizationQueryResponse } from "../shared/visualization";
 import { subscribeToVaultChanges } from "./vault-change-subscription";
@@ -161,6 +162,21 @@ export function createFieldnotesEditorAdapters(): MarkdownLiveEditorAdapters {
     revokeVisualizationTrust(documentId: string, blockIndex: number, sourceHash: string): void {
       try { window.localStorage.removeItem(visualizationTrustKey(documentId, blockIndex, sourceHash)); }
       catch { throw new Error("Could not revoke this visualization's trust record."); }
+    },
+    async loadBabyPreviewDocuments(signal): Promise<PreviewDocument[]> {
+      const result = await apiRequest<{ documents: PreviewDocument[] }>("/api/preview/babies", { signal });
+      return result.documents;
+    },
+    async createPreviewDocument(input) {
+      const result = await apiRequest<{ document: PreviewDocument }>("/api/documents", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return result.document;
+    },
+    resolveVaultAsset(documentId, source) {
+      const query = new URLSearchParams({ documentId, source });
+      return `/api/preview/babies/asset?${query.toString()}`;
     },
     subscribeToVaultChanges,
     enableCustomVisualizations: true,

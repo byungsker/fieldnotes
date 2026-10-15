@@ -102,6 +102,7 @@ export function MarkdownLiveEditor({
   value,
   onChange,
   adapters,
+  previewContext,
   ariaLabel = "Markdown editor",
   minHeight = 420,
   showToolbar = true,
@@ -113,6 +114,7 @@ export function MarkdownLiveEditor({
 }: MarkdownLiveEditorProps) {
   const initialParts = useRef(splitLeadingFrontmatter(value));
   const adaptersRef = useRef<MarkdownLiveEditorAdapters | undefined>(adapters);
+  const previewContextRef = useRef(previewContext);
   const onChangeRef = useRef(onChange);
   const onSerializationSafetyChangeRef = useRef(onSerializationSafetyChange);
   const openVisualizationNoteRef = useRef(openVisualizationNote);
@@ -130,6 +132,7 @@ export function MarkdownLiveEditor({
   const composingRef = useRef(false);
 
   adaptersRef.current = adapters;
+  previewContextRef.current = previewContext;
   onChangeRef.current = onChange;
   onSerializationSafetyChangeRef.current = onSerializationSafetyChange;
   openVisualizationNoteRef.current = openVisualizationNote;
@@ -160,6 +163,7 @@ export function MarkdownLiveEditor({
     const fetchMetadata = adaptersRef.current?.fetchBookmarkMetadata;
     return fetchMetadata ? fetchMetadata(url, signal) : Promise.resolve(null);
   }, []);
+  const getPreviewContext = useCallback(() => ({ adapters: adaptersRef.current, ...previewContextRef.current }), []);
 
   const queryVisualizationAdapter = useCallback((query: Parameters<NonNullable<MarkdownLiveEditorAdapters["queryVisualization"]>>[0], signal: AbortSignal) => {
     const run = adaptersRef.current?.queryVisualization;
@@ -210,10 +214,10 @@ export function MarkdownLiveEditor({
       WikiLink,
       Markdown.configure({ markedOptions: { gfm: true, breaks: false } }),
       BookmarkCard.configure({ fetchBookmarkMetadata: fetchMetadataAdapter }),
-      PreservedMarkdown,
+      PreservedMarkdown.configure({ getPreviewContext }),
       PreservedWhitespace,
     ],
-    [fetchMetadataAdapter, queryVisualizationAdapter, subscribeToVaultChangesAdapter, enableCustomVisualizations, openVisualizationNoteAdapter, runVisualizationAction, visualizationDocumentId, visualizationTrustAdapter]
+    [fetchMetadataAdapter, queryVisualizationAdapter, subscribeToVaultChangesAdapter, enableCustomVisualizations, getPreviewContext, openVisualizationNoteAdapter, runVisualizationAction, visualizationDocumentId, visualizationTrustAdapter]
   );
 
   const insertUploadedImage = useCallback(async (file: File, position?: number | { from: number; to: number }) => {

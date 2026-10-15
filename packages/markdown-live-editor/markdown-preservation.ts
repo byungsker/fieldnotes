@@ -15,6 +15,29 @@ function splitTrailingBlankLines(source: string): { content: string; suffix: str
   return { content: source.slice(0, match.index), suffix: match[1] || "" };
 }
 
+function isSafeLocalRasterReference(raw: string): boolean {
+  const target = raw.split("|", 1)[0]?.split("#", 1)[0]?.split("?", 1)[0]?.trim() ?? "";
+  const pathValue = target.startsWith("/") ? target.slice(1) : target;
+  const segments = pathValue.split("/");
+  return Boolean(target && target.length <= 500 && !target.includes("\\") && !target.startsWith("//")
+    && !/^[a-z][a-z0-9+.-]*:/iu.test(target)
+    && ![...target].some((character) => (character.codePointAt(0) ?? 0) < 32 || (character.codePointAt(0) ?? 0) === 127)
+    && segments.every((segment) => segment && segment !== "." && segment !== ".." && segment !== ".fieldnotes" && !segment.startsWith(".fieldnotes-tmp-"))
+    && /\.(?:avif|gif|jpe?g|png|webp)$/iu.test(target));
+}
+
+function isLocalMediaEmbedParagraph(token: { type: string; raw?: string }): boolean {
+  if (token.type !== "paragraph" || !token.raw) return false;
+  const text = token.raw.replace(/`+[^`\n]*`+/gu, "");
+  for (const match of text.matchAll(/!\[\[([^\]\r\n]+)\]\]/gu)) {
+    if (isSafeLocalRasterReference(match[1] ?? "")) return true;
+  }
+  for (const match of text.matchAll(/!\[[^\]\r\n]*\]\(\s*(?:<([^>\r\n]+)>|([^\s)\r\n]+))(?:\s+[^)]*)?\)/gu)) {
+    if (isSafeLocalRasterReference(match[1] ?? match[2] ?? "")) return true;
+  }
+  return false;
+}
+
 /**
  * Parse Markdown blocks into editable rich nodes and retain blocks that change
  * under parse/serialize as explicit read-only source nodes. Exact whitespace
@@ -49,15 +72,22 @@ export function parseMarkdownWithPreservedBlocks(manager: MarkdownManager, sourc
 
       const { content: blockSource, suffix } = splitTrailingBlankLines(raw);
       if (blockSource) {
-        try {
-          const parsed = manager.parse(blockSource);
-          if (manager.serialize(parsed) === blockSource) {
-            content.push(...(parsed.content || []));
-          } else {
+        const language = token.type === "code" && typeof token.lang === "string"
+          ? token.lang.trim().split(/[ \t]+/u)[0]?.toLowerCase()
+          : undefined;
+        if (language === "dataviewjs" || isLocalMediaEmbedParagraph(token)) {
+          content.push({ type: "preservedMarkdown", attrs: { raw: blockSource } });
+        } else {
+          try {
+            const parsed = manager.parse(blockSource);
+            if (manager.serialize(parsed) === blockSource) {
+              content.push(...(parsed.content || []));
+            } else {
+              content.push({ type: "preservedMarkdown", attrs: { raw: blockSource } });
+            }
+          } catch {
             content.push({ type: "preservedMarkdown", attrs: { raw: blockSource } });
           }
-        } catch {
-          content.push({ type: "preservedMarkdown", attrs: { raw: blockSource } });
         }
       }
 

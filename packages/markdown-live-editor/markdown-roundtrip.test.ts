@@ -241,6 +241,23 @@ test("mixed line endings become an exact read-only card instead of being normali
   assert.equal(manager.serialize(document), mixed);
 });
 
+test("keeps DataviewJS inert and preserves local raster embeds as source nodes", () => {
+  const manager = createTiptapMarkdownApi();
+  const dataview = "```dataviewjs\nthrow new Error('must remain inert');\n```";
+  const media = "![[photos/day.jpg|width=400]]";
+  for (const source of [dataview, media]) {
+    const document = parseMarkdownWithPreservedBlocks(manager, source) as JSONContent;
+    assert.deepEqual(document.content?.map((node) => node.type), ["preservedMarkdown"]);
+    assert.equal(document.content?.[0]?.attrs?.raw, source);
+    assert.equal(manager.serialize(document), source);
+  }
+
+  const fencedExample = "```md\n![[photos/example.jpg]]\n```";
+  const document = parseMarkdownWithPreservedBlocks(manager, fencedExample) as JSONContent;
+  assert.notEqual(document.content?.[0]?.attrs?.raw, "![[photos/example.jpg]]");
+  assert.equal(manager.serialize(document), fencedExample);
+});
+
 test("rejects serialization that drops parsed content", () => {
   const lossyMarkdown: MarkdownSerializationApi = {
     parse: (markdown) => ({ content: markdown.split(/\n+/).filter(Boolean) }),
