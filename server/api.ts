@@ -36,12 +36,13 @@ import {
   type ImportedDocument,
   type KnowledgeDatabase,
 } from "./database.js";
-import { VaultStorageError } from "./vault.js";
+import { MAX_VAULT_ASSET_BYTES, VaultStorageError } from "./vault.js";
 import { queryVisualizationNotes, validateVisualizationQuery, VisualizationQueryError } from "./visualizations.js";
 import { MAX_VIEW_TRASH_BYTES, MAX_VIEW_TRASH_CANDIDATES, ViewQueryLimitError } from "./view-query-limits.js";
 import { parseFrontmatter, patchFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { MovieSearchProviderError, type MovieSearchAdapter } from "./movie-search.js";
 import {
+  extractLocalImageReferenceTargets,
   extractLocalImageReferences,
   fetchPublicTmdbPoster,
   isAllowedTmdbPosterUrl,
@@ -62,7 +63,7 @@ const MAX_IMPORT_FILES = 100;
 const MAX_IMPORT_BYTES = 5_000_000;
 const MAX_PREVIEW_BABY_DOCUMENTS = 100;
 const MAX_PREVIEW_BABY_CHARACTERS = 10_000_000;
-const MAX_BABY_PREVIEW_IMAGE_BYTES = 25_000_000;
+const MAX_BABY_PREVIEW_IMAGE_BYTES = MAX_VAULT_ASSET_BYTES;
 const BABY_PREVIEW_IMAGE_EXTENSIONS = new Set([".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp"]);
 
 function normalizedBabyPreviewAssetPath(value: string, markdownPath: string): string | undefined {
@@ -71,7 +72,9 @@ function normalizedBabyPreviewAssetPath(value: string, markdownPath: string): st
     || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/iu.test(target)) return undefined;
   const rooted = target.startsWith("/");
   const pathValue = rooted ? target.slice(1) : target;
-  if (pathValue.split("/").some((segment) => !segment || segment === "." || segment === ".." || segment === ".fieldnotes" || segment.startsWith(".fieldnotes-tmp-"))) return undefined;
+  const rawSegments = pathValue.split("/");
+  if (rawSegments.some((segment) => !segment || segment === ".fieldnotes" || segment.startsWith(".fieldnotes-tmp-")
+    || (rooted && (segment === "." || segment === "..")))) return undefined;
   const normalized = rooted
     ? path.posix.normalize(pathValue)
     : path.posix.normalize(path.posix.join(path.posix.dirname(markdownPath), pathValue));
@@ -590,20 +593,28 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
     }
 
     const source = request.query.source.trim();
+    const sourceTarget = source.split("|", 1)[0]?.split("#", 1)[0]?.split("?", 1)[0]?.trim() ?? "";
     const relativePath = normalizedBabyPreviewAssetPath(source, current.filePath);
     const rootPath = normalizedBabyPreviewAssetPath(source.startsWith("/") ? source : `/${source}`, current.filePath);
-    if (!relativePath || !rootPath) {
+    if (!relativePath && !rootPath) {
       sendError(response, 404, "not_found", "The local image reference is invalid.");
       return;
     }
-    const explicitReferences = extractLocalImageReferences(current.body, current.filePath);
-    const explicitReference = explicitReferences.find((reference) => reference === relativePath || reference === rootPath);
-    const resolveUniqueBasename = !source.includes("/");
-    const assetPath = explicitReference
-      ? database.vault.resolveAssetPath(explicitReference, resolveUniqueBasename)
-      : staticBabyImageReference(current.body, source)
-        ? database.vault.resolveAssetPath(rootPath, resolveUniqueBasename)
-        : undefined;
+    const explicitTargets = extractLocalImageReferenceTargets(current.body, current.filePath, BABY_PREVIEW_IMAGE_EXTENSIONS);
+    const explicitlyLinked = explicitTargets.includes(sourceTarget);
+    const rootRelativeSyntax = sourceTarget.startsWith("/")
+      || (sourceTarget.includes("/") && !sourceTarget.startsWith("./") && !sourceTarget.startsWith("../"));
+    const resolveUniqueBasename = !sourceTarget.includes("/");
+    let assetPath: string | undefined;
+    if (explicitlyLinked && rootRelativeSyntax && rootPath) {
+      assetPath = database.vault.resolveAssetPath(rootPath, false);
+    }
+    if (!assetPath && explicitlyLinked && relativePath) {
+      assetPath = database.vault.resolveAssetPath(relativePath, resolveUniqueBasename);
+    }
+    if (!assetPath && staticBabyImageReference(current.body, source) && rootPath) {
+      assetPath = database.vault.resolveAssetPath(rootPath, resolveUniqueBasename);
+    }
     if (!assetPath) {
       sendError(response, 404, "not_found", "The referenced local image is missing or ambiguous.");
       return;

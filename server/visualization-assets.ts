@@ -59,7 +59,7 @@ export function validateLocalImage(bytes: Buffer, relativePath: string): Visuali
   return { bytes, contentType };
 }
 
-function normalizeLocalReference(target: string, markdownPath: string): string | undefined {
+function normalizeLocalReference(target: string, markdownPath: string, allowedExtensions = LOCAL_IMAGE_EXTENSIONS): string | undefined {
   if (!target || target.length > 1_024 || target.includes("\\") || hasControlCharacters(target)
     || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/iu.test(target)) return undefined;
   const sourceDirectory = path.posix.dirname(markdownPath);
@@ -69,7 +69,7 @@ function normalizeLocalReference(target: string, markdownPath: string): string |
   if (!normalized || normalized === "." || normalized === ".." || normalized.startsWith("../") || normalized.startsWith("/")) return undefined;
   const segments = normalized.split("/");
   if (segments.some((segment) => !segment || segment === "." || segment === ".." || segment === ".fieldnotes" || segment.startsWith(".fieldnotes-tmp-"))) return undefined;
-  if (!LOCAL_IMAGE_EXTENSIONS.has(path.posix.extname(normalized).toLowerCase())) return undefined;
+  if (!allowedExtensions.has(path.posix.extname(normalized).toLowerCase())) return undefined;
   return normalized;
 }
 
@@ -104,18 +104,31 @@ function stripFencedCode(markdown: string): string {
   return lines.join("\n");
 }
 
-/** Extract only explicit, relative raster-image references from a note body. */
-export function extractLocalImageReferences(markdown: string, markdownPath: string): string[] {
+/** Extract explicit raster-image targets outside fenced code, retaining their written path syntax. */
+export function extractLocalImageReferenceTargets(
+  markdown: string,
+  markdownPath: string,
+  allowedExtensions = LOCAL_IMAGE_EXTENSIONS,
+): string[] {
   const withoutFencedCode = stripFencedCode(markdown);
-  const paths = new Set<string>();
+  const targets = new Set<string>();
   const add = (rawTarget: string) => {
     const target = rawTarget.split("|", 1)[0]?.split("#", 1)[0]?.trim() ?? "";
-    const normalized = normalizeLocalReference(target, markdownPath);
-    if (normalized) paths.add(normalized);
+    if (normalizeLocalReference(target, markdownPath, allowedExtensions)) targets.add(target);
   };
   for (const match of withoutFencedCode.matchAll(/!\[\[([^\]\r\n]+)\]\]/gu)) add(match[1] ?? "");
   for (const match of withoutFencedCode.matchAll(/!\[[^\]\r\n]*\]\(\s*(?:<([^>\r\n]+)>|([^\s)\r\n]+))(?:\s+[^)]*)?\)/gu)) {
     add(match[1] ?? match[2] ?? "");
+  }
+  return [...targets].slice(0, 20);
+}
+
+/** Extract only explicit, relative raster-image references from a note body. */
+export function extractLocalImageReferences(markdown: string, markdownPath: string): string[] {
+  const paths = new Set<string>();
+  for (const target of extractLocalImageReferenceTargets(markdown, markdownPath)) {
+    const normalized = normalizeLocalReference(target, markdownPath);
+    if (normalized) paths.add(normalized);
   }
   return [...paths].slice(0, 20);
 }

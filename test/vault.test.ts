@@ -359,14 +359,22 @@ test("baby previews return scoped note data and only serve referenced raster att
   const database = openDatabase(dataDir, { seedDemo: false, vaultDir });
   const babies = createFolder(database, "babies", null);
   const records = createFolder(database, "records", babies.id);
+  const nestedRecords = createFolder(database, "nested", records.id);
   const dashboard = createDocument(database, "Dashboard fixture", "```dataviewjs\napp.vault.getAbstractFileByPath('images/hero.jpg');\n```", babies.id);
   const record = createDocument(database, "Record fixture", "A record. ![[photos/record.png]]", records.id);
   const basenameRecord = createDocument(database, "Basename record fixture", "A record. ![[global-record.png]]", records.id);
+  const rootWikiRecord = createDocument(database, "Root wiki image fixture", "A record. ![[images/hero.jpg]]", records.id);
+  const rootMarkdownRecord = createDocument(database, "Root Markdown image fixture", "A record. ![hero](images/hero.jpg)", records.id);
+  const relativeParentRecord = createDocument(database, "Relative parent image fixture", "A record. ![[../../../images/hero.jpg]]", nestedRecords.id);
+  const largeImageRecord = createDocument(database, "Large image fixture", "A record. ![[images/large.jpg]]", records.id);
   const heroPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const largeJpeg = Buffer.alloc(5_000_001);
+  largeJpeg.set([0xff, 0xd8, 0xff, 0xd9]);
   mkdirSync(path.join(vaultDir, "images"), { recursive: true, mode: 0o700 });
   mkdirSync(path.join(vaultDir, "babies", "records", "photos"), { recursive: true, mode: 0o700 });
   mkdirSync(path.join(vaultDir, "other"), { recursive: true, mode: 0o700 });
   writeFileSync(path.join(vaultDir, "images", "hero.jpg"), heroPng);
+  writeFileSync(path.join(vaultDir, "images", "large.jpg"), largeJpeg);
   writeFileSync(path.join(vaultDir, "images", "global-record.png"), heroPng);
   writeFileSync(path.join(vaultDir, "babies", "records", "photos", "record.png"), heroPng);
   const before = database.vault?.snapshot().documents.map((document) => [document.id, document.contentHash]).sort(([left], [right]) => left.localeCompare(right));
@@ -374,7 +382,15 @@ test("baby previews return scoped note data and only serve referenced raster att
   try {
     const preview = await json(live.baseUrl, "/api/preview/babies");
     assert.equal(preview.response.status, 200);
-    assert.deepEqual(preview.body.documents.map((document: { id: string }) => document.id).sort(), [dashboard.id, record.id, basenameRecord.id].sort());
+    assert.deepEqual(preview.body.documents.map((document: { id: string }) => document.id).sort(), [
+      dashboard.id,
+      record.id,
+      basenameRecord.id,
+      rootWikiRecord.id,
+      rootMarkdownRecord.id,
+      relativeParentRecord.id,
+      largeImageRecord.id,
+    ].sort());
     assert.equal(preview.body.documents.find((document: { id: string }) => document.id === dashboard.id).body.includes("getAbstractFileByPath"), true);
 
     const heroUrl = new URL("/api/preview/babies/asset", live.baseUrl);
@@ -393,6 +409,36 @@ test("baby previews return scoped note data and only serve referenced raster att
     assert.equal(recordImage.status, 200);
     assert.deepEqual(Buffer.from(await recordImage.arrayBuffer()), heroPng);
 
+    const rootWikiUrl = new URL("/api/preview/babies/asset", live.baseUrl);
+    rootWikiUrl.searchParams.set("documentId", rootWikiRecord.id);
+    rootWikiUrl.searchParams.set("source", "images/hero.jpg");
+    const rootWikiImage = await fetch(rootWikiUrl);
+    assert.equal(rootWikiImage.status, 200);
+    assert.deepEqual(Buffer.from(await rootWikiImage.arrayBuffer()), heroPng);
+
+    const rootMarkdownUrl = new URL("/api/preview/babies/asset", live.baseUrl);
+    rootMarkdownUrl.searchParams.set("documentId", rootMarkdownRecord.id);
+    rootMarkdownUrl.searchParams.set("source", "images/hero.jpg");
+    const rootMarkdownImage = await fetch(rootMarkdownUrl);
+    assert.equal(rootMarkdownImage.status, 200);
+    assert.deepEqual(Buffer.from(await rootMarkdownImage.arrayBuffer()), heroPng);
+
+    const relativeParentUrl = new URL("/api/preview/babies/asset", live.baseUrl);
+    relativeParentUrl.searchParams.set("documentId", relativeParentRecord.id);
+    relativeParentUrl.searchParams.set("source", "../../../images/hero.jpg");
+    const relativeParentImage = await fetch(relativeParentUrl);
+    assert.equal(relativeParentImage.status, 200);
+    assert.deepEqual(Buffer.from(await relativeParentImage.arrayBuffer()), heroPng);
+
+    const largeImageUrl = new URL("/api/preview/babies/asset", live.baseUrl);
+    largeImageUrl.searchParams.set("documentId", largeImageRecord.id);
+    largeImageUrl.searchParams.set("source", "images/large.jpg");
+    const largeImage = await fetch(largeImageUrl);
+    assert.equal(largeImage.status, 200);
+    assert.equal(largeImage.headers.get("content-type"), "image/jpeg");
+    assert.equal(Number(largeImage.headers.get("content-length")), largeJpeg.byteLength);
+    assert.deepEqual(Buffer.from(await largeImage.arrayBuffer()), largeJpeg);
+
     const basenameUrl = new URL("/api/preview/babies/asset", live.baseUrl);
     basenameUrl.searchParams.set("documentId", basenameRecord.id);
     basenameUrl.searchParams.set("source", "global-record.png");
@@ -404,7 +450,9 @@ test("baby previews return scoped note data and only serve referenced raster att
 
     recordUrl.searchParams.set("source", "images/unreferenced.png");
     assert.equal((await fetch(recordUrl)).status, 404);
-    recordUrl.searchParams.set("source", "../outside.png");
+    recordUrl.searchParams.set("source", "../../../outside.png");
+    assert.equal((await fetch(recordUrl)).status, 404);
+    recordUrl.searchParams.set("source", "images/hero.jpg");
     assert.equal((await fetch(recordUrl)).status, 404);
     const after = database.vault?.snapshot().documents.map((document) => [document.id, document.contentHash]).sort(([left], [right]) => left.localeCompare(right));
     assert.deepEqual(after, before);
