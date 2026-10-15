@@ -361,17 +361,20 @@ test("baby previews return scoped note data and only serve referenced raster att
   const records = createFolder(database, "records", babies.id);
   const dashboard = createDocument(database, "Dashboard fixture", "```dataviewjs\napp.vault.getAbstractFileByPath('images/hero.jpg');\n```", babies.id);
   const record = createDocument(database, "Record fixture", "A record. ![[photos/record.png]]", records.id);
+  const basenameRecord = createDocument(database, "Basename record fixture", "A record. ![[global-record.png]]", records.id);
   const heroPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   mkdirSync(path.join(vaultDir, "images"), { recursive: true, mode: 0o700 });
   mkdirSync(path.join(vaultDir, "babies", "records", "photos"), { recursive: true, mode: 0o700 });
+  mkdirSync(path.join(vaultDir, "other"), { recursive: true, mode: 0o700 });
   writeFileSync(path.join(vaultDir, "images", "hero.jpg"), heroPng);
+  writeFileSync(path.join(vaultDir, "images", "global-record.png"), heroPng);
   writeFileSync(path.join(vaultDir, "babies", "records", "photos", "record.png"), heroPng);
-  const before = database.vault?.snapshot().documents.map((document) => [document.id, document.contentHash]);
+  const before = database.vault?.snapshot().documents.map((document) => [document.id, document.contentHash]).sort(([left], [right]) => left.localeCompare(right));
   const live = await listen(database);
   try {
     const preview = await json(live.baseUrl, "/api/preview/babies");
     assert.equal(preview.response.status, 200);
-    assert.deepEqual(preview.body.documents.map((document: { id: string }) => document.id).sort(), [dashboard.id, record.id].sort());
+    assert.deepEqual(preview.body.documents.map((document: { id: string }) => document.id).sort(), [dashboard.id, record.id, basenameRecord.id].sort());
     assert.equal(preview.body.documents.find((document: { id: string }) => document.id === dashboard.id).body.includes("getAbstractFileByPath"), true);
 
     const heroUrl = new URL("/api/preview/babies/asset", live.baseUrl);
@@ -390,11 +393,20 @@ test("baby previews return scoped note data and only serve referenced raster att
     assert.equal(recordImage.status, 200);
     assert.deepEqual(Buffer.from(await recordImage.arrayBuffer()), heroPng);
 
+    const basenameUrl = new URL("/api/preview/babies/asset", live.baseUrl);
+    basenameUrl.searchParams.set("documentId", basenameRecord.id);
+    basenameUrl.searchParams.set("source", "global-record.png");
+    const basenameImage = await fetch(basenameUrl);
+    assert.equal(basenameImage.status, 200);
+    assert.deepEqual(Buffer.from(await basenameImage.arrayBuffer()), heroPng);
+    writeFileSync(path.join(vaultDir, "other", "global-record.png"), heroPng);
+    assert.equal((await fetch(basenameUrl)).status, 404);
+
     recordUrl.searchParams.set("source", "images/unreferenced.png");
     assert.equal((await fetch(recordUrl)).status, 404);
     recordUrl.searchParams.set("source", "../outside.png");
     assert.equal((await fetch(recordUrl)).status, 404);
-    const after = database.vault?.snapshot().documents.map((document) => [document.id, document.contentHash]);
+    const after = database.vault?.snapshot().documents.map((document) => [document.id, document.contentHash]).sort(([left], [right]) => left.localeCompare(right));
     assert.deepEqual(after, before);
   } finally {
     await live.close();

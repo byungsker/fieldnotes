@@ -597,10 +597,15 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
       return;
     }
     const explicitReferences = extractLocalImageReferences(current.body, current.filePath);
-    const assetPath = explicitReferences.find((reference) => reference === relativePath || reference === rootPath)
-      ?? (staticBabyImageReference(current.body, source) ? rootPath : undefined);
+    const explicitReference = explicitReferences.find((reference) => reference === relativePath || reference === rootPath);
+    const resolveUniqueBasename = !source.includes("/");
+    const assetPath = explicitReference
+      ? database.vault.resolveAssetPath(explicitReference, resolveUniqueBasename)
+      : staticBabyImageReference(current.body, source)
+        ? database.vault.resolveAssetPath(rootPath, resolveUniqueBasename)
+        : undefined;
     if (!assetPath) {
-      sendError(response, 404, "not_found", "The baby note does not reference this local image.");
+      sendError(response, 404, "not_found", "The referenced local image is missing or ambiguous.");
       return;
     }
 

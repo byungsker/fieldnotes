@@ -34,6 +34,7 @@ const STATE_FORMAT = "fieldnotes-vault";
 const STATE_VERSION = 2;
 const TEMP_PREFIX = ".fieldnotes-tmp-";
 const MAX_VAULT_FILE_BYTES = 5_000_000;
+const LOCAL_RASTER_EXTENSIONS = new Set([".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp"]);
 
 export class VaultStorageError extends Error {
   readonly code: string;
@@ -684,6 +685,47 @@ export class FileVault {
       }
       throw error;
     }
+  }
+
+  resolveAssetPath(relativePath: string, resolveUniqueBasename = false): string | undefined {
+    const absolute = this.safeAbsolute(relativePath);
+    try {
+      if (statKind(absolute) === "file") return relativePath;
+      return undefined;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (!resolveUniqueBasename) return undefined;
+
+    const fileName = path.posix.basename(relativePath);
+    if (!fileName || !LOCAL_RASTER_EXTENSIONS.has(path.posix.extname(fileName).toLowerCase())) return undefined;
+    const nameKey = normalizedNameKey(fileName);
+    const matches: string[] = [];
+    const walk = (directory: string, parent: string): void => {
+      const entries = readdirSync(directory, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!parent && entry.name === ".fieldnotes") continue;
+        const entryKey = normalizedNameKey(entry.name);
+        if (entryKey === ".fieldnotes" || entryKey.startsWith(normalizedNameKey(TEMP_PREFIX))) continue;
+        const childRelative = path.posix.join(parent, entry.name);
+        const absoluteChild = path.join(directory, entry.name);
+        let kind: ReturnType<typeof statKind>;
+        try {
+          kind = statKind(absoluteChild);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw error;
+        }
+        if (kind === "directory") {
+          walk(absoluteChild, childRelative);
+        } else if (kind === "file" && entryKey === nameKey) {
+          matches.push(childRelative);
+          if (matches.length > 1) return;
+        }
+      }
+    };
+    walk(this.rootDir, "");
+    return matches.length === 1 ? matches[0] : undefined;
   }
 
   getFolderPath(id: string): string | undefined {
