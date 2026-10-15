@@ -353,6 +353,55 @@ test("vault refuses symlinks and case-variant reserved metadata names", () => {
   assert.equal(readFileSync(path.join(caseVariantVault, ".FIELDNOTES"), "utf8"), "preserve");
 });
 
+test("baby previews return scoped note data and only serve referenced raster attachments", async () => {
+  const dataDir = path.join(temporaryRoot, "baby-preview-api");
+  const vaultDir = path.join(dataDir, "vaults", "default");
+  const database = openDatabase(dataDir, { seedDemo: false, vaultDir });
+  const babies = createFolder(database, "babies", null);
+  const records = createFolder(database, "records", babies.id);
+  const dashboard = createDocument(database, "Dashboard fixture", "```dataviewjs\napp.vault.getAbstractFileByPath('images/hero.jpg');\n```", babies.id);
+  const record = createDocument(database, "Record fixture", "A record. ![[photos/record.png]]", records.id);
+  const heroPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  mkdirSync(path.join(vaultDir, "images"), { recursive: true, mode: 0o700 });
+  mkdirSync(path.join(vaultDir, "babies", "records", "photos"), { recursive: true, mode: 0o700 });
+  writeFileSync(path.join(vaultDir, "images", "hero.jpg"), heroPng);
+  writeFileSync(path.join(vaultDir, "babies", "records", "photos", "record.png"), heroPng);
+  const before = database.vault?.snapshot().documents.map((document) => [document.id, document.contentHash]);
+  const live = await listen(database);
+  try {
+    const preview = await json(live.baseUrl, "/api/preview/babies");
+    assert.equal(preview.response.status, 200);
+    assert.deepEqual(preview.body.documents.map((document: { id: string }) => document.id).sort(), [dashboard.id, record.id].sort());
+    assert.equal(preview.body.documents.find((document: { id: string }) => document.id === dashboard.id).body.includes("getAbstractFileByPath"), true);
+
+    const heroUrl = new URL("/api/preview/babies/asset", live.baseUrl);
+    heroUrl.searchParams.set("documentId", dashboard.id);
+    heroUrl.searchParams.set("source", "images/hero.jpg");
+    const hero = await fetch(heroUrl);
+    assert.equal(hero.status, 200);
+    assert.equal(hero.headers.get("content-type"), "image/png");
+    assert.equal(hero.headers.get("x-content-type-options"), "nosniff");
+    assert.deepEqual(Buffer.from(await hero.arrayBuffer()), heroPng);
+
+    const recordUrl = new URL("/api/preview/babies/asset", live.baseUrl);
+    recordUrl.searchParams.set("documentId", record.id);
+    recordUrl.searchParams.set("source", "photos/record.png");
+    const recordImage = await fetch(recordUrl);
+    assert.equal(recordImage.status, 200);
+    assert.deepEqual(Buffer.from(await recordImage.arrayBuffer()), heroPng);
+
+    recordUrl.searchParams.set("source", "images/unreferenced.png");
+    assert.equal((await fetch(recordUrl)).status, 404);
+    recordUrl.searchParams.set("source", "../outside.png");
+    assert.equal((await fetch(recordUrl)).status, 404);
+    const after = database.vault?.snapshot().documents.map((document) => [document.id, document.contentHash]);
+    assert.deepEqual(after, before);
+  } finally {
+    await live.close();
+    closeDatabase(database);
+  }
+});
+
 test("filesystem mode rejects a configured vault path that crosses a symlink below the data directory", () => {
   const dataDir = path.join(temporaryRoot, "symlinked-data-root");
   const outside = path.join(temporaryRoot, "symlinked-data-outside");

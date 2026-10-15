@@ -17,6 +17,8 @@ export type {
   EditorSnippet,
   MarkdownLiveEditorAdapters,
   MarkdownLiveEditorProps,
+  MarkdownPreviewContext,
   NewEditorSnippet,
+  PreviewDocument,
 } from "./types.ts";
 export type { FieldnotesViewConfig, VisualizationFilter, VisualizationNote, VisualizationQuery, VisualizationQueryResponse, VisualizationValue } from "../../shared/visualization.ts";

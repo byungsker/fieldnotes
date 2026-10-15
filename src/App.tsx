@@ -692,6 +692,10 @@ export function App() {
       (draftTitle !== selectedDocument.title || draftBody !== selectedDocument.body || draftFolderId !== selectedDocument.folderId),
   );
   const folderPathById = useMemo(() => folderPaths(folders), [folders]);
+  const babyRecordsFolderId = useMemo(
+    () => folders.find((folder) => folderPathById.get(folder.id) === "babies/records")?.id,
+    [folders, folderPathById],
+  );
   const orderedDocuments = useMemo(() => {
     const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
     return [...visibleDocuments].sort((left, right) => {
@@ -2997,6 +3001,12 @@ export function App() {
                   key={displayDocument.id}
                   value={draftBody}
                   adapters={editorAdapters}
+                  previewContext={{
+                    documentId: displayDocument.id,
+                    documentPath: displayDocument.filePath,
+                    recordsFolderId: babyRecordsFolderId,
+                    onOpenDocument: (noteId) => { void navigateToDocument(noteId); },
+                  }}
                   visualizationDocumentId={displayDocument.id}
                   openVisualizationNote={(noteId) => navigateToDocument(noteId)}
                   ariaLabel="Markdown body"
