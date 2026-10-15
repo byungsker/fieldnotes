@@ -34,6 +34,7 @@ const STATE_FORMAT = "fieldnotes-vault";
 const STATE_VERSION = 2;
 const TEMP_PREFIX = ".fieldnotes-tmp-";
 const MAX_VAULT_FILE_BYTES = 5_000_000;
+export const MAX_VAULT_ASSET_BYTES = 25_000_000;
 const LOCAL_RASTER_EXTENSIONS = new Set([".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp"]);
 
 export class VaultStorageError extends Error {
@@ -314,8 +315,10 @@ export function readDescriptorBounded(
   descriptor: number,
   maxBytes: number,
   reader: (fd: number, buffer: Buffer, offset: number, length: number, position: number | null) => number = readSync,
+  maxAllowedBytes = MAX_VAULT_FILE_BYTES,
 ): { bytes: Buffer; exceededLimit: boolean } {
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_VAULT_FILE_BYTES) {
+  if (!Number.isSafeInteger(maxAllowedBytes) || maxAllowedBytes < 0
+    || !Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > maxAllowedBytes) {
     throw new RangeError("The bounded descriptor read limit is outside the vault file size range.");
   }
   const buffer = Buffer.allocUnsafe(maxBytes + 1);
@@ -349,22 +352,30 @@ function assertOpenedPathWithinRoot(absolutePath: string, allowedRoot: string, d
   }
 }
 
-function readRegularFileNoFollow(absolutePath: string, maxBytes = MAX_VAULT_FILE_BYTES, allowedRoot?: string): Buffer {
+function readRegularFileNoFollow(
+  absolutePath: string,
+  maxBytes = MAX_VAULT_FILE_BYTES,
+  allowedRoot?: string,
+  maxAllowedBytes = MAX_VAULT_FILE_BYTES,
+): Buffer {
   let descriptor: number | undefined;
   try {
-    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError("The vault file size limit is invalid.");
+    if (!Number.isSafeInteger(maxAllowedBytes) || maxAllowedBytes < 0
+      || !Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+      throw new RangeError("The vault file size limit is invalid.");
+    }
     descriptor = openSync(absolutePath, constants.O_RDONLY | constants.O_NOFOLLOW);
     const stat = fstatSync(descriptor, { bigint: true });
     if (!stat.isFile()) throw new VaultStorageError("Expected a regular file; symbolic links are not followed.", "vault_symlink", 409);
-    const effectiveMaxBytes = Math.min(maxBytes, MAX_VAULT_FILE_BYTES);
+    const effectiveMaxBytes = Math.min(maxBytes, maxAllowedBytes);
     if (stat.size > BigInt(effectiveMaxBytes)) {
-      if (maxBytes < MAX_VAULT_FILE_BYTES) throw new ViewQueryLimitError(VIEW_TRASH_LIMIT_MESSAGE);
+      if (allowedRoot || maxBytes < maxAllowedBytes) throw new ViewQueryLimitError(VIEW_TRASH_LIMIT_MESSAGE);
       throw new VaultStorageError(`Markdown file exceeds the ${MAX_VAULT_FILE_BYTES} byte vault limit.`, "vault_file_too_large", 409);
     }
     if (allowedRoot) assertOpenedPathWithinRoot(absolutePath, allowedRoot, stat);
-    const result = readDescriptorBounded(descriptor, effectiveMaxBytes);
+    const result = readDescriptorBounded(descriptor, effectiveMaxBytes, readSync, maxAllowedBytes);
     if (result.exceededLimit) {
-      if (maxBytes < MAX_VAULT_FILE_BYTES) throw new ViewQueryLimitError(VIEW_TRASH_LIMIT_MESSAGE);
+      if (allowedRoot || maxBytes < maxAllowedBytes) throw new ViewQueryLimitError(VIEW_TRASH_LIMIT_MESSAGE);
       throw new VaultStorageError(`Markdown file exceeds the ${MAX_VAULT_FILE_BYTES} byte vault limit.`, "vault_file_too_large", 409);
     }
     return result.bytes;
@@ -675,10 +686,13 @@ export class FileVault {
   }
 
   readAsset(relativePath: string, maxBytes: number): Buffer {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_VAULT_ASSET_BYTES) {
+      throw new RangeError("The vault image size limit is invalid.");
+    }
     const absolute = this.safeAbsolute(relativePath);
     if (statKind(absolute) !== "file") throw new VaultStorageError("The referenced vault asset is not a regular file.", "vault_entry_invalid", 404);
     try {
-      return readRegularFileNoFollow(absolute, maxBytes, this.rootDir);
+      return readRegularFileNoFollow(absolute, maxBytes, this.rootDir, MAX_VAULT_ASSET_BYTES);
     } catch (error) {
       if (error instanceof ViewQueryLimitError) {
         throw new VaultStorageError("The referenced vault image exceeds the view asset size limit.", "vault_asset_too_large", 413);
