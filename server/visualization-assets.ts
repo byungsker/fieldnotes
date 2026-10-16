@@ -4,12 +4,6 @@ export const MAX_VISUALIZATION_IMAGE_BYTES = 1_000_000;
 const TMDB_IMAGE_ORIGIN = "https://image.tmdb.org";
 const TMDB_IMAGE_PATH = /^\/t\/p\/(?:w\d{1,4}|original)\/[A-Za-z0-9._/-]{1,1200}$/u;
 const LOCAL_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
-const MIME_BY_EXTENSION: Record<string, string> = {
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".png": "image/png",
-  ".webp": "image/webp",
-};
 
 export class VisualizationAssetError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -53,7 +47,7 @@ export function validateLocalImage(bytes: Buffer, relativePath: string): Visuali
   }
   const extension = path.posix.extname(relativePath).toLowerCase();
   const contentType = localImageMime(bytes);
-  if (!LOCAL_IMAGE_EXTENSIONS.has(extension) || !contentType || MIME_BY_EXTENSION[extension] !== contentType) {
+  if (!LOCAL_IMAGE_EXTENSIONS.has(extension) || !contentType) {
     throw new VisualizationAssetError(415, "visualization_asset_type", "Only verified JPEG, PNG, and WebP images are available to views.");
   }
   return { bytes, contentType };
