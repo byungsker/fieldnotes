@@ -25,6 +25,9 @@ const localBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAA
 const localPath = path.join(database.vault!.rootDir, "movies", "attachments", "synthetic-cover.png");
 writeFileSync(localPath, localBytes);
 const localNote = createDocument(database, "Synthetic local poster", "---\nkind: fixture\n---\n\n![[../attachments/synthetic-cover.png]]", recordsFolder.id);
+const misnamedLocalPath = path.join(database.vault!.rootDir, "movies", "attachments", "synthetic-misnamed-cover.jpg");
+writeFileSync(misnamedLocalPath, localBytes);
+const misnamedLocalNote = createDocument(database, "Synthetic PNG with JPG extension", "---\nkind: fixture\n---\n\n![[../attachments/synthetic-misnamed-cover.jpg]]", recordsFolder.id);
 const publicPosterUrl = "https://image.tmdb.org/t/p/w500/synthetic-poster.jpg";
 const publicNote = createDocument(database, "Synthetic public poster", `---\nposter: ${publicPosterUrl}\n---\nSynthetic fixture.`, recordsFolder.id);
 const unsafeNote = createDocument(database, "Synthetic unsafe poster", "---\nposter: https://image.tmdb.org.evil.example/t/p/w500/nope.jpg\n---\nSynthetic fixture.", recordsFolder.id);
@@ -104,10 +107,13 @@ test("local image extraction ignores fenced code using delimiter-aware boundarie
   ]);
 });
 
-test("local images require an allowed extension, matching raster bytes, and the size cap", () => {
+test("local images require an allowed extension, verified raster bytes, and the size cap", () => {
   const image = validateLocalImage(localBytes, "cover.png");
   assert.equal(image.contentType, "image/png");
-  assert.throws(() => validateLocalImage(localBytes, "cover.jpg"), /verified JPEG/u);
+  assert.equal(validateLocalImage(localBytes, "cover.jpg").contentType, "image/png");
+  assert.equal(validateLocalImage(Buffer.from([0xff, 0xd8, 0xff]), "cover.png").contentType, "image/jpeg");
+  assert.throws(() => validateLocalImage(Buffer.from("not an image"), "cover.png"), /verified JPEG/u);
+  assert.throws(() => validateLocalImage(localBytes, "cover.gif"), /verified JPEG/u);
   assert.throws(() => validateLocalImage(Buffer.alloc(MAX_VISUALIZATION_IMAGE_BYTES + 1), "cover.png"), /1 MB/u);
 });
 
@@ -160,6 +166,7 @@ test("view asset API serves referenced local images and validated public posters
   assert.equal(queryResponse.status, 200);
   const query = await queryResponse.json() as { notes: Array<{ id: string; assetPaths?: string[] }> };
   assert.deepEqual(query.notes.find((note) => note.id === localNote.id)?.assetPaths, ["movies/attachments/synthetic-cover.png"]);
+  assert.deepEqual(query.notes.find((note) => note.id === misnamedLocalNote.id)?.assetPaths, ["movies/attachments/synthetic-misnamed-cover.jpg"]);
   assert.equal(query.notes.find((note) => note.id === fencedNote.id)?.assetPaths, undefined);
 
   const localUrl = `${baseUrl}/api/views/assets/${localNote.id}?asset=${encodeURIComponent("movies/attachments/synthetic-cover.png")}&v=${localNote.contentHash}`;
@@ -167,6 +174,13 @@ test("view asset API serves referenced local images and validated public posters
   assert.equal(localResponse.status, 200, await localResponse.clone().text());
   assert.equal(localResponse.headers.get("content-type"), "image/png");
   assert.deepEqual(Buffer.from(await localResponse.arrayBuffer()), localBytes);
+
+  const misnamedLocalUrl = `${baseUrl}/api/views/assets/${misnamedLocalNote.id}?asset=${encodeURIComponent("movies/attachments/synthetic-misnamed-cover.jpg")}&v=${misnamedLocalNote.contentHash}`;
+  const misnamedLocalResponse = await fetch(misnamedLocalUrl);
+  assert.equal(misnamedLocalResponse.status, 200, await misnamedLocalResponse.clone().text());
+  assert.equal(misnamedLocalResponse.headers.get("content-type"), "image/png");
+  assert.deepEqual(Buffer.from(await misnamedLocalResponse.arrayBuffer()), localBytes);
+
   const initialLocalEtag = localResponse.headers.get("etag");
   assert.ok(initialLocalEtag);
   const updatedLocalBytes = Buffer.concat([localBytes, Buffer.from([1])]);
