@@ -121,7 +121,10 @@ export function extractLocalImageReferenceTargets(
 export function extractLocalImageReferences(markdown: string, markdownPath: string): string[] {
   const paths = new Set<string>();
   for (const target of extractLocalImageReferenceTargets(markdown, markdownPath)) {
-    const normalized = normalizeLocalReference(target, markdownPath);
+    let decodedTarget: string;
+    try { decodedTarget = decodeURIComponent(target); }
+    catch { continue; }
+    const normalized = normalizeLocalReference(decodedTarget, markdownPath);
     if (normalized) paths.add(normalized);
   }
   return [...paths].slice(0, 20);

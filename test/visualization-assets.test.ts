@@ -78,6 +78,10 @@ test("local image extraction resolves only explicit relative raster references",
   ]);
   assert.deepEqual(extractLocalImageReferences("![[../../.fieldnotes/state.json]]", "movies/records/fixture.md"), []);
   assert.deepEqual(extractLocalImageReferences("![remote](https://example.invalid/image.svg)", "movies/records/fixture.md"), []);
+  assert.deepEqual(extractLocalImageReferences("![encoded](<../attachments/day%20with%20spaces.webp>)", "movies/records/fixture.md"), [
+    "movies/attachments/day with spaces.webp",
+  ]);
+  assert.deepEqual(extractLocalImageReferences("![malformed](<../attachments/day%2 with spaces.webp>)", "movies/records/fixture.md"), []);
 });
 
 test("local image extraction ignores fenced code using delimiter-aware boundaries", () => {

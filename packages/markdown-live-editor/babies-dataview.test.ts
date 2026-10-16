@@ -7,6 +7,7 @@ import {
   calculateAgeFromBirthday,
   calculateAgeOnDate,
   firstLocalImageReference,
+  localImageReferences,
   normalizeRecordDate,
   openOrCreateDailyRecord,
   parseSafeBabyFrontmatter,
@@ -111,6 +112,9 @@ test("finds only safe local raster images outside code blocks", () => {
   const tick = String.fromCharCode(96);
   assert.equal(firstLocalImageReference("A moment: ![[photos/day.jpg|width=400]]"), "photos/day.jpg");
   assert.equal(firstLocalImageReference("![Moment](photos/day.webp)"), "photos/day.webp");
+  assert.deepEqual(localImageReferences("![Moment](<photos/day with spaces.webp>)"), ["photos/day with spaces.webp"]);
+  assert.deepEqual(localImageReferences("![[../assets/cover.png]]", "reading/note.md"), ["assets/cover.png"]);
+  assert.deepEqual(localImageReferences("![[../../outside/cover.png]]", "reading/note.md"), []);
   assert.equal(firstLocalImageReference(tick + "![[photos/inline.png]]" + tick), null);
   assert.equal(firstLocalImageReference(tick + tick + tick + "md\n![[photos/fenced.png]]\n" + tick + tick + tick), null);
   assert.equal(firstLocalImageReference("![[https://example.test/photo.jpg]]"), null);

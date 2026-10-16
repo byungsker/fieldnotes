@@ -178,6 +178,10 @@ export function createFieldnotesEditorAdapters(): MarkdownLiveEditorAdapters {
       const query = new URLSearchParams({ documentId, source });
       return `/api/preview/babies/asset?${query.toString()}`;
     },
+    resolveReferencedVaultAsset(documentId, assetPath, contentHash) {
+      const query = new URLSearchParams({ asset: assetPath, v: contentHash });
+      return `/api/views/assets/${encodeURIComponent(documentId)}?${query.toString()}`;
+    },
     subscribeToVaultChanges,
     enableCustomVisualizations: true,
   };

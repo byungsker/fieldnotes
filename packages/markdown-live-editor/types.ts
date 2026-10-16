@@ -33,6 +33,7 @@ export interface PreviewDocument {
 export interface MarkdownPreviewContext {
   documentId?: string;
   documentPath?: string;
+  documentHash?: string;
   recordsFolderId?: string;
   onOpenDocument?: (documentId: string) => void;
 }
@@ -53,6 +54,7 @@ export interface MarkdownLiveEditorAdapters {
   loadBabyPreviewDocuments?: (signal: AbortSignal) => Promise<PreviewDocument[]>;
   createPreviewDocument?: (input: { title: string; body: string; folderId: string }) => Promise<PreviewDocument>;
   resolveVaultAsset?: (documentId: string, source: string) => string;
+  resolveReferencedVaultAsset?: (documentId: string, assetPath: string, contentHash: string) => string;
 }
 
 export interface MarkdownLiveEditorProps {
