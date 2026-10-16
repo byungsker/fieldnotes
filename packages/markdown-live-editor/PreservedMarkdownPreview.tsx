@@ -135,10 +135,10 @@ function preparePreviewSource(raw: string, documentPath?: string): PreviewSource
         const assetPath = resolveLocalImageAssetPath(target, documentPath);
         if (!assetPath) return "![Image omitted: unsupported or unsafe source](fieldnotes-unsafe-image:omitted)";
         const alt = assetPath.split("/").at(-1) || "Local attachment";
-        const babyBasename = documentPath.startsWith("babies/") && !target.startsWith("/") && !target.includes("/");
-        const previewTarget = babyBasename ? target : assetPath;
+        const babyNote = documentPath.startsWith("babies/");
+        const previewTarget = babyNote ? target : assetPath;
         const encodedTarget = previewTarget.split("/").map(encodeURIComponent).join("/");
-        return `![${alt}](${babyBasename ? encodedTarget : `/${encodedTarget}`})`;
+        return `![${alt}](${babyNote ? encodedTarget : `/${encodedTarget}`})`;
       })
       : line;
     const safeLine = stripHtmlForPreviewLine(imagePrepared, htmlState);
@@ -175,18 +175,13 @@ function LocalImage({ src, alt, context }: ComponentProps<"img"> & { context?: P
   const assetPath = decodedSource && documentPath
     ? resolveLocalImageAssetPath(decodedSource, documentPath)
     : null;
-  const babyBasename = documentPath?.startsWith("babies/")
-    && decodedSource
-    && !decodedSource.startsWith("/")
-    && !decodedSource.includes("/")
-    ? decodedSource
-    : null;
+  const babySource = documentPath?.startsWith("babies/") ? decodedSource : null;
 
   if (!assetPath) {
     return <span className="mle-preserved-warning" role="note">Image omitted: unsupported or unsafe source.</span>;
   }
-  if (documentId && babyBasename && resolveBabyAsset) {
-    return <img src={resolveBabyAsset(documentId, babyBasename)} alt={alt || "Local attachment"} loading="lazy" referrerPolicy="no-referrer" />;
+  if (documentId && babySource && resolveBabyAsset) {
+    return <img src={resolveBabyAsset(documentId, babySource)} alt={alt || "Local attachment"} loading="lazy" referrerPolicy="no-referrer" />;
   }
   if (!documentId || !documentHash || !resolveAsset) {
     return <span className="mle-preserved-warning" role="note">Local image preview is unavailable.</span>;
