@@ -156,8 +156,13 @@ function LocalImage({ src, alt, context }: ComponentProps<"img"> & { context?: P
   const documentId = context?.documentId;
   const documentHash = context?.documentHash;
   const resolveAsset = context?.adapters?.resolveReferencedVaultAsset;
-  const assetPath = typeof src === "string" && documentPath
-    ? resolveLocalImageAssetPath(src, documentPath)
+  let decodedSource: string | null = null;
+  if (typeof src === "string") {
+    try { decodedSource = decodeURIComponent(src); }
+    catch { decodedSource = null; }
+  }
+  const assetPath = decodedSource && documentPath
+    ? resolveLocalImageAssetPath(decodedSource, documentPath)
     : null;
 
   if (!assetPath) {

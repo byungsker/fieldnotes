@@ -22,11 +22,12 @@ function render(raw: string) {
 }
 
 test("renders ordinary Markdown and vault-local attachments without source controls", () => {
-  const html = render("# Reading note\n\nA preserved paragraph.\n\n![[../assets/cover.png|width=400]]");
+  const html = render("# Reading note\n\nA preserved paragraph.\n\n![[../assets/cover.png|width=400]]\n\n![Moment](<photos/day with spaces.webp>)");
 
   assert.match(html, /<h1>Reading note<\/h1>/u);
   assert.match(html, /A preserved paragraph\./u);
   assert.match(html, /<img src="\/api\/views\/assets\/fake-document-id\?asset=assets%2Fcover\.png&amp;v=fake-content-hash"/u);
+  assert.match(html, /asset=reading%2Fphotos%2Fday%20with%20spaces\.webp/u);
   assert.doesNotMatch(html, /Markdown source kept as-is|View preserved source|>Remove<|\.\.\/assets\/cover\.png/u);
 });
 
