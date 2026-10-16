@@ -135,8 +135,10 @@ function preparePreviewSource(raw: string, documentPath?: string): PreviewSource
         const assetPath = resolveLocalImageAssetPath(target, documentPath);
         if (!assetPath) return "![Image omitted: unsupported or unsafe source](fieldnotes-unsafe-image:omitted)";
         const alt = assetPath.split("/").at(-1) || "Local attachment";
-        const encodedAssetPath = assetPath.split("/").map(encodeURIComponent).join("/");
-        return `![${alt}](/${encodedAssetPath})`;
+        const babyBasename = documentPath.startsWith("babies/") && !target.startsWith("/") && !target.includes("/");
+        const previewTarget = babyBasename ? target : assetPath;
+        const encodedTarget = previewTarget.split("/").map(encodeURIComponent).join("/");
+        return `![${alt}](${babyBasename ? encodedTarget : `/${encodedTarget}`})`;
       })
       : line;
     const safeLine = stripHtmlForPreviewLine(imagePrepared, htmlState);
@@ -164,6 +166,7 @@ function LocalImage({ src, alt, context }: ComponentProps<"img"> & { context?: P
   const documentId = context?.documentId;
   const documentHash = context?.documentHash;
   const resolveAsset = context?.adapters?.resolveReferencedVaultAsset;
+  const resolveBabyAsset = context?.adapters?.resolveVaultAsset;
   let decodedSource: string | null = null;
   if (typeof src === "string") {
     try { decodedSource = decodeURIComponent(src); }
@@ -172,9 +175,18 @@ function LocalImage({ src, alt, context }: ComponentProps<"img"> & { context?: P
   const assetPath = decodedSource && documentPath
     ? resolveLocalImageAssetPath(decodedSource, documentPath)
     : null;
+  const babyBasename = documentPath?.startsWith("babies/")
+    && decodedSource
+    && !decodedSource.startsWith("/")
+    && !decodedSource.includes("/")
+    ? decodedSource
+    : null;
 
   if (!assetPath) {
     return <span className="mle-preserved-warning" role="note">Image omitted: unsupported or unsafe source.</span>;
+  }
+  if (documentId && babyBasename && resolveBabyAsset) {
+    return <img src={resolveBabyAsset(documentId, babyBasename)} alt={alt || "Local attachment"} loading="lazy" referrerPolicy="no-referrer" />;
   }
   if (!documentId || !documentHash || !resolveAsset) {
     return <span className="mle-preserved-warning" role="note">Local image preview is unavailable.</span>;

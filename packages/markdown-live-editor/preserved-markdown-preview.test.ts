@@ -6,14 +6,16 @@ import { PreservedMarkdownPreview } from "./PreservedMarkdownPreview.tsx";
 
 void React;
 
-function render(raw: string) {
+function render(raw: string, documentPath = "reading/note.md") {
   return renderToStaticMarkup(React.createElement(PreservedMarkdownPreview, {
     raw,
     context: {
       documentId: "fake-document-id",
-      documentPath: "reading/note.md",
+      documentPath,
       documentHash: "fake-content-hash",
       adapters: {
+        resolveVaultAsset: (documentId, source) =>
+          `/api/preview/babies/asset?documentId=${documentId}&source=${encodeURIComponent(source)}`,
         resolveReferencedVaultAsset: (documentId, assetPath, hash) =>
           `/api/views/assets/${documentId}?asset=${encodeURIComponent(assetPath)}&v=${hash}`,
       },
@@ -38,6 +40,20 @@ test("renders Obsidian image embeds with encoded paths and preserves Markdown an
   assert.match(html, /asset=reading%2Fphotos%2Fday%20with%20spaces\.webp&amp;v=fake-content-hash/u);
   assert.doesNotMatch(html, /Embedded HTML is preserved but not rendered/u);
   assert.doesNotMatch(html, /!\[\[|<photos\/day with spaces\.webp/u);
+});
+
+test("routes baby note images with bare basenames through the scoped baby asset endpoint", () => {
+  const html = render("![[Pasted image 2026-03-15.jpg|width=400]]\n\n![Moment](<another photo.jpg>)", "babies/records/2026-03-15.md");
+
+  assert.match(html, /src="\/api\/preview\/babies\/asset\?documentId=fake-document-id&amp;source=Pasted%20image%202026-03-15\.jpg"/u);
+  assert.match(html, /src="\/api\/preview\/babies\/asset\?documentId=fake-document-id&amp;source=another%20photo\.jpg"/u);
+  assert.doesNotMatch(html, /\/api\/views\/assets/u);
+});
+
+test("keeps baby note images with explicit relative paths on the note-scoped view route", () => {
+  const html = render("![[photos/day.jpg]]", "babies/records/2026-03-15.md");
+
+  assert.match(html, /\/api\/views\/assets\/fake-document-id\?asset=babies%2Frecords%2Fphotos%2Fday\.jpg&amp;v=fake-content-hash/u);
 });
 
 test("omits remote images and reports that they were not loaded", () => {
