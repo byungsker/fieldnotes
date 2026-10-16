@@ -1,7 +1,8 @@
 import { mergeAttributes, Node } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { createRoot, type Root } from "react-dom/client";
-import { BabiesDataviewPreview, isSupportedBabyDataview, localImageReferences } from "./BabiesDataview.tsx";
+import { BabiesDataviewPreview, isSupportedBabyDataview } from "./BabiesDataview.tsx";
+import { PreservedMarkdownPreview } from "./PreservedMarkdownPreview.tsx";
 import type { MarkdownLiveEditorAdapters, MarkdownPreviewContext } from "./types.ts";
 
 type PreservedMarkdownContext = MarkdownPreviewContext & { adapters?: MarkdownLiveEditorAdapters };
@@ -14,13 +15,6 @@ function dataviewJsSource(raw: string): string | null {
   const closing = lines.at(-1)?.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/u);
   if (!opening || !closing || opening[1]?.[0] !== closing[1]?.[0] || (closing[1]?.length ?? 0) < (opening[1]?.length ?? 0)) return null;
   return lines.slice(1, -1).join("\n");
-}
-
-function deleteNodeAt(editor: import("@tiptap/core").Editor, getPos: () => number | undefined, node: ProseMirrorNode) {
-  const position = getPos();
-  if (typeof position === "number") {
-    editor.view.dispatch(editor.state.tr.delete(position, position + node.nodeSize));
-  }
 }
 
 /** An explicit, inert source block for Markdown the rich schema cannot safely edit. */
@@ -53,74 +47,28 @@ export const PreservedMarkdown = Node.create<PreservedMarkdownOptions>({
   },
 
   addNodeView() {
-    return ({ node, editor, getPos, extension }) => {
+    return ({ node, extension }) => {
       const dom = document.createElement("div");
       dom.className = "mle-preserved-markdown";
       dom.contentEditable = "false";
 
-      const heading = document.createElement("div");
-      heading.className = "mle-preserved-markdown-heading";
-      const label = document.createElement("strong");
-      label.textContent = "Markdown source kept as-is";
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.textContent = "Remove";
-      remove.addEventListener("click", () => deleteNodeAt(editor, getPos, node));
-      heading.append(label, remove);
-
-      const details = document.createElement("details");
-      details.className = "mle-preserved-markdown-details";
-      const summary = document.createElement("summary");
-      summary.textContent = "View preserved source";
-      const source = document.createElement("pre");
-      source.className = "mle-preserved-markdown-source";
       const preview = document.createElement("div");
       preview.className = "babies-preview-mount";
-      const media = document.createElement("div");
-      media.className = "babies-preview-attachments";
-      details.append(summary, source);
-      dom.append(heading, preview, media, details);
+      dom.append(preview);
 
       let previewRoot: Root | undefined;
 
       const render = (current: ProseMirrorNode) => {
         const raw = typeof current.attrs.raw === "string" ? current.attrs.raw : "";
-        source.textContent = raw;
         const context = extension.options.getPreviewContext();
         const code = dataviewJsSource(raw);
         const supported = Boolean(code && context && isSupportedBabyDataview(code, context));
-        preview.hidden = !supported;
-        const images = context?.documentPath?.startsWith("babies/") && context.documentId && context.adapters?.resolveVaultAsset
-          ? localImageReferences(raw)
-          : [];
-        media.hidden = images.length === 0;
-        media.replaceChildren();
-        for (const imagePath of images) {
-          const image = document.createElement("img");
-          image.src = context?.adapters?.resolveVaultAsset?.(context.documentId ?? "", imagePath) ?? "";
-          image.alt = imagePath.split("/").at(-1) || "Local attachment";
-          image.loading = "lazy";
-          image.referrerPolicy = "no-referrer";
-          image.className = "babies-preview-attachment";
-          media.append(image);
-        }
         if (supported && code && context) {
-          label.textContent = "Static baby view · script not run";
-          summary.textContent = "View preserved DataviewJS source";
           previewRoot ??= createRoot(preview);
           previewRoot.render(<BabiesDataviewPreview source={code} context={context} adapters={context.adapters} />);
-        } else if (images.length) {
-          label.textContent = "Local attachments · original Markdown retained";
-          summary.textContent = "View preserved Markdown source";
-          previewRoot?.unmount();
-          previewRoot = undefined;
-          preview.replaceChildren();
         } else {
-          label.textContent = "Markdown source kept as-is";
-          summary.textContent = "View preserved source";
-          previewRoot?.unmount();
-          previewRoot = undefined;
-          preview.replaceChildren();
+          previewRoot ??= createRoot(preview);
+          previewRoot.render(<PreservedMarkdownPreview raw={raw} context={context} />);
         }
       };
       render(node);

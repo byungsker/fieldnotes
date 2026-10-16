@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useState } from "react";
 import type { MarkdownLiveEditorAdapters, MarkdownPreviewContext, PreviewDocument } from "./types.ts";
 import { splitLeadingFrontmatter } from "./markdown-safety.ts";
 import { BabiesPreviewDocumentsContext } from "./BabiesPreviewContext.ts";
+import { resolveLocalImageAssetPath } from "./local-image-path.ts";
 
 void React;
 
@@ -477,11 +478,12 @@ function recordsFromDocuments(documents: PreviewDocument[]): RecordData[] {
     .sort((left, right) => right.date.localeCompare(left.date));
 }
 
-export function localImageReferences(markdown: string): string[] {
+export function localImageReferences(markdown: string, markdownPath?: string): string[] {
   const lines = markdown.split(/\r?\n/u);
   let fence: { marker: string; length: number } | null = null;
   const references = new Set<string>();
   const localImage = (raw: string): string | null => {
+    if (markdownPath) return resolveLocalImageAssetPath(raw, markdownPath);
     const target = (raw.split("|")[0] ?? "").split("#")[0]?.split("?")[0]?.trim() ?? "";
     const segments = target.startsWith("/") ? target.slice(1).split("/") : target.split("/");
     if (!target || target.length > 500 || target.includes("\\") || target.startsWith("//")
@@ -508,9 +510,9 @@ export function localImageReferences(markdown: string): string[] {
       const target = localImage(match[1] ?? "");
       if (target) references.add(target);
     }
-    const markdownImages = /!\[[^\]]*\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/gu;
+    const markdownImages = /!\[[^\]]*\]\(\s*(?:<([^>\r\n]+)>|([^\s)\r\n]+))(?:\s+["'][^)]*["'])?\)/gu;
     for (const match of searchable.matchAll(markdownImages)) {
-      const target = localImage(match[1] ?? "");
+      const target = localImage(match[1] ?? match[2] ?? "");
       if (target) references.add(target);
     }
   }

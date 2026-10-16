@@ -3004,6 +3004,7 @@ export function App() {
                   previewContext={{
                     documentId: displayDocument.id,
                     documentPath: displayDocument.filePath,
+                    documentHash: displayDocument.contentHash,
                     recordsFolderId: babyRecordsFolderId,
                     onOpenDocument: (noteId) => { void navigateToDocument(noteId); },
                   }}
