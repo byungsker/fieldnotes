@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { Markdown, MarkdownManager } from "@tiptap/markdown";
 import StarterKit from "@tiptap/starter-kit";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
@@ -10,11 +12,14 @@ import type { JSONContent } from "@tiptap/core";
 import { BookmarkCard } from "./BookmarkCardExtension.tsx";
 import { FieldnotesViewBlock } from "./FieldnotesViewBlock.tsx";
 import { PreservedMarkdown, PreservedWhitespace } from "./PreservedMarkdownExtension.tsx";
+import { PreservedMarkdownPreview } from "./PreservedMarkdownPreview.tsx";
 import { MarkdownDocument } from "./MarkdownDocumentExtension.ts";
 import { WikiLink } from "./WikiLinkExtension.tsx";
 import { hasContentPreservingMarkdownRoundTrip, type MarkdownSerializationApi } from "./markdown-roundtrip.ts";
 import { parseMarkdownWithPreservedBlocks } from "./markdown-preservation.ts";
 import { splitLeadingFrontmatter } from "./markdown-safety.ts";
+
+void React;
 
 interface BlockDocument {
   content: Array<{ type: "heading" | "paragraph"; text: string }>;
@@ -90,6 +95,34 @@ test("Markdown images are not split into standalone bookmark URL tokens", () => 
   assert.ok(nodeTypes.includes("bulletList"));
   assert.equal(nodeTypes.includes("preservedMarkdown"), false);
   assert.equal(manager.serialize(document), source);
+});
+
+test("actual preserved-image parser path keeps vault-root baby refs for the scoped preview resolver", () => {
+  const manager = createTiptapMarkdownApi();
+  const source = "![[babies/photos/2026-05-01/example.jpg]]";
+  const document = parseMarkdownWithPreservedBlocks(manager, source) as JSONContent;
+  const block = document.content?.find((node) => node.type === "preservedMarkdown");
+
+  assert.equal(block?.attrs?.raw, source);
+  assert.equal(manager.serialize(document), source);
+
+  const html = renderToStaticMarkup(React.createElement(PreservedMarkdownPreview, {
+    raw: String(block?.attrs?.raw ?? ""),
+    context: {
+      documentId: "screenshot-note-id",
+      documentPath: "babies/records/2026-05-01.md",
+      documentHash: "current-note-hash",
+      adapters: {
+        resolveVaultAsset: (documentId, assetSource) =>
+          `/api/preview/babies/asset?documentId=${documentId}&source=${encodeURIComponent(assetSource)}`,
+        resolveReferencedVaultAsset: (documentId, assetPath, hash) =>
+          `/api/views/assets/${documentId}?asset=${encodeURIComponent(assetPath)}&v=${hash}`,
+      },
+    },
+  }));
+
+  assert.match(html, /src="\/api\/preview\/babies\/asset\?documentId=screenshot-note-id&amp;source=babies%2Fphotos%2F2026-05-01%2Fexample\.jpg"/u);
+  assert.doesNotMatch(html, /babies%2Frecords%2Fbabies%2Fphotos|\/api\/views\/assets/u);
 });
 
 test("allows canonical block spacing when parsed content is unchanged", () => {

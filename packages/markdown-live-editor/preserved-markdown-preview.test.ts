@@ -50,10 +50,21 @@ test("routes baby note images with bare basenames through the scoped baby asset 
   assert.doesNotMatch(html, /\/api\/views\/assets/u);
 });
 
-test("keeps baby note images with explicit relative paths on the note-scoped view route", () => {
+test("routes baby note images with explicit relative paths through the scoped image resolver", () => {
   const html = render("![[photos/day.jpg]]", "babies/records/2026-03-15.md");
 
-  assert.match(html, /\/api\/views\/assets\/fake-document-id\?asset=babies%2Frecords%2Fphotos%2Fday\.jpg&amp;v=fake-content-hash/u);
+  assert.match(html, /src="\/api\/preview\/babies\/asset\?documentId=fake-document-id&amp;source=photos%2Fday\.jpg"/u);
+  assert.doesNotMatch(html, /\/api\/views\/assets/u);
+});
+
+test("preserves a vault-root baby photo path and sends it to the scoped image resolver", () => {
+  const html = render(
+    "![[babies/photos/2026-05-01/example.jpg]]",
+    "babies/records/2026-05-01.md",
+  );
+
+  assert.match(html, /src="\/api\/preview\/babies\/asset\?documentId=fake-document-id&amp;source=babies%2Fphotos%2F2026-05-01%2Fexample\.jpg"/u);
+  assert.doesNotMatch(html, /babies%2Frecords%2Fbabies%2Fphotos|\/api\/views\/assets/u);
 });
 
 test("omits remote images and reports that they were not loaded", () => {
