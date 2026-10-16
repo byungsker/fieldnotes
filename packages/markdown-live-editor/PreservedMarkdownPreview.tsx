@@ -64,6 +64,13 @@ function stripHtmlForPreviewLine(line: string, state: { hiddenTag: string | null
       }
     }
 
+    const markdownImage = rest.match(/^!\[[^\]\r\n]*\]\(\s*<[^>\r\n]+>(?:[ \t]+[^)]*)?\)/u);
+    if (markdownImage) {
+      visible += markdownImage[0];
+      cursor += markdownImage[0].length;
+      continue;
+    }
+
     const activeTag = rest.match(/^<(script|iframe|object|embed|style)\b[^>]*>/iu);
     if (activeTag) {
       const tagName = activeTag[1] ?? "script";
@@ -128,7 +135,8 @@ function preparePreviewSource(raw: string, documentPath?: string): PreviewSource
         const assetPath = resolveLocalImageAssetPath(target, documentPath);
         if (!assetPath) return "![Image omitted: unsupported or unsafe source](fieldnotes-unsafe-image:omitted)";
         const alt = assetPath.split("/").at(-1) || "Local attachment";
-        return `![${alt}](</${assetPath}>)`;
+        const encodedAssetPath = assetPath.split("/").map(encodeURIComponent).join("/");
+        return `![${alt}](/${encodedAssetPath})`;
       })
       : line;
     const safeLine = stripHtmlForPreviewLine(imagePrepared, htmlState);

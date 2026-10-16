@@ -31,6 +31,15 @@ test("renders ordinary Markdown and vault-local attachments without source contr
   assert.doesNotMatch(html, /Markdown source kept as-is|View preserved source|>Remove<|\.\.\/assets\/cover\.png/u);
 });
 
+test("renders Obsidian image embeds with encoded paths and preserves Markdown angle destinations", () => {
+  const html = render("![[Pasted image 20240101.png]]\n\n![Moment](<photos/day with spaces.webp>)");
+
+  assert.match(html, /asset=reading%2FPasted%20image%2020240101\.png&amp;v=fake-content-hash/u);
+  assert.match(html, /asset=reading%2Fphotos%2Fday%20with%20spaces\.webp&amp;v=fake-content-hash/u);
+  assert.doesNotMatch(html, /Embedded HTML is preserved but not rendered/u);
+  assert.doesNotMatch(html, /!\[\[|<photos\/day with spaces\.webp/u);
+});
+
 test("omits remote images and reports that they were not loaded", () => {
   const html = render("![external](https://images.example.test/photo.jpg)");
 
