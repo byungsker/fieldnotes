@@ -23,7 +23,7 @@ fieldnotes/
 │   │   └── vault/                    # 파일 접근·manifest·이관 내부 구현
 │   ├── visualization/                # 시각화 조회·자산·frontmatter
 │   └── bookmarks/                    # 북마크 metadata 조회
-├── shared/                           # 브라우저·서버·편집기 공용 타입과 함수
+├── shared/                           # 앱·서버가 사용하는 시각화 계약 재export
 ├── packages/markdown-live-editor/    # 외부에서 상태를 제어하는 React Markdown 편집기
 ├── public/                           # 테마 초기화와 격리 시각화 runner
 ├── scripts/                          # CLI, 백업·복원·이관, LaunchAgent 운영
@@ -45,7 +45,7 @@ fieldnotes/
 | HTTP·SSE·인증 경계 | `server/api.ts`, `server/index.ts` | loopback 바인딩, 미들웨어 순서와 종료 상태 유지 |
 | API 라우트·요청·오류 처리 | `server/routes/`, `server/http/` | 기능별 등록 함수와 공통 오류 클래스 사용 |
 | 저장·버전 충돌 | `server/storage/database.ts`, `server/storage/vault.ts` | 저장소 모드와 version/hash 검사를 함께 확인 |
-| Markdown·시각화 공용 계약 | `shared/` | UI·서버·편집기 사이 타입 변경의 영향 경로 |
+| 시각화 공용 계약 | `packages/markdown-live-editor/visualization-contract.ts`, `shared/visualization.ts` | 패키지 안의 단일 정의를 앱·서버 경계에서 재export |
 | 재사용 편집기 | `packages/markdown-live-editor/` | 상세 지침은 하위 `AGENTS.md` 및 패키지 README 참조 |
 | 사용자 JavaScript runner | `public/visualization-runner.js`, `public/visualization-runner.html` | `server/api.ts`, `vite.config.ts`, 보안 테스트와 함께 확인 |
 | 기능·저장소 회귀 검증 | `test/` | 임시 저장소와 합성 Markdown fixture 사용 |
@@ -64,13 +64,14 @@ fieldnotes/
 | `FileVault` | 파일 저장소 | `server/storage/vault.ts` | Markdown 파일·manifest의 안전한 변경과 복구 |
 | `MarkdownLiveEditor` | 편집기 공개 컴포넌트 | `packages/markdown-live-editor/MarkdownLiveEditor.tsx` | TipTap 편집·Markdown 보존·어댑터 연결 |
 | `createFieldnotesEditorAdapters` | 호스트 어댑터 | `src/pages/workspace/api/editor-adapters.ts` | 앱 API와 편집기 계약 연결 |
-| `parseVisualizationUiEvent` | 공용 검증 함수 | `shared/visualization.ts` | runner UI 이벤트를 허용된 타입으로 변환 |
+| `parseVisualizationUiEvent` | 공용 검증 함수 | `packages/markdown-live-editor/visualization-contract.ts` | runner UI 이벤트를 허용된 타입으로 변환 |
 
 ## 프로젝트 규칙
 
 - Node.js `22.13.0` 이상과 npm을 사용한다. 프로젝트는 ESM이며 Node 내장 `node:sqlite`를 사용한다.
 - 루트 `tsconfig.json`은 브라우저 코드와 `shared/`를 Bundler 해석으로 검사한다. `tsconfig.server.json`은 서버·운영 TypeScript를 NodeNext로 검사한다. 두 설정 모두 strict 모드다.
-- `packages/markdown-live-editor`는 자체 `package.json`, lockfile, `tsconfig.json`, 공개 `index.ts`를 가진 로컬 패키지다. 루트 npm workspace가 아니며 `shared/visualization.ts`를 상대 경로로 참조한다.
+- `packages/markdown-live-editor`는 자체 `package.json`, lockfile, `tsconfig.json`, 공개 `index.ts`를 가진 독립 소스 패키지다. 루트 npm workspace가 아니며 패키지 밖 소스를 import하지 않는다. 시각화 계약은 패키지에 한 번 정의하고 `shared/visualization.ts`가 앱·서버에 재export한다.
+- 육아 기록의 Dataview 정적 미리보기와 전용 API·스타일은 `src/pages/workspace/`가 소유한다. 편집기는 `renderPreservedBlock`과 `resolveLocalImage`를 통해 호스트 기능을 선택적으로 받는다.
 - API 등록은 `server/routes/`의 `registerXRoutes`로 나누고 필요한 의존성을 명시적으로 전달한다. 공통 요청 오류는 `server/http/validation.ts`의 한 클래스를 사용하며 `server/http/errors.ts`에서 HTTP 응답으로 변환한다.
 - 보안·인증·Origin·응답 추적 → JSON parser → vault reconcile → API routes·SSE → API 404 → 정적 파일·SPA → 오류 처리 순서를 유지한다. SSE와 drain 상태는 `createApp` 인스턴스마다 소유한다.
 - 저장 모드는 구분한다. SQLite 모드에서는 SQLite가 기준 데이터이고, vault 모드에서는 Markdown 파일과 `.fieldnotes` metadata가 기준 데이터다.
