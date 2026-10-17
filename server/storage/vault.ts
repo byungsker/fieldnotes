@@ -1,24 +1,19 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   accessSync,
   constants,
   closeSync,
   chmodSync,
   existsSync,
-  fstatSync,
   fsyncSync,
   linkSync,
   lstatSync,
   mkdirSync,
   openSync,
-  realpathSync,
   readFileSync,
-  readSync,
   readdirSync,
-  rmSync,
   renameSync,
   rmdirSync,
-  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -27,222 +22,54 @@ import { TextDecoder } from "node:util";
 import { excerptFromMarkdown } from "./markdown.js";
 import type { ChangeRecord, DocumentRecord, FolderRecord } from "./types.js";
 import type { VisualizationTrashNote } from "../../shared/visualization.js";
-import { ViewQueryLimitError, VIEW_TRASH_LIMIT_MESSAGE } from "../view-query-limits.js";
+import { ViewQueryLimitError } from "../view-query-limits.js";
+import {
+  STATE_FILE,
+  STATE_FORMAT,
+  STATE_VERSION,
+  TEMP_PREFIX,
+  MAX_VAULT_FILE_BYTES,
+  MAX_VAULT_ASSET_BYTES,
+  LOCAL_RASTER_EXTENSIONS,
+  UUID_PATTERN,
+} from "./vault/constants.js";
+import { VaultStorageError, VaultVersionConflictError } from "./vault/errors.js";
+import {
+  normalizedNameKey,
+  normalizedRelativeKey,
+  relativePath,
+  parentPath,
+  basename,
+  titleFromFileName,
+  safeNoteFileName,
+} from "./vault/paths.js";
+import {
+  hashBytes,
+  fileKey,
+  statKind,
+  fsyncDirectory,
+  writeAtomic,
+  readRegularFileNoFollow,
+  exactEntryExists,
+} from "./vault/files.js";
+import { isRecord, shallowState } from "./vault/manifest.js";
+import type {
+  FileKey,
+  VaultDocumentMeta,
+  VaultTrashMeta,
+  VaultFolderMeta,
+  PendingOperation,
+  VaultState,
+  VaultSnapshot,
+  ScannedFolder,
+  ScannedDocument,
+} from "./vault/types.js";
 
-const STATE_FILE = "state.json";
-const STATE_FORMAT = "fieldnotes-vault";
-const STATE_VERSION = 2;
-const TEMP_PREFIX = ".fieldnotes-tmp-";
-const MAX_VAULT_FILE_BYTES = 5_000_000;
-export const MAX_VAULT_ASSET_BYTES = 25_000_000;
-const LOCAL_RASTER_EXTENSIONS = new Set([".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp"]);
-
-export class VaultStorageError extends Error {
-  readonly code: string;
-  readonly status: number;
-
-  constructor(message: string, code = "vault_unavailable", status = 503) {
-    super(message);
-    this.name = "VaultStorageError";
-    this.code = code;
-    this.status = status;
-  }
-}
-
-export class VaultVersionConflictError extends VaultStorageError {
-  readonly currentVersion: number;
-  readonly currentHash: string;
-
-  constructor(currentVersion: number, currentHash: string) {
-    super("The Markdown file changed on disk. Load the latest version before saving again.", "version_conflict", 409);
-    this.name = "VaultVersionConflictError";
-    this.currentVersion = currentVersion;
-    this.currentHash = currentHash;
-  }
-}
-
-type FileKey = { device: string; inode: string };
-
-export type VaultDocumentMeta = FileKey & {
-  id: string;
-  title: string;
-  folderId: string | null;
-  relativePath: string;
-  createdAt: string;
-  updatedAt: string;
-  version: number;
-  contentHash: string;
-};
-
-export type VaultTrashMeta = VaultDocumentMeta & { trashPath: string; trashedAt: string };
-
-export type VaultFolderMeta = FileKey & {
-  id: string;
-  name: string;
-  parentId: string | null;
-  relativePath: string;
-  createdAt: string;
-  updatedAt: string;
-  version: number;
-};
-
-type PendingBase = { change: ChangeRecord };
-type PendingOperation = PendingBase & (
-  | { kind: "document-create"; next: Omit<VaultDocumentMeta, keyof FileKey>; tempPath: string }
-  | { kind: "document-update"; next: Omit<VaultDocumentMeta, keyof FileKey>; oldPath: string; oldHash: string; tempPath: string }
-  | { kind: "document-delete"; id: string; title: string; oldPath: string; oldHash: string; nextVersion: number }
-  | { kind: "document-trash"; id: string; oldPath: string; oldHash: string; trashPath: string; trashedAt: string; nextVersion: number }
-  | { kind: "document-restore"; id: string; trashPath: string; next: Omit<VaultDocumentMeta, keyof FileKey>; change: ChangeRecord }
-  | { kind: "folder-create"; next: Omit<VaultFolderMeta, keyof FileKey> }
-  | { kind: "folder-update"; next: Omit<VaultFolderMeta, keyof FileKey>; oldPath: string; tempPath?: string }
-  | { kind: "folder-delete"; id: string; name: string; oldPath: string; nextVersion: number }
-);
-
-export type VaultState = {
-  format: typeof STATE_FORMAT;
-  schemaVersion: typeof STATE_VERSION;
-  vaultId: string;
-  sequence: number;
-  documents: VaultDocumentMeta[];
-  trashedDocuments: VaultTrashMeta[];
-  folders: VaultFolderMeta[];
-  changes: ChangeRecord[];
-  pending?: PendingOperation;
-};
-
-export type VaultSnapshot = {
-  vaultId: string;
-  sequence: number;
-  documents: DocumentRecord[];
-  folders: FolderRecord[];
-  changes: ChangeRecord[];
-};
-
-export type LegacyDocument = {
-  id: string;
-  title: string;
-  body: string;
-  folderId: string | null;
-  createdAt: string;
-  updatedAt: string;
-  version: number;
-};
-
-export type LegacyTrashedDocument = LegacyDocument & { trashedAt: string };
-
-export type LegacyFolder = {
-  id: string;
-  name: string;
-  parentId: string | null;
-  createdAt: string;
-  updatedAt: string;
-  version: number;
-};
-
-type ScannedFolder = FileKey & { name: string; relativePath: string; parentPath: string };
-type ScannedDocument = FileKey & {
-  name: string;
-  relativePath: string;
-  parentPath: string;
-  body: string;
-  contentHash: string;
-  byteLength: number;
-};
-
-function hashBytes(bytes: Buffer): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-function fileKey(absolutePath: string): FileKey {
-  const stat = lstatSync(absolutePath, { bigint: true });
-  return { device: stat.dev.toString(), inode: stat.ino.toString() };
-}
-
-function statKind(absolutePath: string): "file" | "directory" | "symlink" | "other" {
-  const stat = lstatSync(absolutePath);
-  if (stat.isSymbolicLink()) return "symlink";
-  if (stat.isDirectory()) return "directory";
-  if (stat.isFile()) return "file";
-  return "other";
-}
-
-function normalizedNameKey(value: string): string {
-  return value.normalize("NFD").toLowerCase().replaceAll("ß", "ss").replaceAll("ς", "σ").replace(/[ .]+$/u, "");
-}
-
-function normalizedRelativeKey(value: string): string {
-  return value.split("/").map(normalizedNameKey).join("/");
-}
-
-function relativePath(parent: string, name: string): string {
-  return parent ? `${parent}/${name}` : name;
-}
-
-function parentPath(value: string): string {
-  const index = value.lastIndexOf("/");
-  return index < 0 ? "" : value.slice(0, index);
-}
-
-function basename(value: string): string {
-  const index = value.lastIndexOf("/");
-  return index < 0 ? value : value.slice(index + 1);
-}
-
-function titleFromFileName(name: string, id?: string): string {
-  let stem = name.replace(/\.(?:md|markdown)$/i, "");
-  if (id) {
-    const suffix = `--${id.slice(0, 8)}`;
-    if (stem.endsWith(suffix)) stem = stem.slice(0, -suffix.length);
-  }
-  try {
-    return decodeURIComponent(stem) || "Untitled";
-  } catch {
-    return stem || "Untitled";
-  }
-}
-
-function encodedNameTokens(title: string): string[] {
-  const chars = [...title.normalize("NFC")];
-  return chars.map((character, index) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    const encode = /[%/\\:*?"<>|]/u.test(character)
-      || codePoint < 32
-      || codePoint === 127
-      || (index === 0 && character === ".")
-      || (index === chars.length - 1 && (character === "." || character === " "));
-    if (!encode) return character;
-    return [...Buffer.from(character, "utf8")].map((byte) => `%${byte.toString(16).padStart(2, "0").toUpperCase()}`).join("");
-  });
-}
-
-function truncateTokens(tokens: string[], maxBytes: number): string {
-  let result = "";
-  let length = 0;
-  for (const token of tokens) {
-    const bytes = Buffer.byteLength(token, "utf8");
-    if (length + bytes > maxBytes) break;
-    result += token;
-    length += bytes;
-  }
-  return result;
-}
-
-function safeNoteFileName(title: string, id: string, collision = false): string {
-  const tokens = encodedNameTokens(title);
-  const base = tokens.join("") || "Untitled";
-  const useSuffix = collision || Buffer.byteLength(`${base}.md`, "utf8") > 220;
-  const suffix = useSuffix ? `--${id.slice(0, 8)}` : "";
-  const stem = useSuffix ? `${truncateTokens(tokens, 190) || "Untitled"}${suffix}` : base;
-  return `${stem}.md`;
-}
-
-function safeFolderSegment(name: string, id: string, collision = false): string {
-  const tokens = encodedNameTokens(name);
-  const base = tokens.join("") || "Folder";
-  const useSuffix = collision || Buffer.byteLength(base, "utf8") > 200 || base.startsWith(TEMP_PREFIX);
-  const suffix = useSuffix ? `--${id.slice(0, 8)}` : "";
-  return useSuffix ? `${truncateTokens(tokens, 170) || "Folder"}${suffix}` : base;
-}
+export { MAX_VAULT_ASSET_BYTES } from "./vault/constants.js";
+export { VaultStorageError, VaultVersionConflictError } from "./vault/errors.js";
+export { readDescriptorBounded } from "./vault/files.js";
+export { createVaultFromLegacy } from "./vault/migration.js";
+export type { VaultDocumentMeta, VaultTrashMeta, VaultFolderMeta, VaultState, VaultSnapshot, LegacyDocument, LegacyTrashedDocument, LegacyFolder } from "./vault/types.js";
 
 function eventFor(
   state: VaultState,
@@ -257,268 +84,6 @@ function eventFor(
   return entityType === "folder"
     ? { ...common, entityType, folderId: id }
     : { ...common, entityType, documentId: id };
-}
-
-function fsyncDirectory(directory: string): void {
-  let descriptor: number | undefined;
-  try {
-    descriptor = openSync(directory, "r");
-    fsyncSync(descriptor);
-  } catch {
-    // Some filesystems do not support fsync on directories. File contents are still fsynced.
-  } finally {
-    if (descriptor !== undefined) closeSync(descriptor);
-  }
-}
-
-function writeAtomic(absolutePath: string, bytes: Buffer): void {
-  const directory = path.dirname(absolutePath);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const temporary = path.join(directory, `${TEMP_PREFIX}${randomUUID()}`);
-  let descriptor: number | undefined;
-  try {
-    descriptor = openSync(temporary, "wx", 0o600);
-    writeFileSync(descriptor, bytes);
-    fsyncSync(descriptor);
-    closeSync(descriptor);
-    descriptor = undefined;
-    renameSync(temporary, absolutePath);
-    fsyncDirectory(directory);
-  } catch (error) {
-    if (descriptor !== undefined) closeSync(descriptor);
-    if (existsSync(temporary)) unlinkSync(temporary);
-    throw error;
-  }
-}
-
-function writeNewDurable(absolutePath: string, bytes: Buffer, mode = 0o600): void {
-  const directory = path.dirname(absolutePath);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  let descriptor: number | undefined;
-  let created = false;
-  try {
-    descriptor = openSync(absolutePath, "wx", mode);
-    created = true;
-    writeFileSync(descriptor, bytes);
-    fsyncSync(descriptor);
-    closeSync(descriptor);
-    descriptor = undefined;
-    fsyncDirectory(directory);
-  } catch (error) {
-    if (descriptor !== undefined) closeSync(descriptor);
-    if (created && existsSync(absolutePath)) unlinkSync(absolutePath);
-    throw error;
-  }
-}
-
-export function readDescriptorBounded(
-  descriptor: number,
-  maxBytes: number,
-  reader: (fd: number, buffer: Buffer, offset: number, length: number, position: number | null) => number = readSync,
-  maxAllowedBytes = MAX_VAULT_FILE_BYTES,
-): { bytes: Buffer; exceededLimit: boolean } {
-  if (!Number.isSafeInteger(maxAllowedBytes) || maxAllowedBytes < 0
-    || !Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > maxAllowedBytes) {
-    throw new RangeError("The bounded descriptor read limit is outside the vault file size range.");
-  }
-  const buffer = Buffer.allocUnsafe(maxBytes + 1);
-  let total = 0;
-  while (total < buffer.byteLength) {
-    const bytesRead = reader(descriptor, buffer, total, buffer.byteLength - total, null);
-    if (bytesRead === 0) break;
-    if (!Number.isInteger(bytesRead) || bytesRead < 0 || bytesRead > buffer.byteLength - total) {
-      throw new VaultStorageError("The vault file could not be read safely.", "vault_read_failed", 500);
-    }
-    total += bytesRead;
-  }
-  return { bytes: buffer.subarray(0, Math.min(total, maxBytes)), exceededLimit: total > maxBytes };
-}
-
-function assertOpenedPathWithinRoot(absolutePath: string, allowedRoot: string, descriptorStat: { dev: bigint; ino: bigint }): void {
-  try {
-    const resolvedRoot = realpathSync(allowedRoot);
-    const resolvedFile = realpathSync(absolutePath);
-    const relative = path.relative(resolvedRoot, resolvedFile);
-    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new VaultStorageError("The referenced vault asset changed path while it was opened.", "vault_path_changed", 409);
-    }
-    const pathStat = statSync(resolvedFile, { bigint: true });
-    if (!pathStat.isFile() || pathStat.dev !== descriptorStat.dev || pathStat.ino !== descriptorStat.ino) {
-      throw new VaultStorageError("The referenced vault asset changed path while it was opened.", "vault_path_changed", 409);
-    }
-  } catch (error) {
-    if (error instanceof VaultStorageError) throw error;
-    throw new VaultStorageError("The referenced vault asset changed path while it was opened.", "vault_path_changed", 409);
-  }
-}
-
-function readRegularFileNoFollow(
-  absolutePath: string,
-  maxBytes = MAX_VAULT_FILE_BYTES,
-  allowedRoot?: string,
-  maxAllowedBytes = MAX_VAULT_FILE_BYTES,
-): Buffer {
-  let descriptor: number | undefined;
-  try {
-    if (!Number.isSafeInteger(maxAllowedBytes) || maxAllowedBytes < 0
-      || !Number.isSafeInteger(maxBytes) || maxBytes < 0) {
-      throw new RangeError("The vault file size limit is invalid.");
-    }
-    descriptor = openSync(absolutePath, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const stat = fstatSync(descriptor, { bigint: true });
-    if (!stat.isFile()) throw new VaultStorageError("Expected a regular file; symbolic links are not followed.", "vault_symlink", 409);
-    const effectiveMaxBytes = Math.min(maxBytes, maxAllowedBytes);
-    if (stat.size > BigInt(effectiveMaxBytes)) {
-      if (allowedRoot || maxBytes < maxAllowedBytes) throw new ViewQueryLimitError(VIEW_TRASH_LIMIT_MESSAGE);
-      throw new VaultStorageError(`Markdown file exceeds the ${MAX_VAULT_FILE_BYTES} byte vault limit.`, "vault_file_too_large", 409);
-    }
-    if (allowedRoot) assertOpenedPathWithinRoot(absolutePath, allowedRoot, stat);
-    const result = readDescriptorBounded(descriptor, effectiveMaxBytes, readSync, maxAllowedBytes);
-    if (result.exceededLimit) {
-      if (allowedRoot || maxBytes < maxAllowedBytes) throw new ViewQueryLimitError(VIEW_TRASH_LIMIT_MESSAGE);
-      throw new VaultStorageError(`Markdown file exceeds the ${MAX_VAULT_FILE_BYTES} byte vault limit.`, "vault_file_too_large", 409);
-    }
-    return result.bytes;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ELOOP") {
-      throw new VaultStorageError("Symbolic links are not allowed inside a Fieldnotes vault.", "vault_symlink", 409);
-    }
-    throw error;
-  } finally {
-    if (descriptor !== undefined) closeSync(descriptor);
-  }
-}
-
-function exactEntryExists(parentAbsolute: string, name: string): boolean {
-  try {
-    return readdirSync(parentAbsolute).includes(name);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
-}
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function isVaultPath(value: unknown): value is string {
-  return typeof value === "string"
-    && value.length > 0
-    && !value.startsWith("/")
-    && !value.includes("\\")
-    && !value.includes("\u0000")
-    && !/^[A-Za-z]:/.test(value)
-    && !value.split("/").some((segment) => !segment || segment === "." || segment === ".." || normalizedNameKey(segment) === ".fieldnotes");
-}
-
-function isTrashPath(value: unknown, id: unknown): value is string {
-  return typeof id === "string" && UUID_PATTERN.test(id) && value === `.fieldnotes/trash/${id}.md`;
-}
-
-function isTimestamp(value: unknown): value is string {
-  return typeof value === "string" && Number.isFinite(Date.parse(value));
-}
-
-function isFileKey(value: Record<string, unknown>): boolean {
-  return typeof value.device === "string" && /^\d+$/.test(value.device)
-    && typeof value.inode === "string" && /^\d+$/.test(value.inode);
-}
-
-function isChange(value: unknown): value is ChangeRecord {
-  if (!isRecord(value) || !Number.isSafeInteger(value.seq) || Number(value.seq) < 1
-    || (value.entityType !== "document" && value.entityType !== "folder")
-    || typeof value.title !== "string"
-    || !["created", "updated", "deleted"].includes(String(value.operation))
-    || !Number.isSafeInteger(value.version) || Number(value.version) < 1
-    || !isTimestamp(value.createdAt)) return false;
-  return value.entityType === "folder"
-    ? typeof value.folderId === "string" && UUID_PATTERN.test(value.folderId)
-    : typeof value.documentId === "string" && UUID_PATTERN.test(value.documentId);
-}
-
-function isPendingOperation(value: unknown, sequence: number): value is PendingOperation {
-  if (!isRecord(value) || !isChange(value.change) || value.change.seq !== sequence + 1) return false;
-  const pathFields = (fields: string[]) => fields.every((field) => isVaultPath(value[field]));
-  if (value.kind === "document-create" || value.kind === "document-update") {
-    if (!isRecord(value.next) || !UUID_PATTERN.test(String(value.next.id))
-      || typeof value.next.title !== "string"
-      || (value.next.folderId !== null && !UUID_PATTERN.test(String(value.next.folderId)))
-      || !isVaultPath(value.next.relativePath)
-      || !isTimestamp(value.next.createdAt) || !isTimestamp(value.next.updatedAt)
-      || !Number.isSafeInteger(value.next.version) || !/^[0-9a-f]{64}$/i.test(String(value.next.contentHash))) return false;
-    return value.kind === "document-create"
-      ? pathFields(["tempPath"])
-      : pathFields(["oldPath", "tempPath"]) && /^[0-9a-f]{64}$/i.test(String(value.oldHash));
-  }
-  if (value.kind === "document-delete") {
-    return UUID_PATTERN.test(String(value.id)) && typeof value.title === "string"
-      && pathFields(["oldPath"]) && /^[0-9a-f]{64}$/i.test(String(value.oldHash));
-  }
-  if (value.kind === "document-trash") {
-    return UUID_PATTERN.test(String(value.id)) && pathFields(["oldPath"])
-      && isTrashPath(value.trashPath, value.id) && /^[0-9a-f]{64}$/i.test(String(value.oldHash))
-      && isTimestamp(value.trashedAt) && Number.isSafeInteger(value.nextVersion) && Number(value.nextVersion) >= 2;
-  }
-  if (value.kind === "document-restore") {
-    if (!UUID_PATTERN.test(String(value.id)) || !isTrashPath(value.trashPath, value.id) || !isRecord(value.next)) return false;
-    return value.next.id === value.id && typeof value.next.title === "string"
-      && (value.next.folderId === null || UUID_PATTERN.test(String(value.next.folderId)))
-      && isVaultPath(value.next.relativePath) && isTimestamp(value.next.createdAt) && isTimestamp(value.next.updatedAt)
-      && Number.isSafeInteger(value.next.version) && Number(value.next.version) >= 2
-      && /^[0-9a-f]{64}$/i.test(String(value.next.contentHash));
-  }
-  if (value.kind === "folder-create" || value.kind === "folder-update") {
-    if (!isRecord(value.next) || !UUID_PATTERN.test(String(value.next.id))
-      || typeof value.next.name !== "string"
-      || (value.next.parentId !== null && !UUID_PATTERN.test(String(value.next.parentId)))
-      || !isVaultPath(value.next.relativePath)
-      || !isTimestamp(value.next.createdAt) || !isTimestamp(value.next.updatedAt)
-      || !Number.isSafeInteger(value.next.version)) return false;
-    if (value.kind === "folder-create") return true;
-    return pathFields(["oldPath"]) && (value.tempPath === undefined || isVaultPath(value.tempPath));
-  }
-  if (value.kind === "folder-delete") return UUID_PATTERN.test(String(value.id)) && pathFields(["oldPath"]);
-  return false;
-}
-
-function shallowState(value: unknown): value is VaultState {
-  if (!isRecord(value) || value.format !== STATE_FORMAT || value.schemaVersion !== STATE_VERSION
-    || typeof value.vaultId !== "string" || !UUID_PATTERN.test(value.vaultId)
-    || !Number.isSafeInteger(value.sequence) || Number(value.sequence) < 0
-    || !Array.isArray(value.documents) || !Array.isArray(value.trashedDocuments) || !Array.isArray(value.folders) || !Array.isArray(value.changes)) return false;
-  const documentsValid = value.documents.every((entry) => isRecord(entry)
-    && UUID_PATTERN.test(String(entry.id)) && typeof entry.title === "string"
-    && (entry.folderId === null || UUID_PATTERN.test(String(entry.folderId)))
-    && isVaultPath(entry.relativePath) && isTimestamp(entry.createdAt) && isTimestamp(entry.updatedAt)
-    && Number.isSafeInteger(entry.version) && Number(entry.version) >= 1
-    && /^[0-9a-f]{64}$/i.test(String(entry.contentHash)) && isFileKey(entry));
-  const foldersValid = value.folders.every((entry) => isRecord(entry)
-    && UUID_PATTERN.test(String(entry.id)) && typeof entry.name === "string"
-    && (entry.parentId === null || UUID_PATTERN.test(String(entry.parentId)))
-    && isVaultPath(entry.relativePath) && isTimestamp(entry.createdAt) && isTimestamp(entry.updatedAt)
-    && Number.isSafeInteger(entry.version) && Number(entry.version) >= 1 && isFileKey(entry));
-  const trashValid = value.trashedDocuments.every((entry) => isRecord(entry)
-    && UUID_PATTERN.test(String(entry.id)) && typeof entry.title === "string"
-    && (entry.folderId === null || UUID_PATTERN.test(String(entry.folderId)))
-    && isVaultPath(entry.relativePath) && isTrashPath(entry.trashPath, entry.id)
-    && isTimestamp(entry.createdAt) && isTimestamp(entry.updatedAt) && isTimestamp(entry.trashedAt)
-    && Number.isSafeInteger(entry.version) && Number(entry.version) >= 1
-    && /^[0-9a-f]{64}$/i.test(String(entry.contentHash)) && isFileKey(entry));
-  const changesValid = value.changes.every(isChange)
-    && value.changes.every((change) => change.seq <= Number(value.sequence));
-  const uniqueIds = (entries: unknown[]) => new Set(entries.map((entry) => isRecord(entry) ? entry.id : undefined)).size === entries.length;
-  const relativePaths = [...value.documents, ...value.folders].map((entry) => isRecord(entry) ? normalizedRelativeKey(String(entry.relativePath)) : "");
-  const uniquePaths = new Set(relativePaths).size === relativePaths.length;
-  const changeSequences = value.changes.map((change) => isRecord(change) ? Number(change.seq) : -1);
-  const orderedUniqueChanges = new Set(changeSequences).size === changeSequences.length
-    && changeSequences.every((sequence, index) => index === 0 || sequence > changeSequences[index - 1]);
-  const pendingValid = value.pending === undefined || isPendingOperation(value.pending, Number(value.sequence));
-  return documentsValid && foldersValid && trashValid && changesValid
-    && uniqueIds([...value.documents, ...value.trashedDocuments]) && uniqueIds(value.folders)
-    && uniquePaths && orderedUniqueChanges && pendingValid;
 }
 
 export class FileVault {
@@ -1678,204 +1243,5 @@ export class FileVault {
       if (created.length) throw new VaultStorageError(`Imported ${created.length} files before the next file failed: ${(error as Error).message}`, "partial_import", 409);
       throw error;
     }
-  }
-}
-
-export function createVaultFromLegacy(
-  root: string,
-  documents: LegacyDocument[],
-  folders: LegacyFolder[],
-  changes: ChangeRecord[],
-  migrationManifestPath: string,
-  trashedDocuments: LegacyTrashedDocument[] = [],
-): { vaultId: string; documentCount: number; folderCount: number; sequence: number } {
-  const destination = path.resolve(root);
-  if (existsSync(destination)) throw new VaultStorageError("Migration destination must not already exist.", "vault_destination_exists", 409);
-  if (Buffer.byteLength(destination, "utf8") > 900) throw new VaultStorageError("Migration destination exceeds the portable 900-byte path limit.", "vault_migration_invalid", 409);
-  const parent = path.dirname(destination);
-  mkdirSync(parent, { recursive: true, mode: 0o700 });
-  const staging = path.join(parent, `.${path.basename(destination)}.staging-${randomUUID()}`);
-  mkdirSync(staging, { recursive: false, mode: 0o700 });
-  const resolvedManifest = path.resolve(migrationManifestPath);
-  let manifestCreated = false;
-  try {
-  if (existsSync(resolvedManifest)) throw new VaultStorageError("Migration manifest already exists; refusing to overwrite it.", "vault_manifest_exists", 409);
-  if (new Set(documents.map((document) => document.id)).size !== documents.length
-    || new Set(folders.map((folder) => folder.id)).size !== folders.length
-    || new Set([...documents, ...trashedDocuments].map((document) => document.id)).size !== documents.length + trashedDocuments.length
-    || new Set(trashedDocuments.map((document) => document.id)).size !== trashedDocuments.length) {
-    throw new VaultStorageError("Legacy storage contains duplicate stable IDs.", "vault_migration_invalid", 409);
-  }
-  const metadata = path.join(staging, ".fieldnotes");
-  mkdirSync(metadata, { recursive: false, mode: 0o700 });
-
-  const foldersById = new Map(folders.map((folder) => [folder.id, folder]));
-  const folderPaths = new Map<string, string>();
-  const folderMetas: VaultFolderMeta[] = [];
-  const sortedFolders = [...folders].sort((left, right) => {
-    const depth = (folder: LegacyFolder): number => {
-      let count = 0;
-      let current: LegacyFolder | undefined = folder;
-      const seen = new Set<string>();
-      while (current?.parentId) {
-        if (seen.has(current.id)) throw new VaultStorageError("Legacy folder hierarchy contains a cycle.", "vault_migration_invalid", 409);
-        seen.add(current.id);
-        count += 1;
-        current = foldersById.get(current.parentId);
-      }
-      return count;
-    };
-    return depth(left) - depth(right) || left.id.localeCompare(right.id);
-  });
-  for (const folder of sortedFolders) {
-    const parentRelative = folder.parentId ? folderPaths.get(folder.parentId) : "";
-    if (folder.parentId && parentRelative === undefined) throw new VaultStorageError("Legacy folder references a missing parent.", "vault_migration_invalid", 409);
-    const raw = folder.name.normalize("NFC");
-    let safe = safeFolderSegment(raw, folder.id);
-    const siblingNames = folderMetas.filter((item) => parentRelative ? item.relativePath.startsWith(`${parentRelative}/`) && parentPath(item.relativePath) === parentRelative : parentPath(item.relativePath) === "").map((item) => basename(item.relativePath));
-    if (siblingNames.some((name) => normalizedNameKey(name) === normalizedNameKey(safe))) {
-      safe = safeFolderSegment(raw, folder.id, true);
-    }
-    const rel = relativePath(parentRelative ?? "", safe);
-    if (Buffer.byteLength(safe, "utf8") > 240) throw new VaultStorageError("A folder path component exceeds the portable filesystem limit.", "vault_migration_invalid", 409);
-    if (Buffer.byteLength(path.join(staging, ...rel.split("/")), "utf8") > 900) throw new VaultStorageError("A folder path exceeds the portable 900-byte filesystem limit.", "vault_migration_invalid", 409);
-    mkdirSync(path.join(staging, ...rel.split("/")), { recursive: true, mode: 0o700 });
-    fsyncDirectory(path.dirname(path.join(staging, ...rel.split("/"))));
-    const key = fileKey(path.join(staging, ...rel.split("/")));
-    folderPaths.set(folder.id, rel);
-    folderMetas.push({
-      id: folder.id,
-      name: folder.name,
-      parentId: folder.parentId,
-      relativePath: rel,
-      createdAt: folder.createdAt,
-      updatedAt: folder.updatedAt,
-      version: folder.version,
-      ...key,
-    });
-  }
-
-  const usedPaths = new Set<string>(folderMetas.map((folder) => normalizedRelativeKey(folder.relativePath)));
-  const documentMetas: VaultDocumentMeta[] = [];
-  const trashMetas: VaultTrashMeta[] = [];
-  const migrationDocuments: Array<{ id: string; title: string; folderId: string | null; relativePath: string; contentHash: string }> = [];
-  const sortedDocuments = [...documents].sort((left, right) => left.id.localeCompare(right.id));
-  for (const document of sortedDocuments) {
-    const parentRelative = document.folderId ? folderPaths.get(document.folderId) : "";
-    if (document.folderId && parentRelative === undefined) throw new VaultStorageError("Legacy note references a missing folder.", "vault_migration_invalid", 409);
-    const parentAbsolute = path.join(staging, ...(parentRelative ? parentRelative.split("/") : []));
-    const plainName = safeNoteFileName(document.title, document.id);
-    const collision = usedPaths.has(normalizedRelativeKey(relativePath(parentRelative ?? "", plainName)));
-    const fileName = collision ? safeNoteFileName(document.title, document.id, true) : plainName;
-    const rel = relativePath(parentRelative ?? "", fileName);
-    const key = normalizedRelativeKey(rel);
-    if (usedPaths.has(key)) throw new VaultStorageError("Legacy notes map to the same filesystem name even with stable-ID suffixes.", "vault_migration_collision", 409);
-    usedPaths.add(key);
-    const absolute = path.join(parentAbsolute, fileName);
-    if (Buffer.byteLength(absolute, "utf8") > 900) throw new VaultStorageError("A note path exceeds the portable 900-byte filesystem limit.", "vault_migration_invalid", 409);
-    const bytes = Buffer.from(document.body, "utf8");
-    if (bytes.byteLength > MAX_VAULT_FILE_BYTES) throw new VaultStorageError(`Legacy note ${document.id} exceeds the vault file size limit.`, "vault_migration_invalid", 409);
-    let descriptor: number | undefined;
-    try {
-      descriptor = openSync(absolute, "wx", 0o600);
-      writeFileSync(descriptor, bytes);
-      fsyncSync(descriptor);
-      closeSync(descriptor);
-      descriptor = undefined;
-      fsyncDirectory(path.dirname(absolute));
-    } catch (error) {
-      if (descriptor !== undefined) closeSync(descriptor);
-      throw error;
-    }
-    const hash = hashBytes(bytes);
-    const fileKeyValue = fileKey(absolute);
-    const meta: VaultDocumentMeta = {
-      id: document.id,
-      title: document.title,
-      folderId: document.folderId,
-      relativePath: rel,
-      createdAt: document.createdAt,
-      updatedAt: document.updatedAt,
-      version: document.version,
-      contentHash: hash,
-      ...fileKeyValue,
-    };
-    documentMetas.push(meta);
-    migrationDocuments.push({ id: document.id, title: document.title, folderId: document.folderId, relativePath: rel, contentHash: hash });
-  }
-  for (const document of documents) {
-    const meta = documentMetas.find((item) => item.id === document.id);
-    if (!meta) throw new VaultStorageError("Migration omitted a legacy note.", "vault_migration_invalid", 409);
-    const roundtrip = readFileSync(path.join(staging, ...meta.relativePath.split("/")), "utf8");
-    if (roundtrip !== document.body) throw new VaultStorageError(`Markdown roundtrip failed for legacy note ${document.id}.`, "vault_migration_invalid", 409);
-  }
-
-  if (trashedDocuments.length) mkdirSync(path.join(metadata, "trash"), { recursive: false, mode: 0o700 });
-  for (const document of trashedDocuments) {
-    if (!UUID_PATTERN.test(document.id) || !document.title.trim() || document.title.length > 160
-      || !isTimestamp(document.createdAt) || !isTimestamp(document.updatedAt) || !isTimestamp(document.trashedAt)
-      || !Number.isSafeInteger(document.version) || document.version < 1) {
-      throw new VaultStorageError("A trashed legacy note has invalid metadata.", "vault_migration_invalid", 409);
-    }
-    const bytes = Buffer.from(document.body, "utf8");
-    if (document.body.length > 250_000 || bytes.byteLength > MAX_VAULT_FILE_BYTES) {
-      throw new VaultStorageError(`Trashed legacy note ${document.id} exceeds the vault file limit.`, "vault_migration_invalid", 409);
-    }
-    const trashPath = `.fieldnotes/trash/${document.id}.md`;
-    const absolute = path.join(metadata, "trash", `${document.id}.md`);
-    writeNewDurable(absolute, bytes);
-    fsyncDirectory(path.dirname(absolute));
-    const parentRelative = document.folderId ? folderPaths.get(document.folderId) : "";
-    const relativeName = relativePath(parentRelative ?? "", safeNoteFileName(document.title, document.id, true));
-    const contentHash = hashBytes(bytes);
-    const meta: VaultTrashMeta = {
-      id: document.id,
-      title: document.title,
-      folderId: document.folderId,
-      relativePath: relativeName,
-      createdAt: document.createdAt,
-      updatedAt: document.updatedAt,
-      version: document.version,
-      contentHash,
-      trashPath,
-      trashedAt: document.trashedAt,
-      ...fileKey(absolute),
-    };
-    trashMetas.push(meta);
-  }
-
-  const vaultId = randomUUID();
-  const sequence = changes.reduce((maximum, change) => Math.max(maximum, change.seq), 0);
-  const state: VaultState = {
-    format: STATE_FORMAT,
-    schemaVersion: STATE_VERSION,
-    vaultId,
-    sequence,
-    documents: documentMetas,
-    trashedDocuments: trashMetas,
-    folders: folderMetas,
-    changes: [...changes].sort((left, right) => left.seq - right.seq),
-  };
-  writeAtomic(path.join(metadata, STATE_FILE), Buffer.from(`${JSON.stringify(state, null, 2)}\n`, "utf8"));
-  fsyncDirectory(staging);
-  const manifest = {
-    format: "fieldnotes-migration-manifest",
-    createdAt: new Date().toISOString(),
-    vaultId,
-    sourceCounts: { documents: documents.length, trashedDocuments: trashedDocuments.length, folders: folders.length, changes: changes.length },
-    documents: migrationDocuments,
-    trashedDocuments: trashMetas.map(({ id, title, folderId, version, contentHash, trashedAt }) => ({ id, title, folderId, version, contentHash, trashedAt })),
-    folders: folderMetas.map(({ id, name, parentId, relativePath: filePath }) => ({ id, name, parentId, filePath })),
-  };
-  writeNewDurable(resolvedManifest, Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8"));
-  manifestCreated = true;
-  if (existsSync(destination)) throw new VaultStorageError("Migration target appeared before cutover; no existing directory was changed.", "vault_destination_exists", 409);
-  renameSync(staging, destination);
-  fsyncDirectory(parent);
-  return { vaultId, documentCount: documentMetas.length, folderCount: folderMetas.length, sequence };
-  } catch (error) {
-    if (existsSync(staging)) rmSync(staging, { recursive: true, force: true });
-    if (manifestCreated && existsSync(resolvedManifest)) unlinkSync(resolvedManifest);
-    throw error;
   }
 }
