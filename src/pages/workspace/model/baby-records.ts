@@ -546,4 +546,3 @@ export function formatDuration(minutes: number): string {
   const remainder = minutes % 60;
   return remainder ? hours + "h" + remainder + "m" : hours + "h";
 }
-
