@@ -5,6 +5,7 @@ import { test } from "node:test";
 
 const root = path.resolve(import.meta.dirname, "../..");
 const stylesheet = readFileSync(path.join(root, "src/app/styles.css"), "utf8");
+const tokens = readFileSync(path.join(root, "packages/markdown-live-editor/tokens.css"), "utf8");
 const html = readFileSync(path.join(root, "index.html"), "utf8");
 const mobileTopbarStart = stylesheet.indexOf(".mobile-topbar, .mobile-drawer-backdrop, .mobile-drawer-close");
 const mobileStart = stylesheet.indexOf("@media (max-width: 820px)", mobileTopbarStart);
@@ -21,25 +22,25 @@ function mobileRule(selector: string): string {
 }
 
 test("mobile note titles, excerpts, and dates use a readable, distinct scale", () => {
-  assert.match(mobileRule(".document-row-title"), /font-size: 18px/);
-  assert.match(mobileRule(".document-row-title"), /font-weight: 700/);
-  assert.match(mobileRule(".document-row-title"), /line-height: 1\.35/);
+  assert.match(mobileRule(".document-row-title"), /font-size: var\(--ds-text-list-title\)/);
+  assert.match(mobileRule(".document-row-title"), /font-weight: var\(--ds-weight-bold\)/);
+  assert.match(mobileRule(".document-row-title"), /line-height: var\(--ds-leading-heading\)/);
   assert.match(mobileRule(".document-row-title"), /-webkit-line-clamp: 2/);
 
-  assert.match(mobileRule(".document-excerpt"), /font-size: 16px/);
-  assert.match(mobileRule(".document-excerpt"), /line-height: 1\.55/);
-  assert.match(mobileRule(".document-excerpt"), /#4c5a50/);
+  assert.match(mobileRule(".document-excerpt"), /font-size: var\(--ds-text-body\)/);
+  assert.match(mobileRule(".document-excerpt"), /line-height: var\(--ds-leading-body\)/);
+  assert.match(mobileRule(".document-excerpt"), /color: var\(--ds-color-muted\)/);
 
-  assert.match(mobileRule(".document-row time"), /font-size: 14px/);
-  assert.match(mobileRule(".document-row time"), /font-weight: 600/);
-  assert.match(mobileRule(".document-row time"), /#56635a/);
-  assert.match(mobileRule('html[data-theme="dark"] .document-row time'), /#a7b2a9/);
+  assert.match(mobileRule(".document-row time"), /font-size: var\(--ds-text-control\)/);
+  assert.match(mobileRule(".document-row time"), /font-weight: var\(--ds-weight-semibold\)/);
+  assert.match(mobileRule(".document-row time"), /color: var\(--ds-color-muted\)/);
+  assert.doesNotMatch(mobileStyles, /html\[data-theme="dark"\] \.document-row time/);
   assert.doesNotMatch(narrowStyles, /\.document-row-title\s*\{/);
 });
 
 test("UI and Markdown font stacks provide an explicit Korean system fallback", () => {
-  assert.match(stylesheet, /font-family: "Avenir Next", "Apple SD Gothic Neo", -apple-system/);
-  assert.match(stylesheet, /--serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Apple SD Gothic Neo"/);
+  assert.match(tokens, /--ds-font-ui: "Avenir Next", "Apple SD Gothic Neo", -apple-system/);
+  assert.match(tokens, /--ds-font-document: "Iowan Old Style", "Palatino Linotype", Palatino, "Apple SD Gothic Neo"/);
 });
 
 test("mobile zoom remains available for accessibility", () => {
@@ -54,11 +55,12 @@ test("mobile note detail follows the reference's compact header and property-fir
   assert.match(stylesheet, /\.app-shell\.route-document \.editor-toolbar \{[\s\S]*?position: sticky;/);
   assert.match(stylesheet, /\.document-properties \{[\s\S]*?display: grid;/);
   assert.match(stylesheet, /\.document-property-row \{[\s\S]*?grid-template-columns: 22px/);
-  assert.match(stylesheet, /\.app-shell\.route-document \.markdown-body \{[\s\S]*?font-size: 17px;/);
+  assert.match(stylesheet, /\.app-shell\.route-document \.markdown-body \{[\s\S]*?font-size: var\(--ds-text-reading\);/);
   assert.match(stylesheet, /\.app-shell\.route-document \.editor-status \{[\s\S]*?position: sticky;/);
-  assert.match(stylesheet, /html\[data-theme="dark"\] \.app-shell\.route-document \.editor-pane[\s\S]*?background: #191919;/);
+  assert.match(stylesheet, /\.editor-pane \{[^}]*background: var\(--ds-color-surface\);/);
+  assert.doesNotMatch(stylesheet, /html\[data-theme="dark"\] \.app-shell\.route-document/);
 });
 
 test("mobile search control stays inside the note column", () => {
-  assert.match(stylesheet, /@media \(max-width: 520px\)\s*\{\s*\.note-column > \.search-area\s*\{\s*width: calc\(100% - 32px\);/);
+  assert.match(stylesheet, /@media \(max-width: 520px\)\s*\{\s*\.note-column > \.search-area\s*\{\s*width: calc\(100% - var\(--ds-space-8\)\);/);
 });

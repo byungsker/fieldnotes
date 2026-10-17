@@ -141,15 +141,15 @@ function NewEntryView({ records, context, adapters, source }: { records: RecordD
   return <section className="babies-view babies-action-view"><span className="babies-view-eyebrow">DAILY NOTES</span><h2>Today’s diary</h2><p>{existing ? "A record already exists for today." : "Create a daily record in the records folder."}</p><button type="button" disabled={busy} onClick={() => void createOrOpen()}>{busy ? "Opening…" : existing ? "Open today’s record" : "Write today’s record"}</button>{error && <p role="alert">{error}</p>}</section>;
 }
 
-const SCHEDULE_TYPES: Record<string, { label: string; emoji: string; background: string; border: string; text: string }> = {
-  dad: { label: "Dad time", emoji: "🌅", background: "#dbeafe", border: "#3b82f6", text: "#1e40af" },
-  wake: { label: "Wake", emoji: "☀️", background: "#fef9c3", border: "#eab308", text: "#713f12" },
-  food: { label: "Food", emoji: "🥣", background: "#dcfce7", border: "#22c55e", text: "#14532d" },
-  milk: { label: "Milk", emoji: "🍼", background: "#fce7f3", border: "#ec4899", text: "#831843" },
-  play: { label: "Play", emoji: "🎮", background: "#ede9fe", border: "#a855f7", text: "#4c1d95" },
-  sleep: { label: "Nap", emoji: "😴", background: "#e0f2fe", border: "#0ea5e9", text: "#0c4a6e" },
-  bath: { label: "Bath", emoji: "🛁", background: "#fff7ed", border: "#f97316", text: "#7c2d12" },
-  night: { label: "Night sleep", emoji: "🌙", background: "#1e1b4b", border: "#6366f1", text: "#c7d2fe" },
+const SCHEDULE_TYPES: Record<string, { label: string; emoji: string; background: string; text: string }> = {
+  dad: { label: "Dad time", emoji: "🌅", background: "var(--ds-color-info-soft)", text: "var(--ds-color-info)" },
+  wake: { label: "Wake", emoji: "☀️", background: "var(--ds-color-warning-soft)", text: "var(--ds-color-warning)" },
+  food: { label: "Food", emoji: "🥣", background: "var(--ds-color-success-soft)", text: "var(--ds-color-success)" },
+  milk: { label: "Milk", emoji: "🍼", background: "var(--ds-color-rose-soft)", text: "var(--ds-color-rose)" },
+  play: { label: "Play", emoji: "🎮", background: "var(--ds-color-violet-soft)", text: "var(--ds-color-violet)" },
+  sleep: { label: "Nap", emoji: "😴", background: "var(--ds-color-info-soft)", text: "var(--ds-color-info)" },
+  bath: { label: "Bath", emoji: "🛁", background: "var(--ds-color-warning-soft)", text: "var(--ds-color-warning)" },
+  night: { label: "Night sleep", emoji: "🌙", background: "var(--ds-color-violet-soft)", text: "var(--ds-color-violet)" },
 };
 
 function ScheduleView({ documents, source }: { documents: PreviewDocument[]; source: string }) {
@@ -171,14 +171,14 @@ function ScheduleView({ documents, source }: { documents: PreviewDocument[]; sou
       {advice && <aside className="babies-schedule-advice" aria-label="Care notes">{advice}</aside>}
       <div className="babies-schedule-legend" aria-label="Schedule types">{legendTypes.map((type) => {
         const style = SCHEDULE_TYPES[type];
-        return <span key={type} style={{ backgroundColor: style.background, borderColor: style.border, color: style.text }}>{style.label}</span>;
+        return <span key={type} style={{ backgroundColor: style.background, color: style.text }}>{style.label}</span>;
       })}</div>
       {schedule.length > 0 ? <div className="babies-schedule-list">{schedule.map((entry, index) => {
         const row = entry && typeof entry === "object" && !Array.isArray(entry) ? entry as Record<string, YamlValue> : {};
         const type = scalarText(row.type) || "play";
-        const style = SCHEDULE_TYPES[type] ?? { label: type, emoji: "", background: "#ede9fe", border: "#a855f7", text: "#4c1d95" };
+        const style = SCHEDULE_TYPES[type] ?? { label: type, emoji: "", background: "var(--ds-color-violet-soft)", text: "var(--ds-color-violet)" };
         const duration = minutesFromValue(row.duration);
-        return <article key={scalarText(row.time) + "-" + index}><time>{scalarText(row.time)}</time><div className="babies-schedule-bar" style={{ minHeight: Math.max(duration * 0.38, 28), backgroundColor: style.background, borderLeft: "3px solid " + style.border, color: style.text }}><strong>{style.emoji} {scalarText(row.label)}</strong>{duration >= 60 && <span>{formatDuration(duration)}</span>}</div></article>;
+        return <article key={scalarText(row.time) + "-" + index}><time>{scalarText(row.time)}</time><div className="babies-schedule-bar" style={{ minHeight: `max(${duration * 0.38}px, var(--ds-space-7))`, backgroundColor: style.background, color: style.text }}><strong>{style.emoji} {scalarText(row.label)}</strong>{duration >= 60 && <span>{formatDuration(duration)}</span>}</div></article>;
       })}</div> : <p className="babies-view-status">No schedule entries are available.</p>}
     </section>
   );

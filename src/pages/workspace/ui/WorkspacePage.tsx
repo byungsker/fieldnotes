@@ -1818,7 +1818,7 @@ export function WorkspacePage() {
     }
     document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute(
       "content",
-      theme === "dark" ? "#171d19" : "#f7f7f5",
+      getComputedStyle(document.documentElement).getPropertyValue("--ds-color-canvas").trim(),
     );
   }, [theme]);
 
@@ -2201,12 +2201,12 @@ export function WorkspacePage() {
               }}
               onClick={() => void navigateToDocument(note.id)}
             >
-              <FileText size={14} aria-hidden="true" />
+              <FileText size="var(--ds-icon-md)" aria-hidden="true" />
               <span className="explorer-file-copy"><span className="explorer-file-title"><SearchHighlight text={note.title} query={query} /></span><span className="explorer-file-date">{relativeDate(note.updatedAt)}</span></span>
             </button>
             <div className="explorer-file-actions">
-              <button type="button" aria-label={`Rename ${note.title}`} title="Rename" onClick={(event) => { event.stopPropagation(); void renameExplorerDocument(note.id); }}><Pencil size={13} /></button>
-              <button type="button" aria-label={`Move ${note.title}`} title="Move" onClick={(event) => { event.stopPropagation(); void promptMoveExplorerDocument(note); }}><FolderOpen size={13} /></button>
+              <button type="button" aria-label={`Rename ${note.title}`} title="Rename" onClick={(event) => { event.stopPropagation(); void renameExplorerDocument(note.id); }}><Pencil size="var(--ds-icon-md)" /></button>
+              <button type="button" aria-label={`Move ${note.title}`} title="Move" onClick={(event) => { event.stopPropagation(); void promptMoveExplorerDocument(note); }}><FolderOpen size="var(--ds-icon-md)" /></button>
             </div>
           </div>
         ));
@@ -2245,7 +2245,7 @@ export function WorkspacePage() {
                       else next.add(folder.id);
                       return next;
                     })}
-                  >{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
+                  >{expanded ? <ChevronDown size="var(--ds-icon-md)" /> : <ChevronRight size="var(--ds-icon-md)" />}</button>
                 ) : <span className="folder-disclosure-spacer" aria-hidden="true" />}
                 <button
                   type="button"
@@ -2255,10 +2255,10 @@ export function WorkspacePage() {
                   className={`folder-nav-item folder-tree-button${activeFolderId === folder.id ? " active" : ""}`}
                   onClick={() => void navigateToFolder(folder.id)}
                 >
-                  {activeFolderId === folder.id ? <FolderOpen size={15} /> : <Folder size={15} />}
+                  {activeFolderId === folder.id ? <FolderOpen size="var(--ds-icon-md)" /> : <Folder size="var(--ds-icon-md)" />}
                   <span>{folder.name}</span><span className="folder-count">{folder.documentCount}</span>
                 </button>
-                <button type="button" className="folder-row-action" aria-label={`Rename ${folder.name}`} onClick={() => void renameFolder(folder.id)}><Pencil size={14} /></button>
+                <button type="button" className="folder-row-action" aria-label={`Rename ${folder.name}`} onClick={() => void renameFolder(folder.id)}><Pencil size="var(--ds-icon-md)" /></button>
               </div>
               {expanded && <div role="group" className="explorer-children">{renderBranches(folder.id, depth + 1)}</div>}
             </Fragment>
@@ -2271,7 +2271,7 @@ export function WorkspacePage() {
         <nav className={`folder-browser explorer-browser ${surface === "drawer" ? "drawer-folder-browser" : "sidebar-folder-browser"}`} aria-label="Vault files">
           <div className="explorer-search-tools">
             <label className="search-box explorer-search-box">
-              <Search size={16} aria-hidden="true" />
+              <Search size="var(--ds-icon-md)" aria-hidden="true" />
               <input
                 ref={inputRef}
                 type="search"
@@ -2281,27 +2281,27 @@ export function WorkspacePage() {
                 placeholder="Search notes"
                 aria-label="Search all notes"
               />
-              {query && <button type="button" className="clear-search" aria-label="Clear search" onClick={() => setQuery("")}><X size={14} /></button>}
+              {query && <button type="button" className="clear-search" aria-label="Clear search" onClick={() => setQuery("")}><X size="var(--ds-icon-md)" /></button>}
               {!query && <kbd>⌘ K</kbd>}
             </label>
             <div className="explorer-create-actions">
-              <button type="button" className="explorer-new-note" onClick={() => void createAndOpenNote()}><Plus size={15} /> New note</button>
-              <button type="button" className="explorer-new-folder" onClick={() => void beginFolderCreateInWorkspace(null)}><FolderPlus size={15} /> New folder</button>
+              <button type="button" className="explorer-new-note" onClick={() => void createAndOpenNote()}><Plus size="var(--ds-icon-md)" /> New note</button>
+              <button type="button" className="explorer-new-folder" onClick={() => void beginFolderCreateInWorkspace(null)}><FolderPlus size="var(--ds-icon-md)" /> New folder</button>
             </div>
           </div>
           <div className="folder-browser-header explorer-browser-header">
             <span>VAULT</span>
-            <label className="explorer-sort-control"><ArrowDownUp size={13} aria-hidden="true" /><select aria-label="Sort notes" value={sortOrder} onChange={(event) => setSortOrder(event.currentTarget.value as SortOrder)}>
+            <label className="explorer-sort-control"><ArrowDownUp size="var(--ds-icon-md)" aria-hidden="true" /><select aria-label="Sort notes" value={sortOrder} onChange={(event) => setSortOrder(event.currentTarget.value as SortOrder)}>
               <option value="updated-desc">Newest</option>
               <option value="updated-asc">Oldest</option>
               <option value="title-asc">A to Z</option>
               <option value="title-desc">Z to A</option>
             </select></label>
           </div>
-          {listError && <div className="explorer-search-error" role="status"><span>{listError}</span><button type="button" aria-label="Retry search" onClick={() => void refreshExplorerSearch(query)}><RefreshCw size={13} /></button></div>}
+          {listError && <div className="explorer-search-error" role="status"><span>{listError}</span><button type="button" aria-label="Retry search" onClick={() => void refreshExplorerSearch(query)}><RefreshCw size="var(--ds-icon-md)" /></button></div>}
           <div className="explorer-tree" role="tree" aria-label="Folders and notes" aria-busy={documentListStatus === "loading"}>
             <button type="button" role="treeitem" className={`explorer-root-row${screen.kind === "library" ? " selected" : ""}`} aria-current={screen.kind === "library" ? "page" : undefined} onClick={() => void navigateToLibrary()}>
-              <BookOpen size={15} /><span>All notes</span><span className="folder-count">{documents.length}</span>
+              <BookOpen size="var(--ds-icon-md)" /><span>All notes</span><span className="folder-count">{documents.length}</span>
             </button>
             <div
               className="folder-tree-row explorer-folder-row explorer-unfiled-row"
@@ -2320,9 +2320,9 @@ export function WorkspacePage() {
                 if (next.has(UNFILED_TREE_ID)) next.delete(UNFILED_TREE_ID);
                 else next.add(UNFILED_TREE_ID);
                 return next;
-              })}>{unfiledOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
+              })}>{unfiledOpen ? <ChevronDown size="var(--ds-icon-md)" /> : <ChevronRight size="var(--ds-icon-md)" />}</button>
               <button type="button" role="treeitem" aria-expanded={unfiledOpen} className={`folder-nav-item folder-tree-button${activeFolderId === "root" ? " active" : ""}`} onClick={() => void navigateToFolder("root")}>
-                <Folder size={15} /><span>Unfiled</span><span className="folder-count">{documents.filter((document) => document.folderId === null).length}</span>
+                <Folder size="var(--ds-icon-md)" /><span>Unfiled</span><span className="folder-count">{documents.filter((document) => document.folderId === null).length}</span>
               </button>
             </div>
             {unfiledOpen && <div role="group" className="explorer-children">{renderFileRows(null, 1, true)}</div>}
@@ -2333,7 +2333,7 @@ export function WorkspacePage() {
           {activeFolder && (
             <div className="folder-admin" aria-label={`${activeFolder.name} folder actions`}>
               <div className="folder-admin-actions">
-                <button type="button" onClick={() => void beginFolderCreateInWorkspace(activeFolder.id)}><FolderPlus size={13} /> Subfolder</button>
+                <button type="button" onClick={() => void beginFolderCreateInWorkspace(activeFolder.id)}><FolderPlus size="var(--ds-icon-md)" /> Subfolder</button>
                 <button type="button" onClick={() => void renameActiveFolder()}>Rename</button>
                 <button type="button" onClick={() => void deleteFolderAndReturn()}>Delete empty</button>
               </div>
@@ -2357,7 +2357,7 @@ export function WorkspacePage() {
           onClick={() => fileInputRef.current?.click()}
           disabled={importing}
         >
-          {importing ? <LoaderCircle className="spin" size={14} /> : <ArrowUpFromLine size={14} />}
+          {importing ? <LoaderCircle className="spin" size="var(--ds-icon-md)" /> : <ArrowUpFromLine size="var(--ds-icon-md)" />}
           <span className={surface === "drawer" ? "drawer-tool-label" : undefined}>
             {surface === "drawer" ? "Import Markdown" : "Import"}
           </span>
@@ -2367,7 +2367,7 @@ export function WorkspacePage() {
           className={"text-tool" + (surface === "drawer" ? " drawer-tool" : "")}
           onClick={() => void exportNotes()}
         >
-          <ArrowDownToLine size={14} />
+          <ArrowDownToLine size="var(--ds-icon-md)" />
           <span className={surface === "drawer" ? "drawer-tool-label" : undefined}>
             {surface === "drawer" ? "Export backup" : "Export"}
           </span>
@@ -2611,9 +2611,9 @@ export function WorkspacePage() {
           aria-expanded={showDrawer}
           aria-controls={"fieldnotes-mobile-drawer-" + screen.activityId}
           onClick={(event) => openMobileDrawer(event.currentTarget)}
-        ><Menu size={19} aria-hidden="true" /></button>
+        ><Menu size="var(--ds-icon-lg)" aria-hidden="true" /></button>
         <div className="mobile-topbar-brand">
-          <span className="brand-mark"><BookOpen size={17} strokeWidth={2.1} /></span>
+          <span className="brand-mark"><BookOpen size="var(--ds-icon-md)" strokeWidth={2.1} /></span>
           <span>Fieldnotes</span>
         </div>
         <div className="mobile-topbar-sync" aria-label={connectionLabel} aria-live="polite">
@@ -2643,11 +2643,11 @@ export function WorkspacePage() {
         hidden={workspaceRenderer === "mobile-stackflow" && !drawerPresented}
       >
         <button type="button" className="mobile-drawer-close" onClick={closeMobileDrawer}>
-          <X size={18} aria-hidden="true" /><span>Close navigation</span>
+          <X size="var(--ds-icon-lg)" aria-hidden="true" /><span>Close navigation</span>
         </button>
         <div className="brand-lockup">
           <div className="brand-identity">
-            <div className="brand-mark"><BookOpen size={18} strokeWidth={2.1} /></div>
+            <div className="brand-mark"><BookOpen size="var(--ds-icon-lg)" strokeWidth={2.1} /></div>
             <div className="brand-copy">
               <div className="brand-name">Fieldnotes</div>
               <div className="brand-caption">PERSONAL LIBRARY</div>
@@ -2662,21 +2662,21 @@ export function WorkspacePage() {
               aria-expanded={!desktopSidebarCollapsed}
               onClick={() => setDesktopSidebarCollapsed((collapsed) => !collapsed)}
             >
-              {desktopSidebarCollapsed ? <PanelLeftOpen size={16} aria-hidden="true" /> : <PanelLeftClose size={16} aria-hidden="true" />}
+              {desktopSidebarCollapsed ? <PanelLeftOpen size="var(--ds-icon-md)" aria-hidden="true" /> : <PanelLeftClose size="var(--ds-icon-md)" aria-hidden="true" />}
             </button>
           )}
         </div>
 
         {workspaceRenderer === "desktop" && renderFolderBrowser("sidebar")}
         {workspaceRenderer === "desktop" && <div className="sidebar-data-actions">{renderListTools("desktop")}</div>}
-        {workspaceRenderer === "desktop" && <button className={`rail-link${screen.kind === "recent" ? " active" : ""}`} type="button" aria-label="Recent changes" onClick={() => void navigateToRecent()}><Clock3 size={16} /><span>Recent changes</span></button>}
+        {workspaceRenderer === "desktop" && <button className={`rail-link${screen.kind === "recent" ? " active" : ""}`} type="button" aria-label="Recent changes" onClick={() => void navigateToRecent()}><Clock3 size="var(--ds-icon-md)" /><span>Recent changes</span></button>}
         {workspaceRenderer === "mobile-stackflow" && <>
           <div className="rail-section-label">YOUR SPACE</div>
           <button className={`rail-link${screen.kind === "library" ? " active" : ""}`} type="button" aria-label="All notes" onClick={() => void navigateToLibrary()}>
-            <FileText size={16} /><span>All notes</span>
+            <FileText size="var(--ds-icon-md)" /><span>All notes</span>
             <span className="rail-count">{documentListStatus === "loaded" ? documents.length : <span className="count-skeleton" role="status" aria-label="Loading note count" />}</span>
           </button>
-          <button className={`rail-link${screen.kind === "recent" ? " active" : ""}`} type="button" aria-label="Recent changes" onClick={() => void navigateToRecent()}><Clock3 size={16} /><span>Recent changes</span></button>
+          <button className={`rail-link${screen.kind === "recent" ? " active" : ""}`} type="button" aria-label="Recent changes" onClick={() => void navigateToRecent()}><Clock3 size="var(--ds-icon-md)" /><span>Recent changes</span></button>
           {renderFolderBrowser("drawer")}
         </>}
 
@@ -2689,7 +2689,7 @@ export function WorkspacePage() {
         >
           <span className="rail-section-label">RECENT ACTIVITY</span>
           <span className="live-dot" aria-hidden="true" />
-          {recentActivityExpanded ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+          {recentActivityExpanded ? <ChevronDown size="var(--ds-icon-md)" aria-hidden="true" /> : <ChevronRight size="var(--ds-icon-md)" aria-hidden="true" />}
         </button>
         {recentActivityExpanded && <div id="recent-activity-list" className="activity-list" role="region" aria-label="Recent Activity">
           {recentChanges.slice(-7).reverse().map((change) => (
@@ -2711,7 +2711,7 @@ export function WorkspacePage() {
         </div>}
 
         {workspaceRenderer === "desktop" && <button type="button" className="rail-link vault-settings-link" onClick={openVaultSettings}>
-          <Settings2 size={16} aria-hidden="true" /><span>Vault settings</span>
+          <Settings2 size="var(--ds-icon-md)" aria-hidden="true" /><span>Vault settings</span>
         </button>}
 
         {workspaceRenderer === "mobile-stackflow" && (
@@ -2723,11 +2723,11 @@ export function WorkspacePage() {
               onClick={toggleTheme}
               aria-label={theme === "dark" ? "Switch to light appearance" : "Switch to dark appearance"}
             >
-              {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+              {theme === "dark" ? <Sun size="var(--ds-icon-md)" /> : <Moon size="var(--ds-icon-md)" />}
               <span>{theme === "dark" ? "Light appearance" : "Dark appearance"}</span>
             </button>
             <button type="button" className="drawer-action" onClick={openVaultSettings}>
-              <Settings2 size={17} aria-hidden="true" /><span>Vault settings</span>
+              <Settings2 size="var(--ds-icon-md)" aria-hidden="true" /><span>Vault settings</span>
             </button>
             <div className="mobile-drawer-data-actions">{renderListTools("drawer")}</div>
           </section>
@@ -2747,11 +2747,11 @@ export function WorkspacePage() {
           </div>
           <div className="mobile-list-actions">
             <button className="icon-button theme-toggle theme-toggle-list" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
-              {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+              {theme === "dark" ? <Sun size="var(--ds-icon-md)" /> : <Moon size="var(--ds-icon-md)" />}
             </button>
-            <button className="mobile-recent-button" type="button" onClick={() => void navigateToRecent()} aria-label="Recent changes"><Clock3 size={18} /></button>
+            <button className="mobile-recent-button" type="button" onClick={() => void navigateToRecent()} aria-label="Recent changes"><Clock3 size="var(--ds-icon-lg)" /></button>
             <button className="icon-button add-note-button" type="button" onClick={() => void createAndOpenNote()} aria-label="Create a note">
-              <Plus size={18} />
+              <Plus size="var(--ds-icon-lg)" />
             </button>
           </div>
         </div>
@@ -2765,7 +2765,7 @@ export function WorkspacePage() {
           }}
         >
           <label className="search-box">
-            <Search size={16} aria-hidden="true" />
+            <Search size="var(--ds-icon-md)" aria-hidden="true" />
             <input
               ref={searchInputRef}
               type="search"
@@ -2776,7 +2776,7 @@ export function WorkspacePage() {
               placeholder="Search your notes"
               aria-label="Search all notes"
             />
-            {query && <button type="button" className="clear-search" aria-label="Clear search" onClick={() => setQuery("")}><X size={14} /></button>}
+            {query && <button type="button" className="clear-search" aria-label="Clear search" onClick={() => setQuery("")}><X size="var(--ds-icon-md)" /></button>}
             {!query && <kbd>⌘ K</kbd>}
           </label>
           {showSearchSuggestions && !query.trim() && orderedDocuments.length > 0 && (
@@ -2804,7 +2804,7 @@ export function WorkspacePage() {
 
         <div className="list-filter-row">
           <label className="sort-control">
-            <ArrowDownUp size={14} aria-hidden="true" />
+            <ArrowDownUp size="var(--ds-icon-md)" aria-hidden="true" />
             <select aria-label="Sort notes" value={sortOrder} onChange={(event) => setSortOrder(event.currentTarget.value as SortOrder)}>
               <option value="updated-desc">Updated · newest</option>
               <option value="updated-asc">Updated · oldest</option>
@@ -2818,7 +2818,7 @@ export function WorkspacePage() {
           )}
         </div>
 
-        {listError && <div className="list-error"><span>{listError}</span><button type="button" onClick={() => void refreshDocuments().catch(() => setListError("The local service is unavailable. Reconnecting…"))}><RefreshCw size={14} /> Retry</button></div>}
+        {listError && <div className="list-error"><span>{listError}</span><button type="button" onClick={() => void refreshDocuments().catch(() => setListError("The local service is unavailable. Reconnecting…"))}><RefreshCw size="var(--ds-icon-md)" /> Retry</button></div>}
 
         <div
           className="document-list"
@@ -2845,10 +2845,10 @@ export function WorkspacePage() {
           ))}
           {documentListStatus === "loaded" && visibleDocuments.length === 0 && !listError && (
             <div className="empty-list">
-              <div className="empty-list-icon"><Search size={17} /></div>
+              <div className="empty-list-icon"><Search size="var(--ds-icon-md)" /></div>
               <strong>{query ? "No matching notes" : "Nothing here yet"}</strong>
               <span>{query ? "Try a different title or phrase." : "Create a note to get started."}</span>
-              {!query && <button type="button" onClick={() => void createAndOpenNote()}><Plus size={15} /> New note</button>}
+              {!query && <button type="button" onClick={() => void createAndOpenNote()}><Plus size="var(--ds-icon-md)" /> New note</button>}
             </div>
           )}
         </div>
@@ -2859,12 +2859,12 @@ export function WorkspacePage() {
         {screen.kind === "recent" ? (
           <div className="recent-workspace">
             <header className="recent-page-header">
-              <button type="button" className="recent-back" onClick={navigateBack} aria-label="Go back"><ChevronLeft size={20} /></button>
+              <button type="button" className="recent-back" onClick={navigateBack} aria-label="Go back"><ChevronLeft size="var(--ds-icon-lg)" /></button>
               <div>
                 <div className="eyebrow">YOUR SPACE</div>
                 <h1 className="workspace-title" tabIndex={-1}>Recent changes</h1>
               </div>
-              <button type="button" className="recent-library" onClick={() => void navigateToLibrary()}><FileText size={15} /> All notes</button>
+              <button type="button" className="recent-library" onClick={() => void navigateToLibrary()}><FileText size="var(--ds-icon-md)" /> All notes</button>
             </header>
             <div className="recent-page-content">
               {routeError && <div className="list-error" role="status">{routeError}</div>}
@@ -2895,24 +2895,24 @@ export function WorkspacePage() {
           <>
             <header className="editor-toolbar">
               <div className="editor-breadcrumb">
-                <button className="mobile-back" type="button" onClick={backFromDocument} aria-label="Back to notes"><ChevronLeft size={18} /></button>
+                <button className="mobile-back" type="button" onClick={backFromDocument} aria-label="Back to notes"><ChevronLeft size="var(--ds-icon-lg)" /></button>
                 <span className="breadcrumb-muted">{draftFolderId ? folderPathById.get(draftFolderId) ?? "Folder" : "Unfiled"}</span><span className="breadcrumb-divider">/</span>
                 <span className="breadcrumb-title">{draftTitle || "Untitled note"}</span>
               </div>
               <div className="toolbar-actions">
                 <div className={`save-indicator ${saveState}`}>
-                  {saveState === "saving" ? <LoaderCircle className="spin" size={14} /> : saveState === "saved" ? <Check size={14} /> : saveState === "conflict" ? <RefreshCw size={13} /> : <span className="unsaved-dot" />}
+                  {saveState === "saving" ? <LoaderCircle className="spin" size="var(--ds-icon-md)" /> : saveState === "saved" ? <Check size="var(--ds-icon-md)" /> : saveState === "conflict" ? <RefreshCw size="var(--ds-icon-md)" /> : <span className="unsaved-dot" />}
                   <span>{saveStateLabel(saveState)}</span>
                 </div>
                 {saveState === "error" && <button type="button" className="autosave-retry" onClick={() => void retrySave()}>Retry</button>}
-                <button className="icon-button toolbar-delete" type="button" onClick={() => void deleteAndReturn()} aria-label="Delete note"><Trash2 size={16} /></button>
+                <button className="icon-button toolbar-delete" type="button" onClick={() => void deleteAndReturn()} aria-label="Delete note"><Trash2 size="var(--ds-icon-md)" /></button>
                 <button className="icon-button theme-toggle theme-toggle-editor" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
-                  {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+                  {theme === "dark" ? <Sun size="var(--ds-icon-md)" /> : <Moon size="var(--ds-icon-md)" />}
                 </button>
               </div>
             </header>
 
-            {notice && <div className={`notice-bar${saveState === "error" || saveState === "conflict" ? " warning" : ""}`} role="status"><span>{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice("")}><X size={14} /></button></div>}
+            {notice && <div className={`notice-bar${saveState === "error" || saveState === "conflict" ? " warning" : ""}`} role="status"><span>{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice("")}><X size="var(--ds-icon-md)" /></button></div>}
             {!draftRecoveryAvailable && <div className="notice-bar warning" role="status"><span>This browser could not keep a local recovery copy. Keep this tab open until sync completes.</span></div>}
             {(connection !== "connected" || reconciliationError) && <div className="sync-banner"><span className={`connection-dot ${connection === "connected" ? "connected" : "reconnecting"}`} />{connection !== "connected" ? "Reconnecting to the local service. Drafts stay in this window." : "The live stream is connected, but saved changes still need reconciliation."}{connection === "connected" && <button type="button" onClick={() => void reconcileChanges()}>Retry sync</button>}</div>}
             {externalVersion !== null && !externalDelete && (
@@ -2952,11 +2952,11 @@ export function WorkspacePage() {
               <div className="document-properties" aria-label="Note properties">
                   <div className="document-property-row">
                     <span className="document-property-icon" aria-hidden="true">
-                      {saveState === "saving" ? <LoaderCircle className="spin" size={18} />
-                        : saveState === "conflict" ? <RefreshCw size={18} />
-                          : saveState === "error" ? <X size={18} />
+                      {saveState === "saving" ? <LoaderCircle className="spin" size="var(--ds-icon-lg)" />
+                        : saveState === "conflict" ? <RefreshCw size="var(--ds-icon-lg)" />
+                          : saveState === "error" ? <X size="var(--ds-icon-lg)" />
                             : saveState === "unsaved" ? <span className="document-status-unsaved" />
-                              : <Check size={18} />}
+                              : <Check size="var(--ds-icon-lg)" />}
                     </span>
                     <span className="document-property-label">Status</span>
                     <span className="document-property-value">
@@ -2964,12 +2964,12 @@ export function WorkspacePage() {
                     </span>
                   </div>
                   <div className="document-property-row">
-                    <span className="document-property-icon" aria-hidden="true"><CalendarDays size={18} /></span>
+                    <span className="document-property-icon" aria-hidden="true"><CalendarDays size="var(--ds-icon-lg)" /></span>
                     <span className="document-property-label">Created</span>
                     <time className="document-property-value" dateTime={displayDocument.createdAt}>{formatDocumentDate(displayDocument.createdAt)}</time>
                   </div>
                   <label className="document-property-row document-folder-property">
-                    <span className="document-property-icon" aria-hidden="true"><Folder size={18} /></span>
+                    <span className="document-property-icon" aria-hidden="true"><Folder size="var(--ds-icon-lg)" /></span>
                     <span className="document-property-label">Folder</span>
                     <span className="document-property-value">
                       <select
@@ -2983,12 +2983,12 @@ export function WorkspacePage() {
                     </span>
                   </label>
                   <div className="document-property-row">
-                    <span className="document-property-icon" aria-hidden="true"><Clock3 size={18} /></span>
+                    <span className="document-property-icon" aria-hidden="true"><Clock3 size="var(--ds-icon-lg)" /></span>
                     <span className="document-property-label">Updated</span>
                     <time className="document-property-value" dateTime={displayDocument.updatedAt}>{formatDocumentDate(displayDocument.updatedAt)}</time>
                   </div>
                   <div className="document-property-row">
-                    <span className="document-property-icon" aria-hidden="true"><FileText size={18} /></span>
+                    <span className="document-property-icon" aria-hidden="true"><FileText size="var(--ds-icon-lg)" /></span>
                     <span className="document-property-label">Version</span>
                     <span className="document-property-value">v{displayDocument.version}</span>
                   </div>
@@ -3031,10 +3031,10 @@ export function WorkspacePage() {
                 />
               </div>
               <section className="backlinks-panel">
-                <div className="backlinks-heading"><Link2 size={15} /><span>LINKED FROM</span><span className="backlink-count">{linkedTitles.length}</span></div>
+                <div className="backlinks-heading"><Link2 size="var(--ds-icon-md)" /><span>LINKED FROM</span><span className="backlink-count">{linkedTitles.length}</span></div>
                 {linkedTitles.length ? (
                   <div className="backlink-list">
-                    {linkedTitles.map((document) => <button type="button" key={document.id} onClick={() => void navigateToDocument(document.id)}><FileText size={14} />{document.title}<span>{relativeDate(document.updatedAt)}</span></button>)}
+                    {linkedTitles.map((document) => <button type="button" key={document.id} onClick={() => void navigateToDocument(document.id)}><FileText size="var(--ds-icon-md)" />{document.title}<span>{relativeDate(document.updatedAt)}</span></button>)}
                   </div>
                 ) : <p className="no-backlinks">No notes link here yet. Add <code>[[{draftTitle || "this note"}]]</code> to another note.</p>}
               </section>
@@ -3056,7 +3056,7 @@ export function WorkspacePage() {
           documentLoadError?.documentId === screen.documentId ? (
             <div className="document-load-error" role="alert">
               <strong>{documentLoadError.message}</strong>
-              <button type="button" onClick={() => void ensureDocumentForRoute(screen.documentId)}><RefreshCw size={14} /> Try again</button>
+              <button type="button" onClick={() => void ensureDocumentForRoute(screen.documentId)}><RefreshCw size="var(--ds-icon-md)" /> Try again</button>
             </div>
           ) : <WorkspaceLoadingSkeleton document />
         ) : documentListStatus === "loading" ? (
@@ -3065,11 +3065,11 @@ export function WorkspacePage() {
           <div className="workspace-load-error" role="status">
             <strong>The local library could not be loaded.</strong>
             <span>Your notes are still stored locally.</span>
-            <button type="button" onClick={() => void refreshDocuments().catch(() => setListError("The local service is unavailable. Reconnecting…"))}><RefreshCw size={14} /> Retry</button>
+            <button type="button" onClick={() => void refreshDocuments().catch(() => setListError("The local service is unavailable. Reconnecting…"))}><RefreshCw size="var(--ds-icon-md)" /> Retry</button>
           </div>
         ) : (
           <>
-          {notice && <div className={`notice-bar${saveState === "error" || saveState === "conflict" ? " warning" : ""}`} role="status"><span>{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice("")}><X size={14} /></button></div>}
+          {notice && <div className={`notice-bar${saveState === "error" || saveState === "conflict" ? " warning" : ""}`} role="status"><span>{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice("")}><X size="var(--ds-icon-md)" /></button></div>}
           <div className="welcome-state">
             <div className="welcome-art"><span className="art-paper paper-back" /><span className="art-paper paper-front"><span /><span /><span /></span><div className="art-spark spark-one">✳</div><div className="art-spark spark-two">✳</div></div>
             {documents.length > 0 ? (
@@ -3085,7 +3085,7 @@ export function WorkspacePage() {
                 <p>Keep thoughts in Markdown, connect them with wikilinks, and pick up where you left off—on this Mac or through your agents.</p>
               </>
             )}
-            <button type="button" className="welcome-create" onClick={() => void createAndOpenNote()}><Plus size={16} /> {documents.length > 0 ? "Create a note" : "Create your first note"}</button>
+            <button type="button" className="welcome-create" onClick={() => void createAndOpenNote()}><Plus size="var(--ds-icon-md)" /> {documents.length > 0 ? "Create a note" : "Create your first note"}</button>
             <div className="welcome-shortcut"><span>Tip</span> Type <code>[[</code> while writing to link another note.</div>
           </div>
           </>
