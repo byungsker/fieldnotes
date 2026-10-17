@@ -29,17 +29,17 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { ApiError, apiRequest, jsonRequest } from "./api";
+import { ApiError, apiRequest, jsonRequest } from "../../../shared/api";
 import { ActionDialog, type ActionDialogConfig, type ActionDialogResult } from "./ActionDialog";
-import type { AppViewContextValue, WorkspaceScreen } from "./AppViewContext";
-import { MarkdownLiveEditor } from "../packages/markdown-live-editor";
+import type { AppViewContextValue, WorkspaceScreen } from "./WorkspaceViewContext";
+import { MarkdownLiveEditor } from "../../../../packages/markdown-live-editor";
 import { SearchHighlight } from "./SearchHighlight";
 import { VaultSettingsDialog } from "./VaultSettingsDialog";
-import { createFieldnotesEditorAdapters } from "./editor-adapters";
-import { formatDocumentDate } from "./document-date";
-import { resolveMobileDrawerSwipe, resolveMobileDrawerSwipeDrag } from "./mobile-drawer-swipe";
-import { isSidebarToggleShortcut } from "./keyboard-shortcuts";
-import { pushVaultSettingsHistoryEntry } from "./vault-settings-history";
+import { createFieldnotesEditorAdapters } from "../api/editor-adapters";
+import { formatDocumentDate } from "../lib/document-date";
+import { resolveMobileDrawerSwipe, resolveMobileDrawerSwipeDrag } from "../model/mobile-drawer-swipe";
+import { isSidebarToggleShortcut } from "../model/keyboard-shortcuts";
+import { pushVaultSettingsHistoryEntry } from "../model/vault-settings-history";
 import {
   AUTOSAVE_DELAY_MS,
   clearLocalDraft,
@@ -49,8 +49,8 @@ import {
   rebaseDraft,
   writeLocalDraft,
   type LocalDraftSnapshot,
-} from "./autosave";
-import type { ChangeRecord, DocumentRecord, DocumentSummary, FolderRecord } from "./types";
+} from "../model/autosave";
+import type { ChangeRecord, DocumentRecord, DocumentSummary, FolderRecord } from "../model/workspace-types";
 import {
   mergeWorkspaceHistoryState,
   workspaceHistoryIndex,
@@ -62,7 +62,7 @@ import {
   workspaceRoutesEqual,
   type WorkspaceNavigation,
   type WorkspaceRoute,
-} from "./workspace-routing";
+} from "../model/workspace-routing";
 
 type ConnectionState = "connecting" | "connected" | "reconnecting";
 type SaveState = "saved" | "unsaved" | "saving" | "conflict" | "error";
@@ -81,7 +81,7 @@ const THEME_KEY = "fieldnotes:theme";
 const DESKTOP_SIDEBAR_KEY = "fieldnotes:desktop-sidebar-collapsed";
 const MOBILE_DRAWER_HISTORY_KEY = "fieldnotes:mobile-drawer";
 const UNFILED_TREE_ID = "__fieldnotes_unfiled__";
-const MobileWorkspace = lazy(() => import("./stackflow").then((module) => ({ default: module.MobileWorkspace })));
+const MobileWorkspace = lazy(() => import("./MobileWorkspace").then((module) => ({ default: module.MobileWorkspace })));
 type ActiveFolder = string | "root" | null;
 type DraftSnapshot = LocalDraftSnapshot;
 type DraftValues = { title: string; body: string; folderId: string | null; revision: number };
@@ -280,7 +280,7 @@ function WorkspaceLoadingSkeleton({ document = false }: { document?: boolean }) 
   );
 }
 
-export function App() {
+export function WorkspacePage() {
   const [currentRoute, setCurrentRoute] = useState<WorkspaceRoute>(() => workspaceRouteFromPathname(window.location.pathname));
   const initialHistoryIndex = workspaceHistoryIndex(window.history.state) ?? 0;
   const [historyIndex, setHistoryIndex] = useState(initialHistoryIndex);

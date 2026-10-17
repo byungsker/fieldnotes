@@ -1,4 +1,4 @@
-import type { ApiErrorBody } from "./types";
+type ApiErrorBody = { error?: string; message?: string; currentVersion?: number; currentHash?: string };
 
 export class ApiError extends Error {
   readonly status: number;

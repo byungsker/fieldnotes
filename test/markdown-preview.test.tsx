@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "node:test";
-import { MarkdownBody } from "../src/MarkdownBody";
-import { markdownBodyForPreview } from "../src/markdown-preview";
+import { MarkdownBody } from "../src/pages/workspace/ui/MarkdownBody";
+import { markdownBodyForPreview } from "../src/pages/workspace/lib/markdown-preview";
 
 const render = (markdown: string) => renderToStaticMarkup(
   <MarkdownBody markdown={markdown} documents={[]} onOpenDocument={() => undefined} />,

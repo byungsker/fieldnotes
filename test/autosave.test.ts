@@ -9,7 +9,7 @@ import {
   writeLocalDraft,
   type DraftStorage,
   type LocalDraftSnapshot,
-} from "../src/autosave";
+} from "../src/pages/workspace/model/autosave";
 
 function memoryStorage(): DraftStorage {
   const data = new Map<string, string>();

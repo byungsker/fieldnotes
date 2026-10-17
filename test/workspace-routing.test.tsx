@@ -3,7 +3,7 @@ import { test } from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createMemoryHistory } from "history";
-import { App } from "../src/App";
+import { WorkspacePage } from "../src/pages/workspace";
 import {
   mergeWorkspaceHistoryState,
   workspaceHistoryIndex,
@@ -11,8 +11,8 @@ import {
   workspacePathForRoute,
   workspaceRendererForViewport,
   workspaceRouteFromPathname,
-} from "../src/workspace-routing";
-import type { AppViewContextValue } from "../src/AppViewContext";
+} from "../src/pages/workspace/model/workspace-routing";
+import type { AppViewContextValue } from "../src/pages/workspace/ui/WorkspaceViewContext";
 
 function installBrowserGlobals(viewportWidth: number, pathname = "/") {
   const keys = ["window", "document", "sessionStorage"] as const;
@@ -52,7 +52,7 @@ function installBrowserGlobals(viewportWidth: number, pathname = "/") {
 test("desktop renders the direct workspace without mounting Stackflow; mobile mounts Stackflow", async () => {
   const restoreDesktop = installBrowserGlobals(1280);
   try {
-    const desktopHtml = renderToStaticMarkup(React.createElement(App));
+    const desktopHtml = renderToStaticMarkup(React.createElement(WorkspacePage));
     assert.match(desktopHtml, /data-fieldnotes-renderer="desktop"/);
     assert.doesNotMatch(desktopHtml, /class="[^"]*fieldnotes-stack(?:\s|")/);
   } finally {
@@ -61,7 +61,7 @@ test("desktop renders the direct workspace without mounting Stackflow; mobile mo
 
   const restoreMobile = installBrowserGlobals(390);
   try {
-    const { MobileWorkspace } = await import("../src/stackflow");
+    const { MobileWorkspace } = await import("../src/pages/workspace/ui/MobileWorkspace");
     const value: AppViewContextValue = {
       currentRoute: { kind: "library" },
       navigation: { push() {}, replace() {}, pop() {}, canGoBack: false },

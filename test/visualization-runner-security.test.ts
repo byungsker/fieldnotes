@@ -14,9 +14,9 @@ const apiSource = readFileSync(path.join(projectRoot, "server/api.ts"), "utf8");
 const assetSource = readFileSync(path.join(projectRoot, "server/visualization-assets.ts"), "utf8");
 const editorSource = readFileSync(path.join(projectRoot, "packages/markdown-live-editor/SandboxedVisualization.tsx"), "utf8");
 const viewBlockSource = readFileSync(path.join(projectRoot, "packages/markdown-live-editor/FieldnotesViewBlock.tsx"), "utf8");
-const adaptersSource = readFileSync(path.join(projectRoot, "src/editor-adapters.ts"), "utf8");
+const adaptersSource = readFileSync(path.join(projectRoot, "src/pages/workspace/api/editor-adapters.ts"), "utf8");
 const frameHeightSource = readFileSync(path.join(projectRoot, "packages/markdown-live-editor/visualization-frame-height.ts"), "utf8");
-const appSource = readFileSync(path.join(projectRoot, "src/App.tsx"), "utf8");
+const appSource = readFileSync(path.join(projectRoot, "src/pages/workspace/ui/WorkspacePage.tsx"), "utf8");
 const runnerScriptHash = `sha256-${createHash("sha256").update(runnerSource).digest("base64")}`;
 
 function generatedWorkerSource(javascript = 'return { html: "<p>fixture</p>", css: "" };'): string {

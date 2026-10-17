@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createFieldnotesEditorAdapters } from "../src/editor-adapters.ts";
+import { createFieldnotesEditorAdapters } from "../src/pages/workspace/api/editor-adapters.ts";
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();

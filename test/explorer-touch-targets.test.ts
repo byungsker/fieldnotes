@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 
-const stylesheet = readFileSync(path.resolve(import.meta.dirname, "../src/styles.css"), "utf8");
+const stylesheet = readFileSync(path.resolve(import.meta.dirname, "../src/app/styles.css"), "utf8");
 
 test("touch-primary explorer devices keep row actions visible with 44px targets", () => {
   const touchRuleMatch = stylesheet.match(/@media \(hover: none\), \(pointer: coarse\) \{([\s\S]*?)\n\}/);
