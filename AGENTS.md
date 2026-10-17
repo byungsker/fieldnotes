@@ -18,7 +18,9 @@ fieldnotes/
 │   ├── view-query-limits.ts          # 저장소·시각화 공용 조회 제한
 │   ├── routes/                       # 기능별 API 등록
 │   ├── http/                         # 요청 검증과 오류 응답
-│   ├── storage/                      # SQLite와 파일 vault
+│   ├── storage/                      # 저장소 공개 API와 모드 선택
+│   │   ├── database/                 # SQLite 스키마·조회·변경·vault 인덱스
+│   │   └── vault/                    # 파일 접근·manifest·이관 내부 구현
 │   ├── visualization/                # 시각화 조회·자산·frontmatter
 │   └── bookmarks/                    # 북마크 metadata 조회
 ├── shared/                           # 브라우저·서버·편집기 공용 타입과 함수
@@ -72,6 +74,7 @@ fieldnotes/
 - API 등록은 `server/routes/`의 `registerXRoutes`로 나누고 필요한 의존성을 명시적으로 전달한다. 공통 요청 오류는 `server/http/validation.ts`의 한 클래스를 사용하며 `server/http/errors.ts`에서 HTTP 응답으로 변환한다.
 - 보안·인증·Origin·응답 추적 → JSON parser → vault reconcile → API routes·SSE → API 404 → 정적 파일·SPA → 오류 처리 순서를 유지한다. SSE와 drain 상태는 `createApp` 인스턴스마다 소유한다.
 - 저장 모드는 구분한다. SQLite 모드에서는 SQLite가 기준 데이터이고, vault 모드에서는 Markdown 파일과 `.fieldnotes` metadata가 기준 데이터다.
+- 저장소 소비자는 `server/storage/database.ts`와 `server/storage/vault.ts`의 공개 API를 사용한다. 내부 구현은 `database/`와 `vault/`에 두며 내부 모듈이 공개 진입점을 다시 import해 순환하지 않도록 한다.
 - 문서·폴더 변경 요청은 읽은 버전을 요구한다. vault 문서는 `expectedHash`도 검증하며, 충돌 시 최신 값을 덮어쓰지 않는다.
 - `fieldnotes-view` 사용자 코드는 편집기 호스트, iframe/worker 실행기, API 검증, CSP가 함께 이루는 보안 경계다. 코드나 HTML 바이트 변경은 연동 지점을 모두 확인한다.
 

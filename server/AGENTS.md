@@ -10,8 +10,10 @@
 | `api.ts`의 `createApp` | 라우트 조합, 인증·CSP, SSE, drain | 미들웨어 순서와 인스턴스별 종료 상태 |
 | `routes/` | 문서·폴더·설정·미리보기·북마크·시각화 API | 명시적으로 전달한 저장소·어댑터와 요청 계약 |
 | `http/validation.ts`, `http/errors.ts` | 공통 요청 검증·오류 응답 | 동일한 오류 클래스와 기존 상태·메시지 |
-| `storage/database.ts` | SQLite 트랜잭션, vault 인덱스, 변경 발행 | FileVault 성공 여부와 sequence |
-| `storage/vault.ts`의 `FileVault` | manifest, 파일 쓰기, 복구, reconcile, migration | 파일·metadata의 내구성과 외부 편집 충돌 |
+| `storage/database.ts` | 저장소 열기·닫기와 공개 API 조합 | 데이터·vault 경로 검증과 저장 모드 선택 |
+| `storage/database/` | SQLite 스키마·행 변환·조회·트랜잭션, vault 인덱스·monitor | FileVault 성공 여부와 sequence, commit 후 변경 발행 |
+| `storage/vault.ts`의 `FileVault` | pending 작업, 복구, reconcile, 문서·폴더 변경 | private state와 파일·metadata 확정 순서 |
+| `storage/vault/` | 파일 접근·이름 규칙·manifest 검증·legacy 이관 | nofollow·fsync·hash 검사와 staging cutover |
 
 ## 시작·lock·종료
 
@@ -50,5 +52,6 @@
 - 저장·복구 변경: `../test/storage/vault.test.ts`와 `../test/workspace/vault-change-subscription.test.ts`에서 외부 편집 충돌, 재시작 복구, 인덱스와 변경 알림을 확인한다.
 - 시각화 API 변경: `../test/visualization/visualization-actions.test.ts`, `../test/visualization/visualization-assets.test.ts`, `../test/visualization/visualization-trust.test.ts`, `../test/visualization/visualization-runner-security.test.ts` 중 해당 경계를 확인한다.
 - `storage/`는 HTTP 라우트나 시각화 구현에 의존하지 않는다. 양쪽에서 사용하는 제한·오류 계약은 서버 공용 `view-query-limits.ts`를 따른다.
+- 내부 모듈의 의존성은 공통 타입·오류 → 파일·행·트랜잭션 도우미 → 인덱스·문서·폴더 처리 → 공개 진입점 순서로 유지한다. `database.ts`와 `vault.ts`의 재export는 기존 소비자의 함수·오류 클래스·타입 경계를 보존한다.
 - HTTP 오류·API 404·SPA 경계는 `../test/api/http-boundaries.test.ts`, API·CLI 통합은 `../test/api/library-integration.test.ts`로 확인한다.
 - 서버 타입 검사는 `../tsconfig.server.json`을 따른다. 테스트는 변경한 동작에 맞춰 선택하고 실제 데이터 경로와 분리한다.
