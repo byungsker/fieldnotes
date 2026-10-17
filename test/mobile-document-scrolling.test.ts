@@ -5,9 +5,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const styles = readFileSync(path.join(projectRoot, "src/styles.css"), "utf8");
+const styles = readFileSync(path.join(projectRoot, "src/app/styles.css"), "utf8");
 const mobileEditorStyles = readFileSync(path.join(projectRoot, "packages/markdown-live-editor/styles.css"), "utf8");
-const appSource = readFileSync(path.join(projectRoot, "src/App.tsx"), "utf8");
+const appSource = readFileSync(path.join(projectRoot, "src/pages/workspace/ui/WorkspacePage.tsx"), "utf8");
 
 test("mobile document and preview scrollers keep native iOS touch momentum", () => {
   assert.match(styles, /\.document-editor\s*\{[^}]*overflow-y:\s*auto;[^}]*-webkit-overflow-scrolling:\s*touch;/su);

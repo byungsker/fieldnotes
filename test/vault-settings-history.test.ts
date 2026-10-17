@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { pushVaultSettingsHistoryEntry } from "../src/vault-settings-history.js";
+import { pushVaultSettingsHistoryEntry } from "../src/pages/workspace/model/vault-settings-history.js";
 
 test("opening vault settings creates one history entry and preserves the current workspace state", () => {
   const initialState = {

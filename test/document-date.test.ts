@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatDocumentDate } from "../src/document-date.js";
+import { formatDocumentDate } from "../src/pages/workspace/lib/document-date.js";
 
 test("document timestamps remain relative until the exact 24-hour boundary", () => {
   const now = Date.parse("2026-10-06T15:00:00.000Z");

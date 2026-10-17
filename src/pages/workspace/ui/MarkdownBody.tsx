@@ -1,9 +1,9 @@
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { safeImageSource } from "../packages/markdown-live-editor";
-import { remarkWikiLinks } from "./remark-wikilinks";
-import { markdownBodyForPreview } from "./markdown-preview";
-import type { DocumentSummary } from "./types";
+import { safeImageSource } from "../../../../packages/markdown-live-editor";
+import { remarkWikiLinks } from "../lib/remark-wikilinks";
+import { markdownBodyForPreview } from "../lib/markdown-preview";
+import type { DocumentSummary } from "../model/workspace-types";
 
 type MarkdownBodyProps = {
   markdown: string;

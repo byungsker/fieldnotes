@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "node:test";
-import { SearchHighlight } from "../src/SearchHighlight";
+import { SearchHighlight } from "../src/pages/workspace/ui/SearchHighlight";
 
 test("literal search highlighting safely marks Korean, English, and punctuation", () => {
   const markup = renderToStaticMarkup(React.createElement(SearchHighlight, {

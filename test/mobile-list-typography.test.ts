@@ -4,7 +4,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 const root = path.resolve(import.meta.dirname, "..");
-const stylesheet = readFileSync(path.join(root, "src/styles.css"), "utf8");
+const stylesheet = readFileSync(path.join(root, "src/app/styles.css"), "utf8");
 const html = readFileSync(path.join(root, "index.html"), "utf8");
 const mobileTopbarStart = stylesheet.indexOf(".mobile-topbar, .mobile-drawer-backdrop, .mobile-drawer-close");
 const mobileStart = stylesheet.indexOf("@media (max-width: 820px)", mobileTopbarStart);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronRight, Folder, FolderOpen, LoaderCircle, X } from "lucide-react";
-import { apiRequest, jsonRequest } from "./api";
+import { apiRequest, jsonRequest } from "../../../shared/api";
 
 type VaultSettingsState = {
   currentPath: string | null;

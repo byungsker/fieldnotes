@@ -1,12 +1,12 @@
-import { apiRequest } from "./api";
+import { apiRequest } from "../../../shared/api";
 import type {
   BookmarkMetadata,
   EditorSnippet,
   MarkdownLiveEditorAdapters,
   NewEditorSnippet,
   PreviewDocument,
-} from "../packages/markdown-live-editor";
-import type { VisualizationAction, VisualizationQuery, VisualizationQueryResponse } from "../shared/visualization";
+} from "../../../../packages/markdown-live-editor";
+import type { VisualizationAction, VisualizationQuery, VisualizationQueryResponse } from "../../../../shared/visualization";
 import { subscribeToVaultChanges } from "./vault-change-subscription";
 
 const SNIPPETS_KEY = "fieldnotes:editor-snippets:v1";

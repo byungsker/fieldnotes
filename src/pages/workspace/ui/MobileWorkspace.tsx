@@ -5,9 +5,9 @@ import { historySyncPlugin } from "@stackflow/plugin-history-sync";
 import { stackflow, useActivity, useFlow, useStack } from "@stackflow/react";
 import type { ActivityComponentType, Actions } from "@stackflow/react";
 import { createMemoryHistory } from "history";
-import { AppViewContext, useAppViewContext, type AppViewContextValue, type WorkspaceScreen } from "./AppViewContext";
-import { stackConfig } from "./stackflow.config";
-import { workspaceRoutesEqual, type WorkspaceRoute } from "./workspace-routing";
+import { AppViewContext, useAppViewContext, type AppViewContextValue, type WorkspaceScreen } from "./WorkspaceViewContext";
+import { stackConfig } from "../config/activities";
+import { workspaceRoutesEqual, type WorkspaceRoute } from "../model/workspace-routing";
 
 const mobileHistory = createMemoryHistory({
   initialEntries: [window.location.pathname],

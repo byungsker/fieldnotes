@@ -33,5 +33,3 @@ export type ChangeRecord = {
   version: number;
   createdAt: string;
 };
-
-export type ApiErrorBody = { error?: string; message?: string; currentVersion?: number; currentHash?: string };

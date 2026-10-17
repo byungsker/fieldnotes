@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createVaultChangeSubscription } from "../src/vault-change-subscription.ts";
+import { createVaultChangeSubscription } from "../src/pages/workspace/api/vault-change-subscription.ts";
 
 class FakeEventSource extends EventTarget {
   closed = false;

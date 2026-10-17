@@ -11,7 +11,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createApp } from "../server/api.js";
 import { closeDatabase, createDocument, exportDocuments, openDatabase } from "../server/database.js";
-import { MarkdownBody } from "../src/MarkdownBody";
+import { MarkdownBody } from "../src/pages/workspace/ui/MarkdownBody";
 
 const projectDirectory = path.resolve(import.meta.dirname, "..");
 const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), "fieldnotes-test-"));

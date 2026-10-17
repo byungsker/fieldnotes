@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isSidebarToggleShortcut } from "../src/keyboard-shortcuts.ts";
+import { isSidebarToggleShortcut } from "../src/pages/workspace/model/keyboard-shortcuts.ts";
 
 test("Cmd+| matches the sidebar shortcut on Mac keyboards", () => {
   assert.equal(isSidebarToggleShortcut({ metaKey: true, ctrlKey: false, shiftKey: true, key: "|", code: "Backslash" }), true);

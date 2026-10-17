@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 import type { ReactNode } from "react";
-import type { WorkspaceNavigation, WorkspaceRoute } from "./workspace-routing";
+import type { WorkspaceNavigation, WorkspaceRoute } from "../model/workspace-routing";
 
 export type WorkspaceScreen = WorkspaceRoute & { activityId: string; isActive?: boolean };
 

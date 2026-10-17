@@ -5,7 +5,7 @@ import {
   resolveMobileDrawerSwipe,
   resolveMobileDrawerSwipeDrag,
   type MobileDrawerSwipeInput,
-} from "../src/mobile-drawer-swipe";
+} from "../src/pages/workspace/model/mobile-drawer-swipe";
 
 const openFromEdge: MobileDrawerSwipeInput = {
   drawerWasOpen: false,
