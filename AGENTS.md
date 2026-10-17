@@ -8,6 +8,7 @@ Fieldnotes는 React·TypeScript 인터페이스와 Node API로 구성된 로컬 
 
 ```text
 fieldnotes/
+├── .github/workflows/                # PR·main 자동 검증
 ├── src/
 │   ├── app/                          # React 마운트와 전역 스타일
 │   ├── pages/workspace/              # 탐색·편집 workspace 페이지 슬라이스
@@ -100,5 +101,6 @@ npm run kb -- list
 ## 참고 사항
 
 - 루트 README의 편집기 요약과 패키지 README의 preservation-card 설명은 세부 동작에서 차이가 있다. 편집기 구현 시 하위 패키지 README와 코드의 원문 보존 계약을 기준으로 확인한다.
-- 저장소에 CI 작업 흐름이 정의되어 있지 않다. `design-qa.md`는 수동 UI 검증 기록이며, 실제 브라우저 검증과 Node 기반 테스트 결과를 구분한다.
+- `.github/workflows/ci.yml`은 `main` 대상 PR과 `main` 푸시, 수동 실행에서 검증한다. `.nvmrc`의 Node 버전으로 `npm ci`, 린트, 테스트, 빌드를 실행하며 타입 검사는 빌드에 포함된다. 같은 ref의 이전 실행은 취소한다.
+- `design-qa.md`는 수동 UI 검증 기록이며, 실제 브라우저 검증과 Node 기반 테스트 결과를 구분한다.
 - 테스트·예제 Markdown에는 합성 데이터를 사용한다. `packages/markdown-live-editor/licenses/`의 라이선스 원문은 원본 배포처의 고지이므로 번역하거나 재작성하지 않는다.
