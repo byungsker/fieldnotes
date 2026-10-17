@@ -2,9 +2,9 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, w
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { closeDatabase, openDatabase, startVaultMonitor } from "./database.js";
+import { closeDatabase, openDatabase, startVaultMonitor } from "./storage/database.js";
 import { createApp } from "./api.js";
-import { resolveSavedVaultSelection } from "./vault-settings.js";
+import { resolveSavedVaultSelection } from "./storage/vault-settings.js";
 
 const isDevelopment = process.argv.includes("--dev");
 const host = process.env.KB_HOST ?? "127.0.0.1";

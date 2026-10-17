@@ -20,9 +20,9 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { homedir } from "node:os";
-import { closeDatabase, openDatabase } from "../server/database.js";
-import { FileVault, VaultStorageError } from "../server/vault.js";
-import { resolveSavedVaultSelection } from "../server/vault-settings.js";
+import { closeDatabase, openDatabase } from "../server/storage/database.js";
+import { FileVault, VaultStorageError } from "../server/storage/vault.js";
+import { resolveSavedVaultSelection } from "../server/storage/vault-settings.js";
 
 function parseArgs(values: string[]): { command?: string; flags: Record<string, string | true> } {
   const [command, ...rest] = values;

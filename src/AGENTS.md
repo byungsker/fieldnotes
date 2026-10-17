@@ -27,7 +27,7 @@
 
 ## 탐색과 모바일 화면
 
-- URL과 activity의 변환은 `workspace-routing.ts`에 모은다. 경로 추가 시 `stackflow.config.ts`와 activity 등록도 함께 확인한다.
+- URL과 activity의 변환은 `pages/workspace/model/workspace-routing.ts`에 모은다. 경로 추가 시 `pages/workspace/config/activities.ts`와 activity 등록도 함께 확인한다.
 - 브라우저 URL·history는 `pages/workspace/ui/WorkspacePage.tsx`의 navigation 경로로 갱신한다. `mergeWorkspaceHistoryState`로 다른 history 필드를 보존하고 `popstate`에서 route와 index를 함께 복원한다.
 - 모바일 Stackflow는 별도 memory history를 사용한다. 활성 activity를 앱의 `currentRoute`에 맞추는 연결을 유지하고 브라우저 history를 중복으로 push하지 않는다.
 - 모바일 drawer는 별도 history 항목을 가진다. 뒤로 가기로 drawer를 먼저 닫는 동작과 닫힌 뒤 대기 중 탐색을 처리하는 순서를 확인한다.
@@ -44,8 +44,8 @@
 
 ## 검증 선택
 
-- 저장 변경은 `../test/autosave.test.ts`, 외부 알림 변경은 `../test/vault-change-subscription.test.ts`, 탐색 변경은 `../test/workspace-routing.test.tsx`를 우선 확인한다.
-- 모바일 변경은 관련 `../test/mobile-*.test.ts`와 `../test/explorer-touch-targets.test.ts`를 선택한다. Node 기반 결과만으로 실제 브라우저 조작·시각 검증을 완료했다고 판단하지 않는다.
+- 저장 변경은 `../test/workspace/autosave.test.ts`, 외부 알림 변경은 `../test/workspace/vault-change-subscription.test.ts`, 탐색 변경은 `../test/workspace/workspace-routing.test.tsx`를 우선 확인한다.
+- 모바일 변경은 관련 `../test/workspace/mobile-*.test.ts`와 `../test/workspace/explorer-touch-targets.test.ts`를 선택한다. Node 기반 결과만으로 실제 브라우저 조작·시각 검증을 완료했다고 판단하지 않는다.
 - 브라우저에서는 한글 조합 입력, 저장 중 추가 편집, 외부 충돌, 문서 전환 후 draft 복구, URL 직접 진입, 뒤로·앞으로 이동 중 변경 영역에 해당하는 시나리오를 확인한다.
 - 수동 UI 결과는 `../design-qa.md`의 기록 방식과 구분해 남긴다. 실제 실행한 브라우저·viewport·조작·결과·캡처 경로를 적고 기존 기록의 통과 결과를 재사용하지 않는다.
 - 모바일 에뮬레이션 결과와 실제 기기 결과를 구별하고, 이번에 확인하지 않은 환경은 검증했다고 적지 않는다.
