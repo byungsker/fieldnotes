@@ -45,3 +45,20 @@ The first review found the folder context hidden by a generic mobile rule; the d
 - Date unit tests cover 23 h 59 min versus exactly 24 h, Korean calendar formatting across UTC midnight, and invalid timestamps. Lint, typecheck, and the isolated integration suite passed (35 tests). The visual browser was Chrome emulation; physical iPhone Safari was not tested.
 
 Synthetic captures are kept outside Git under `/tmp/fieldnotes-qa-*`; no reference or user-data images were added to the repository.
+
+## 2026-10-18 공통 디자인 토큰 검증
+
+기존 기록과 별도로 이번 토큰 변경을 검증했다. 앱·편집기·육아 기록의 실행 값은 `packages/markdown-live-editor/tokens.css`, 용도와 척도는 `DESIGN.md`를 기준으로 한다.
+
+- 환경: 합성 문서·사진을 넣은 임시 vault와 빌드된 Node 22 서버. 실제 vault와 운영 데이터는 사용하지 않았다.
+- 브라우저: Aside에서 데스크톱 1440×900을 먼저 확인했다. 해당 연결에 viewport 변경 API가 없어 모바일은 독립 Chrome 프로필에서 390×844, device scale factor 1, 터치 에뮬레이션으로 검증했다. 실제 iPhone·Safari 결과와 구분한다.
+- 밝은·어두운 테마의 탐색·문서·삭제 대화상자·육아 대시보드를 확인했다. 문서·목록·대화상자·미리보기에 가로 넘침이 없었고, 편집기 `--mle-ink`와 앱의 공통 ink 값이 일치했다. 문서 글자는 17px, 행간은 30.6px이었다.
+- 모바일 폴더 선택은 16px 글자와 44px 높이, 뒤로·삭제·목차·대화상자 버튼은 44px 동작 영역을 확인했다. 대화상자의 40px 버튼과 폴더 선택의 14px 우선순위 문제를 수정한 뒤 다시 측정했다. 아이콘은 공통 크기 토큰을 사용하며 닫기 아이콘은 20px로 표시되었다.
+- 모바일 대시보드의 4열 규칙이 반응형 규칙보다 우선하던 문제를 수정해 통계 카드를 2열로 표시했다. 일정 분류색과 오늘 표시는 공통 의미 토큰을 따른다.
+- 모바일 탐색에서 밝은 테마 전환을 조작했고 브라우저의 theme-color가 canvas 토큰과 함께 변경되었다. 어두운 테마 재진입에서도 canvas와 theme-color가 일치했다. 대화상자에서 Tab으로 이동한 삭제 버튼의 포커스는 공통 accent의 2px 윤곽이었다.
+- 본문을 편집해 Unsaved→Saved와 version 1→2를 확인했다. API의 저장된 본문에 입력한 문구와 원래 `![[/photos/example.png]]`가 함께 남아 있었다. 삭제 대화상자는 취소로 닫았다.
+- 자동 검증은 원시 색상·별도 글자/간격/반경 값·아이콘 크기, 정의되지 않은 토큰, 문서의 색상·글자·간격 표 불일치, 호환 별칭 순환·의미 불일치, 두 테마의 주요 텍스트 색 조합 4.5:1 대비를 검사한다.
+
+Node 22에서 루트 린트·185개 테스트·타입 검사를 포함한 빌드가 통과했다. 편집기 디렉터리만 저장소 밖으로 복사한 환경에서도 `npm ci`, 타입 검사, 55개 테스트가 통과했다. 빌드의 기존 대형 청크 경고는 별도 성능 검증 결과로 간주하지 않는다.
+
+이번 캡처와 측정은 로컬 `.omo/evidence/design-tokens-20261018/`의 `desktop-{light,dark}-*.png`, `mobile-{light,dark}-*.png`, `browser-metrics.jsonl`, `autosave.json`에 남겼다. 생성한 이미지와 합성 저장소는 Git에 포함하지 않는다.

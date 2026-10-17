@@ -149,7 +149,7 @@ export function VaultSettingsDialog({ onClose }: { onClose: () => void }) {
             <div className="eyebrow">SERVER STORAGE</div>
             <h2 id="vault-settings-title">Vault settings</h2>
           </div>
-          <button data-initial-focus type="button" className="action-dialog-close" onClick={close} aria-label="Close vault settings"><X size={18} /></button>
+          <button data-initial-focus type="button" className="action-dialog-close" onClick={close} aria-label="Close vault settings"><X size="var(--ds-icon-lg)" /></button>
         </header>
 
         <section className="vault-path-summary" aria-label="Current server vault">
@@ -165,21 +165,21 @@ export function VaultSettingsDialog({ onClose }: { onClose: () => void }) {
               <button type="button" onClick={() => void loadDirectory("")}>Documents</button>
               {pathSegments.map((segment, index) => (
                 <span className="vault-breadcrumb-item" key={`${segment}-${index}`}>
-                  <ChevronRight size={13} aria-hidden="true" />
+                  <ChevronRight size="var(--ds-icon-md)" aria-hidden="true" />
                   <button type="button" onClick={() => void loadDirectory(pathSegments.slice(0, index + 1).join("/"))}>{segment}</button>
                 </span>
               ))}
             </div>
             <button type="button" className="vault-verify-button" onClick={() => void verifyCurrent()} disabled={busy || loading || !listing || !listing.relativePath}>
-              {busy ? <LoaderCircle size={14} className="is-spinning" aria-hidden="true" /> : <FolderOpen size={14} aria-hidden="true" />}
+              {busy ? <LoaderCircle size="var(--ds-icon-md)" className="is-spinning" aria-hidden="true" /> : <FolderOpen size="var(--ds-icon-md)" aria-hidden="true" />}
               Verify this folder
             </button>
           </div>
-          {listing?.relativePath && <button type="button" className="vault-directory-up" onClick={navigateUp}><ChevronRight size={14} aria-hidden="true" /> Up one level</button>}
+          {listing?.relativePath && <button type="button" className="vault-directory-up" onClick={navigateUp}><ChevronRight size="var(--ds-icon-md)" aria-hidden="true" /> Up one level</button>}
           <div className="vault-directory-list" aria-busy={loading}>
             {loading ? <p className="vault-directory-empty" role="status">Loading folders…</p> : listing?.directories.length ? listing.directories.map((entry) => (
               <button type="button" className="vault-directory-row" key={entry.relativePath} onClick={() => void loadDirectory(entry.relativePath)}>
-                <Folder size={16} aria-hidden="true" /><span>{entry.name}</span><ChevronRight size={15} aria-hidden="true" />
+                <Folder size="var(--ds-icon-md)" aria-hidden="true" /><span>{entry.name}</span><ChevronRight size="var(--ds-icon-md)" aria-hidden="true" />
               </button>
             )) : <p className="vault-directory-empty">No visible subfolders here.</p>}
           </div>

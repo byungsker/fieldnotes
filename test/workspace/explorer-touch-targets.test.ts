@@ -10,9 +10,9 @@ test("touch-primary explorer devices keep row actions visible with 44px targets"
   assert.ok(touchRuleMatch, "touch-primary media query exists");
   const touchRule = touchRuleMatch[1];
 
-  assert.match(touchRule, /\.explorer-file-row \{ min-height: 44px; \}/);
+  assert.match(touchRule, /\.explorer-file-row \{ min-height: var\(--ds-control-touch\); \}/);
   assert.match(touchRule, /\.explorer-file-actions \{ pointer-events: auto; opacity: 1; transform: none; \}/);
-  assert.match(touchRule, /\.explorer-file-actions button \{ width: 44px; height: 44px; \}/);
-  assert.match(stylesheet, /\.left-rail\.mobile-navigation-drawer \.explorer-file-actions button \{ width: 44px; height: 44px; opacity: 1; \}/);
+  assert.match(touchRule, /\.explorer-file-actions button \{ width: var\(--ds-control-touch\); height: var\(--ds-control-touch\); \}/);
+  assert.match(stylesheet, /\.left-rail\.mobile-navigation-drawer \.explorer-file-actions button \{ width: var\(--ds-control-touch\); height: var\(--ds-control-touch\); opacity: 1; \}/);
   assert.doesNotMatch(stylesheet, /@media \(any-hover: none\)/);
 });

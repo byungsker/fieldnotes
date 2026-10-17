@@ -5,7 +5,7 @@
 
 ## 공개 경계와 호스트 연결
 
-- 공개 진입점은 `index.ts`이며 스타일 진입점은 `styles.css`다. export 변경 시 `package.json`의 `exports`와 소비 코드를 함께 확인한다.
+- 공개 진입점은 `index.ts`이며 스타일 진입점은 `styles.css`다. 공통 토큰만 가져올 때는 `tokens.css`를 사용한다. export 변경 시 `package.json`의 `exports`·`sideEffects`와 소비 코드를 함께 확인한다.
 - `types.ts`의 `MarkdownLiveEditorProps`와 `MarkdownLiveEditorAdapters`가 호스트 연결 계약이다.
 - 문서 값은 `value`로 받고 변경은 `onChange`로 전달한다. 호스트가 최신 값을 되돌려 줄 때 편집 상태와 선택 영역을 불필요하게 초기화하지 않는다.
 - 저장·네트워크·인증 책임은 호스트에 둔다. 이미지 업로드, 북마크 조회, 스니펫, 시각화 query/action은 선택적 어댑터를 통해 주입한다.
@@ -49,5 +49,5 @@
 - 원문 보존 변경은 `markdown-roundtrip.test.ts`, `markdown-line-endings.test.ts`, `node-view-regression.test.ts`의 관련 시나리오를 확인한다.
 - URL·미리보기·시각화 변경은 `markdown-safety.test.ts`, `preserved-block-preview.test.ts`, `preserved-markdown-preview.test.ts`, `fieldnotes-view-config.test.ts` 및 관련 `visualization-*.test.ts`를 확인한다. 육아 기록 호스트 연결은 `../../test/workspace/baby-preview-integration.test.ts`와 `babies-dataview.test.ts`에서 확인한다.
 - 독립성을 확인할 때 이 패키지만 임시 디렉터리에 복사하고 `npm ci`, `npm run typecheck`, `npm test`를 실행한다. 상위 저장소의 node_modules나 shared 소스가 없어도 통과해야 한다.
-- 스타일은 `.mle-*` 클래스와 `--mle-*` 변수를 유지하고 호스트 전역 스타일에 영향을 주는 선택자를 추가하지 않는다.
+- 스타일은 `.mle-*` 클래스와 `--mle-*` 별칭을 유지한다. 별칭과 컴포넌트는 공통 `tokens.css`의 `--ds-*`를 사용하며, 원시 디자인 값의 정의는 이 파일에만 둔다. 토큰은 루트 custom property만 정의하고 호스트 요소를 꾸미는 전역 선택자는 추가하지 않는다. 저장소의 `../../DESIGN.md`와 토큰 회귀 검증도 함께 갱신한다.
 - `licenses/`의 원본 라이선스 문구는 보존한다. 패키지 설명을 갱신하면서 번역하거나 재작성하지 않는다.

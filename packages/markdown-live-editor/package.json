@@ -9,13 +9,14 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test *.test.ts"
   },
-  "sideEffects": ["./styles.css"],
+  "sideEffects": ["./styles.css", "./tokens.css"],
   "exports": {
     ".": {
       "types": "./index.ts",
       "import": "./index.ts"
     },
     "./styles.css": "./styles.css",
+    "./tokens.css": "./tokens.css",
     "./visualization-contract": {
       "types": "./visualization-contract.ts",
       "import": "./visualization-contract.ts"

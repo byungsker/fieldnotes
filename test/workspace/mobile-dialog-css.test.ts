@@ -17,8 +17,10 @@ test("mobile dialog sheet overrides desktop sizing and retains 16px form control
   assert.match(mobileRule, /inset: auto 0 0/);
   assert.match(mobileRule, /width: 100%/);
   assert.match(mobileRule, /max-width: none/);
-  assert.match(mobileRule, /border-radius: 20px 20px 0 0/);
+  assert.match(mobileRule, /border-radius: var\(--ds-radius-xl\) var\(--ds-radius-xl\) 0 0/);
   assert.match(mobileRule, /--fieldnotes-visual-height/);
-  assert.match(stylesheet, /input:not\(\.title-input\), textarea, select \{ font-size: 16px !important; \}/);
+  assert.match(stylesheet, /input:not\(\.title-input\), textarea, select \{ font-size: var\(--ds-text-body\) !important; \}/);
+  assert.match(stylesheet, /\.document-folder-property select \{[^}]*font-size: var\(--ds-text-body\) !important;/);
+  assert.match(stylesheet, /\.action-dialog-close, \.action-dialog-actions button, \.vault-settings-actions button \{ min-width: var\(--ds-control-touch\); min-height: var\(--ds-control-touch\); \}/);
   assert.equal(stylesheet.slice(mobileRuleEnd + 1).includes(".action-dialog { width: min("), false);
 });

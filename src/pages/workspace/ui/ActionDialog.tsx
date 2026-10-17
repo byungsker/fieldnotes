@@ -172,7 +172,7 @@ export function ActionDialog({
           <header className="action-dialog-header">
             <h2 id="action-dialog-title">{config.title}</h2>
             <button className="action-dialog-close" type="button" onClick={() => complete(null)} aria-label="Close dialog">
-              <X size={18} />
+              <X size="var(--ds-icon-lg)" />
             </button>
           </header>
           {config.description && <p id="action-dialog-description" className="action-dialog-description">{config.description}</p>}

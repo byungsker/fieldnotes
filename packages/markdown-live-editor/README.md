@@ -51,7 +51,9 @@ The Markdown extension is the official `@tiptap/markdown` 3.31.4 package. It is 
 
 In controlled use, an echo of the editor's own latest value does not reset the ProseMirror document or selection. Opaque preservation nodes retain their exact Markdown through parse, edit, paste, and serialization. `onSerializationSafetyChange(false)` is reserved for an unexpected serializer failure; hosts should disable persistence and show the failure until it clears. Unsupported Markdown does not trigger a source-mode switch or pause saving.
 
-The `minHeight` prop accepts pixels as a number or any valid CSS length string. The stylesheet uses `.mle-*` classes and `--mle-*` custom properties so a host can override presentation without inheriting application branding.
+`minHeight`는 픽셀 숫자 또는 유효한 CSS 길이를 받습니다. `styles.css`는 패키지 내부 `tokens.css`를 불러옵니다. 색상·타이포그래피·간격·반경·그림자·전환 시간은 이 파일의 `--ds-*` 토큰을 사용하며, 토큰만 필요한 호스트는 `markdown-live-editor/tokens.css`를 가져올 수 있습니다. `data-theme="dark"`를 루트 요소에 설정하면 같은 의미 토큰의 어두운 테마 값을 사용합니다.
+
+`.mle-*` 클래스와 `--mle-*` 공개 별칭은 유지합니다. 기본 별칭은 공통 `--ds-color-*`에 연결되며, 호스트는 편집기 범위에서 별칭을 덮어쓸 수 있습니다. 육아 기록 등 호스트 미리보기는 공통 토큰을 직접 사용합니다. 새로운 컴포넌트에서 원시 색상이나 별도 크기 값을 추가하지 않고 기존 의미 토큰과 스케일을 재사용합니다.
 
 ## 호스트별 미리보기
 
