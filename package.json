@@ -14,7 +14,7 @@
     "build": "npm run typecheck && tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
     "lint": "eslint .",
-    "test": "node --import tsx --test test/*.test.* packages/markdown-live-editor/*.test.ts",
+    "test": "node --import tsx --test test/*/*.test.* packages/markdown-live-editor/*.test.ts",
     "start": "node --env-file-if-exists=.env dist/server/index.js",
     "kb": "node --env-file-if-exists=.env scripts/kb.mjs",
     "db:migrate": "node --env-file-if-exists=.env --import tsx/esm scripts/migrate.ts",

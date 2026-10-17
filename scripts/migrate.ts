@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { closeDatabase, openDatabase } from "../server/database.js";
+import { closeDatabase, openDatabase } from "../server/storage/database.js";
 
 const dataDir = path.resolve(process.env.KB_DATA_DIR ?? "./data");
 const lockPath = path.join(dataDir, "server.lock");

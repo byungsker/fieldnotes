@@ -4,8 +4,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, chmodSync, statSync, lstatSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { FileVault, createVaultFromLegacy, type LegacyDocument, type LegacyFolder, type LegacyTrashedDocument } from "../server/vault.js";
-import type { ChangeRecord } from "../server/types.js";
+import { FileVault, createVaultFromLegacy, type LegacyDocument, type LegacyFolder, type LegacyTrashedDocument } from "../server/storage/vault.js";
+import type { ChangeRecord } from "../server/storage/types.js";
 
 type LegacySnapshot = { documents: LegacyDocument[]; trashedDocuments: LegacyTrashedDocument[]; folders: LegacyFolder[]; changes: ChangeRecord[]; schemaVersion: number };
 
