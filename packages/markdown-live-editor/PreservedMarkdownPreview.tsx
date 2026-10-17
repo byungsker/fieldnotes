@@ -135,10 +135,8 @@ function preparePreviewSource(raw: string, documentPath?: string): PreviewSource
         const assetPath = resolveLocalImageAssetPath(target, documentPath);
         if (!assetPath) return "![Image omitted: unsupported or unsafe source](fieldnotes-unsafe-image:omitted)";
         const alt = assetPath.split("/").at(-1) || "Local attachment";
-        const babyNote = documentPath.startsWith("babies/");
-        const previewTarget = babyNote ? target : assetPath;
-        const encodedTarget = previewTarget.split("/").map(encodeURIComponent).join("/");
-        return `![${alt}](${babyNote ? encodedTarget : `/${encodedTarget}`})`;
+        const encodedTarget = target.split("/").map(encodeURIComponent).join("/");
+        return `![${alt}](${encodedTarget})`;
       })
       : line;
     const safeLine = stripHtmlForPreviewLine(imagePrepared, htmlState);
@@ -166,7 +164,7 @@ function LocalImage({ src, alt, context }: ComponentProps<"img"> & { context?: P
   const documentId = context?.documentId;
   const documentHash = context?.documentHash;
   const resolveAsset = context?.adapters?.resolveReferencedVaultAsset;
-  const resolveBabyAsset = context?.adapters?.resolveVaultAsset;
+  const resolveLocalImage = context?.adapters?.resolveLocalImage;
   let decodedSource: string | null = null;
   if (typeof src === "string") {
     try { decodedSource = decodeURIComponent(src); }
@@ -175,13 +173,14 @@ function LocalImage({ src, alt, context }: ComponentProps<"img"> & { context?: P
   const assetPath = decodedSource && documentPath
     ? resolveLocalImageAssetPath(decodedSource, documentPath)
     : null;
-  const babySource = documentPath?.startsWith("babies/") ? decodedSource : null;
-
   if (!assetPath) {
     return <span className="mle-preserved-warning" role="note">Image omitted: unsupported or unsafe source.</span>;
   }
-  if (documentId && babySource && resolveBabyAsset) {
-    return <img src={resolveBabyAsset(documentId, babySource)} alt={alt || "Local attachment"} loading="lazy" referrerPolicy="no-referrer" />;
+  if (documentId && documentPath && decodedSource && resolveLocalImage) {
+    const resolved = resolveLocalImage({ documentId, documentPath, documentHash, source: decodedSource, assetPath });
+    return resolved
+      ? <img src={resolved} alt={alt || "Local attachment"} loading="lazy" referrerPolicy="no-referrer" />
+      : <span className="mle-preserved-warning" role="note">Local image preview is unavailable.</span>;
   }
   if (!documentId || !documentHash || !resolveAsset) {
     return <span className="mle-preserved-warning" role="note">Local image preview is unavailable.</span>;

@@ -1,4 +1,5 @@
-import type { VisualizationAction, VisualizationQuery, VisualizationQueryResponse } from "../../shared/visualization.ts";
+import type { ReactNode } from "react";
+import type { VisualizationAction, VisualizationQuery, VisualizationQueryResponse } from "./visualization-contract.js";
 
 export interface BookmarkMetadata {
   title: string | null;
@@ -38,6 +39,16 @@ export interface MarkdownPreviewContext {
   onOpenDocument?: (documentId: string) => void;
 }
 
+export type PreservedBlockRenderer = (raw: string, context: MarkdownPreviewContext) => ReactNode;
+
+export interface LocalImagePreviewInput {
+  documentId: string;
+  documentPath: string;
+  documentHash?: string;
+  source: string;
+  assetPath: string;
+}
+
 export interface MarkdownLiveEditorAdapters {
   uploadImage?: (file: File) => Promise<string>;
   fetchBookmarkMetadata?: (url: string, signal: AbortSignal) => Promise<BookmarkMetadata | null>;
@@ -51,9 +62,7 @@ export interface MarkdownLiveEditorAdapters {
   isVisualizationTrusted?: (documentId: string, blockIndex: number, sourceHash: string) => boolean;
   trustVisualization?: (documentId: string, blockIndex: number, sourceHash: string) => void;
   revokeVisualizationTrust?: (documentId: string, blockIndex: number, sourceHash: string) => void;
-  loadBabyPreviewDocuments?: (signal: AbortSignal) => Promise<PreviewDocument[]>;
-  createPreviewDocument?: (input: { title: string; body: string; folderId: string }) => Promise<PreviewDocument>;
-  resolveVaultAsset?: (documentId: string, source: string) => string;
+  resolveLocalImage?: (input: LocalImagePreviewInput) => string | null;
   resolveReferencedVaultAsset?: (documentId: string, assetPath: string, contentHash: string) => string;
 }
 
@@ -62,6 +71,7 @@ export interface MarkdownLiveEditorProps {
   onChange: (value: string) => void;
   adapters?: MarkdownLiveEditorAdapters;
   previewContext?: MarkdownPreviewContext;
+  renderPreservedBlock?: PreservedBlockRenderer;
   ariaLabel?: string;
   minHeight?: number | string;
   /** Hide document action controls while keeping the editable document surface. */

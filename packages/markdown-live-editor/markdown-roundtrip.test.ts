@@ -97,9 +97,9 @@ test("Markdown images are not split into standalone bookmark URL tokens", () => 
   assert.equal(manager.serialize(document), source);
 });
 
-test("actual preserved-image parser path keeps vault-root baby refs for the scoped preview resolver", () => {
+test("actual preserved-image parser keeps original attachment refs for a host resolver", () => {
   const manager = createTiptapMarkdownApi();
-  const source = "![[babies/photos/2026-05-01/example.jpg]]";
+  const source = "![[journal/photos/2026-05-01/example.jpg]]";
   const document = parseMarkdownWithPreservedBlocks(manager, source) as JSONContent;
   const block = document.content?.find((node) => node.type === "preservedMarkdown");
 
@@ -110,19 +110,17 @@ test("actual preserved-image parser path keeps vault-root baby refs for the scop
     raw: String(block?.attrs?.raw ?? ""),
     context: {
       documentId: "screenshot-note-id",
-      documentPath: "babies/records/2026-05-01.md",
+      documentPath: "journal/records/2026-05-01.md",
       documentHash: "current-note-hash",
       adapters: {
-        resolveVaultAsset: (documentId, assetSource) =>
-          `/api/preview/babies/asset?documentId=${documentId}&source=${encodeURIComponent(assetSource)}`,
-        resolveReferencedVaultAsset: (documentId, assetPath, hash) =>
-          `/api/views/assets/${documentId}?asset=${encodeURIComponent(assetPath)}&v=${hash}`,
+        resolveLocalImage: ({ documentId, source }) =>
+          `/local-preview?documentId=${documentId}&source=${encodeURIComponent(source)}`,
       },
     },
   }));
 
-  assert.match(html, /src="\/api\/preview\/babies\/asset\?documentId=screenshot-note-id&amp;source=babies%2Fphotos%2F2026-05-01%2Fexample\.jpg"/u);
-  assert.doesNotMatch(html, /babies%2Frecords%2Fbabies%2Fphotos|\/api\/views\/assets/u);
+  assert.match(html, /src="\/local-preview\?documentId=screenshot-note-id&amp;source=journal%2Fphotos%2F2026-05-01%2Fexample\.jpg"/u);
+  assert.doesNotMatch(html, /journal%2Frecords%2Fjournal%2Fphotos/u);
 });
 
 test("allows canonical block spacing when parsed content is unchanged", () => {

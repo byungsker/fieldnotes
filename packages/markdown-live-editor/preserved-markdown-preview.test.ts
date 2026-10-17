@@ -3,22 +3,21 @@ import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PreservedMarkdownPreview } from "./PreservedMarkdownPreview.tsx";
+import type { MarkdownLiveEditorAdapters } from "./types.ts";
 
 void React;
 
-function render(raw: string, documentPath = "reading/note.md") {
+function render(raw: string, documentPath = "reading/note.md", adapters: MarkdownLiveEditorAdapters = {
+  resolveReferencedVaultAsset: (documentId, assetPath, hash) =>
+    `/api/views/assets/${documentId}?asset=${encodeURIComponent(assetPath)}&v=${hash}`,
+}) {
   return renderToStaticMarkup(React.createElement(PreservedMarkdownPreview, {
     raw,
     context: {
       documentId: "fake-document-id",
       documentPath,
       documentHash: "fake-content-hash",
-      adapters: {
-        resolveVaultAsset: (documentId, source) =>
-          `/api/preview/babies/asset?documentId=${documentId}&source=${encodeURIComponent(source)}`,
-        resolveReferencedVaultAsset: (documentId, assetPath, hash) =>
-          `/api/views/assets/${documentId}?asset=${encodeURIComponent(assetPath)}&v=${hash}`,
-      },
+      adapters,
     },
   }));
 }
@@ -42,29 +41,33 @@ test("renders Obsidian image embeds with encoded paths and preserves Markdown an
   assert.doesNotMatch(html, /!\[\[|<photos\/day with spaces\.webp/u);
 });
 
-test("routes baby note images with bare basenames through the scoped baby asset endpoint", () => {
-  const html = render("![[Pasted image 2026-03-15.jpg|width=400]]\n\n![Moment](<another photo.jpg>)", "babies/records/2026-03-15.md");
+const customImages: MarkdownLiveEditorAdapters = {
+  resolveLocalImage: ({ source }) => `/local-preview?source=${encodeURIComponent(source)}`,
+};
 
-  assert.match(html, /src="\/api\/preview\/babies\/asset\?documentId=fake-document-id&amp;source=Pasted%20image%202026-03-15\.jpg"/u);
-  assert.match(html, /src="\/api\/preview\/babies\/asset\?documentId=fake-document-id&amp;source=another%20photo\.jpg"/u);
+test("passes bare filenames unchanged to the host image resolver", () => {
+  const html = render("![[Pasted image 2026-03-15.jpg|width=400]]\n\n![Moment](<another photo.jpg>)", "journal/records/2026-03-15.md", customImages);
+
+  assert.match(html, /src="\/local-preview\?source=Pasted%20image%202026-03-15\.jpg"/u);
+  assert.match(html, /src="\/local-preview\?source=another%20photo\.jpg"/u);
   assert.doesNotMatch(html, /\/api\/views\/assets/u);
 });
 
-test("routes baby note images with explicit relative paths through the scoped image resolver", () => {
-  const html = render("![[photos/day.jpg]]", "babies/records/2026-03-15.md");
+test("passes explicit relative paths unchanged to the host image resolver", () => {
+  const html = render("![[photos/day.jpg]]", "journal/records/2026-03-15.md", customImages);
 
-  assert.match(html, /src="\/api\/preview\/babies\/asset\?documentId=fake-document-id&amp;source=photos%2Fday\.jpg"/u);
+  assert.match(html, /src="\/local-preview\?source=photos%2Fday\.jpg"/u);
   assert.doesNotMatch(html, /\/api\/views\/assets/u);
 });
 
-test("preserves a vault-root baby photo path and sends it to the scoped image resolver", () => {
+test("keeps a vault-root photo path for the default image resolver", () => {
   const html = render(
-    "![[babies/photos/2026-05-01/example.jpg]]",
-    "babies/records/2026-05-01.md",
+    "![[/assets/photos/2026-05-01/example.jpg]]",
+    "journal/records/2026-05-01.md",
   );
 
-  assert.match(html, /src="\/api\/preview\/babies\/asset\?documentId=fake-document-id&amp;source=babies%2Fphotos%2F2026-05-01%2Fexample\.jpg"/u);
-  assert.doesNotMatch(html, /babies%2Frecords%2Fbabies%2Fphotos|\/api\/views\/assets/u);
+  assert.match(html, /src="\/api\/views\/assets\/fake-document-id\?asset=assets%2Fphotos%2F2026-05-01%2Fexample\.jpg&amp;v=fake-content-hash"/u);
+  assert.doesNotMatch(html, /journal%2Frecords%2Fassets/u);
 });
 
 test("omits remote images and reports that they were not loaded", () => {
@@ -73,6 +76,18 @@ test("omits remote images and reports that they were not loaded", () => {
   assert.match(html, /Image omitted: unsupported or unsafe source\./u);
   assert.doesNotMatch(html, /images\.example\.test|https:\/\//u);
   assert.doesNotMatch(html, /<img\b/u);
+});
+
+test("validates local sources before calling the host and stays inert without adapters", () => {
+  let calls = 0;
+  const html = render("![remote](https://images.example.test/photo.jpg)\n\n![[../../../outside.jpg]]\n\n![[.fieldnotes/hidden.jpg]]", "reading/note.md", {
+    resolveLocalImage: () => { calls += 1; return "/should-not-load.jpg"; },
+  });
+  assert.equal(calls, 0);
+  assert.doesNotMatch(html, /<img\b/u);
+  const unavailable = render("![[photo.jpg]]", "reading/note.md", {});
+  assert.match(unavailable, /Local image preview is unavailable/u);
+  assert.doesNotMatch(unavailable, /<img\b|\/api\//u);
 });
 
 test("does not display or run DataviewJS source and keeps a clear security warning", () => {

@@ -1,5 +1,5 @@
 import { createContext } from "react";
-import type { PreviewDocument } from "./types.ts";
+import type { PreviewDocument } from "../../../../packages/markdown-live-editor";
 
 export type BabiesPreviewState = { documents: PreviewDocument[]; loading: boolean; error: boolean };
 

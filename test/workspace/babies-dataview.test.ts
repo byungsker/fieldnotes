@@ -13,9 +13,9 @@ import {
   parseSafeBabyFrontmatter,
   pngFallbackReference,
   readBabySourceSettings,
-} from "./BabiesDataview.tsx";
-import { BabiesDataview } from "./BabiesDataview.tsx";
-import { BabiesPreviewDocumentsContext } from "./BabiesPreviewContext.ts";
+} from "../../src/pages/workspace/model/baby-records.ts";
+import { BabiesDataview } from "../../src/pages/workspace/ui/BabiesDataview.tsx";
+import { BabiesPreviewDocumentsContext } from "../../src/pages/workspace/ui/BabiesPreviewContext.ts";
 
 void React;
 
