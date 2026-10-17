@@ -53,11 +53,19 @@ In controlled use, an echo of the editor's own latest value does not reset the P
 
 The `minHeight` prop accepts pixels as a number or any valid CSS length string. The stylesheet uses `.mle-*` classes and `--mle-*` custom properties so a host can override presentation without inheriting application branding.
 
-## Local development
+## 호스트별 미리보기
+
+호스트는 `renderPreservedBlock(raw, context)`로 보존 블록의 React UI를 제공할 수 있습니다. `null` 또는 `undefined`를 반환하면 기본 미리보기를 사용합니다. 확장은 신뢰할 수 있는 호스트 코드이며, Markdown에 포함된 JavaScript를 실행하는 경로가 아닙니다. 보존 노드의 원문과 직렬화는 렌더링 결과에 영향을 받지 않습니다.
+
+`adapters.resolveLocalImage`는 검증을 통과한 이미지의 원문 `source`, 해석된 `assetPath`, 문서 ID·경로·hash를 받습니다. 호스트가 URL을 반환하거나 `null`로 미리보기를 거절할 수 있습니다. 이 어댑터가 없으면 기존 `resolveReferencedVaultAsset`를 사용하며, 둘 다 없으면 이미지를 불러오지 않습니다. Fieldnotes의 육아 기록 UI·API·스타일은 호스트 `src/pages/workspace/`에 있습니다.
+
+시각화 타입과 이벤트 검증은 패키지 내부 `visualization-contract.ts`에 한 번 정의합니다. `markdown-live-editor/visualization-contract`로 React UI 없이 계약 모듈을 참조할 수 있고, 호스트의 `shared/visualization.ts`는 같은 정의를 재export합니다. 패키지 소스는 상위 저장소 모듈을 import하지 않습니다.
+
+## 로컬 개발과 독립 검증
 
 This component is designed to be embedded in a host React app. The host owns the API and must supply adapters for any persistence or network access. The Markdown body remains the only editor storage contract; the package does not parse or rewrite application databases. The `examples/ControlledEditor.tsx` file shows the minimal controlled setup.
 
-For package checks, install the pinned dependencies and run `npm test` and `npm run typecheck`. This repository does not publish the package to npm; consumers can install it from a Git dependency or vendor it into their app.
+패키지 디렉터리에서 `npm ci`, `npm run typecheck`, `npm test`를 실행합니다. 독립성을 검증하려면 이 디렉터리만 저장소 밖의 임시 경로에 복사하고 같은 명령을 실행합니다. 루트의 `shared/`나 node_modules를 복사할 필요가 없습니다. 이 저장소는 패키지를 npm에 게시하지 않으며, 소비 앱은 패키지 폴더를 가져와 사용합니다.
 
 ## Attribution and notices
 

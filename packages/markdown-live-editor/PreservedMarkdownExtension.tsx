@@ -1,21 +1,14 @@
 import { mergeAttributes, Node } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { createRoot, type Root } from "react-dom/client";
-import { BabiesDataviewPreview, isSupportedBabyDataview } from "./BabiesDataview.tsx";
-import { PreservedMarkdownPreview } from "./PreservedMarkdownPreview.tsx";
-import type { MarkdownLiveEditorAdapters, MarkdownPreviewContext } from "./types.ts";
+import { PreservedBlockPreview } from "./PreservedBlockPreview.tsx";
+import type { MarkdownLiveEditorAdapters, MarkdownPreviewContext, PreservedBlockRenderer } from "./types.ts";
 
 type PreservedMarkdownContext = MarkdownPreviewContext & { adapters?: MarkdownLiveEditorAdapters };
-type PreservedMarkdownOptions = { getPreviewContext: () => PreservedMarkdownContext | undefined };
-
-function dataviewJsSource(raw: string): string | null {
-  const lines = raw.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n").split("\n");
-  while (lines.length && !lines.at(-1)?.trim()) lines.pop();
-  const opening = lines[0]?.match(/^ {0,3}(`{3,}|~{3,})[ \t]*dataviewjs(?:[ \t].*)?$/iu);
-  const closing = lines.at(-1)?.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/u);
-  if (!opening || !closing || opening[1]?.[0] !== closing[1]?.[0] || (closing[1]?.length ?? 0) < (opening[1]?.length ?? 0)) return null;
-  return lines.slice(1, -1).join("\n");
-}
+type PreservedMarkdownOptions = {
+  getPreviewContext: () => PreservedMarkdownContext | undefined;
+  renderPreview?: PreservedBlockRenderer;
+};
 
 /** An explicit, inert source block for Markdown the rich schema cannot safely edit. */
 export const PreservedMarkdown = Node.create<PreservedMarkdownOptions>({
@@ -53,7 +46,7 @@ export const PreservedMarkdown = Node.create<PreservedMarkdownOptions>({
       dom.contentEditable = "false";
 
       const preview = document.createElement("div");
-      preview.className = "babies-preview-mount";
+      preview.className = "mle-preserved-preview-mount";
       dom.append(preview);
 
       let previewRoot: Root | undefined;
@@ -61,15 +54,8 @@ export const PreservedMarkdown = Node.create<PreservedMarkdownOptions>({
       const render = (current: ProseMirrorNode) => {
         const raw = typeof current.attrs.raw === "string" ? current.attrs.raw : "";
         const context = extension.options.getPreviewContext();
-        const code = dataviewJsSource(raw);
-        const supported = Boolean(code && context && isSupportedBabyDataview(code, context));
-        if (supported && code && context) {
-          previewRoot ??= createRoot(preview);
-          previewRoot.render(<BabiesDataviewPreview source={code} context={context} adapters={context.adapters} />);
-        } else {
-          previewRoot ??= createRoot(preview);
-          previewRoot.render(<PreservedMarkdownPreview raw={raw} context={context} />);
-        }
+        previewRoot ??= createRoot(preview);
+        previewRoot.render(<PreservedBlockPreview raw={raw} context={context} renderPreservedBlock={extension.options.renderPreview} />);
       };
       render(node);
       return {

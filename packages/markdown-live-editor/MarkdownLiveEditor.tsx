@@ -103,6 +103,7 @@ export function MarkdownLiveEditor({
   onChange,
   adapters,
   previewContext,
+  renderPreservedBlock,
   ariaLabel = "Markdown editor",
   minHeight = 420,
   showToolbar = true,
@@ -115,6 +116,7 @@ export function MarkdownLiveEditor({
   const initialParts = useRef(splitLeadingFrontmatter(value));
   const adaptersRef = useRef<MarkdownLiveEditorAdapters | undefined>(adapters);
   const previewContextRef = useRef(previewContext);
+  const renderPreservedBlockRef = useRef(renderPreservedBlock);
   const onChangeRef = useRef(onChange);
   const onSerializationSafetyChangeRef = useRef(onSerializationSafetyChange);
   const openVisualizationNoteRef = useRef(openVisualizationNote);
@@ -133,6 +135,7 @@ export function MarkdownLiveEditor({
 
   adaptersRef.current = adapters;
   previewContextRef.current = previewContext;
+  renderPreservedBlockRef.current = renderPreservedBlock;
   onChangeRef.current = onChange;
   onSerializationSafetyChangeRef.current = onSerializationSafetyChange;
   openVisualizationNoteRef.current = openVisualizationNote;
@@ -164,6 +167,10 @@ export function MarkdownLiveEditor({
     return fetchMetadata ? fetchMetadata(url, signal) : Promise.resolve(null);
   }, []);
   const getPreviewContext = useCallback(() => ({ adapters: adaptersRef.current, ...previewContextRef.current }), []);
+  const renderPreservedBlockAdapter = useCallback<NonNullable<MarkdownLiveEditorProps["renderPreservedBlock"]>>(
+    (raw, context) => renderPreservedBlockRef.current?.(raw, context),
+    [],
+  );
 
   const queryVisualizationAdapter = useCallback((query: Parameters<NonNullable<MarkdownLiveEditorAdapters["queryVisualization"]>>[0], signal: AbortSignal) => {
     const run = adaptersRef.current?.queryVisualization;
@@ -214,10 +221,10 @@ export function MarkdownLiveEditor({
       WikiLink,
       Markdown.configure({ markedOptions: { gfm: true, breaks: false } }),
       BookmarkCard.configure({ fetchBookmarkMetadata: fetchMetadataAdapter }),
-      PreservedMarkdown.configure({ getPreviewContext }),
+      PreservedMarkdown.configure({ getPreviewContext, renderPreview: renderPreservedBlockAdapter }),
       PreservedWhitespace,
     ],
-    [fetchMetadataAdapter, queryVisualizationAdapter, subscribeToVaultChangesAdapter, enableCustomVisualizations, getPreviewContext, openVisualizationNoteAdapter, runVisualizationAction, visualizationDocumentId, visualizationTrustAdapter]
+    [fetchMetadataAdapter, queryVisualizationAdapter, subscribeToVaultChangesAdapter, enableCustomVisualizations, getPreviewContext, renderPreservedBlockAdapter, openVisualizationNoteAdapter, runVisualizationAction, visualizationDocumentId, visualizationTrustAdapter]
   );
 
   const insertUploadedImage = useCallback(async (file: File, position?: number | { from: number; to: number }) => {

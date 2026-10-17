@@ -4,7 +4,6 @@ import type {
   EditorSnippet,
   MarkdownLiveEditorAdapters,
   NewEditorSnippet,
-  PreviewDocument,
 } from "../../../../packages/markdown-live-editor";
 import type { VisualizationAction, VisualizationQuery, VisualizationQueryResponse } from "../../../../shared/visualization";
 import { subscribeToVaultChanges } from "./vault-change-subscription";
@@ -163,20 +162,14 @@ export function createFieldnotesEditorAdapters(): MarkdownLiveEditorAdapters {
       try { window.localStorage.removeItem(visualizationTrustKey(documentId, blockIndex, sourceHash)); }
       catch { throw new Error("Could not revoke this visualization's trust record."); }
     },
-    async loadBabyPreviewDocuments(signal): Promise<PreviewDocument[]> {
-      const result = await apiRequest<{ documents: PreviewDocument[] }>("/api/preview/babies", { signal });
-      return result.documents;
-    },
-    async createPreviewDocument(input) {
-      const result = await apiRequest<{ document: PreviewDocument }>("/api/documents", {
-        method: "POST",
-        body: JSON.stringify(input),
-      });
-      return result.document;
-    },
-    resolveVaultAsset(documentId, source) {
-      const query = new URLSearchParams({ documentId, source });
-      return `/api/preview/babies/asset?${query.toString()}`;
+    resolveLocalImage({ documentId, documentPath, documentHash, source, assetPath }) {
+      if (documentPath.startsWith("babies/")) {
+        const query = new URLSearchParams({ documentId, source });
+        return `/api/preview/babies/asset?${query.toString()}`;
+      }
+      if (!documentHash) return null;
+      const query = new URLSearchParams({ asset: assetPath, v: documentHash });
+      return `/api/views/assets/${encodeURIComponent(documentId)}?${query.toString()}`;
     },
     resolveReferencedVaultAsset(documentId, assetPath, contentHash) {
       const query = new URLSearchParams({ asset: assetPath, v: contentHash });

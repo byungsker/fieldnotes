@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Node } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
-import type { FieldnotesViewConfig, VisualizationAction, VisualizationNote, VisualizationQueryResponse, VisualizationTrashNote, VisualizationUiEvent, VisualizationValue } from "../../shared/visualization.ts";
+import type { FieldnotesViewConfig, VisualizationAction, VisualizationNote, VisualizationQueryResponse, VisualizationTrashNote, VisualizationUiEvent, VisualizationValue } from "./visualization-contract.js";
 import { parseFieldnotesViewConfig } from "./fieldnotes-view-config.ts";
 import { SandboxedVisualization } from "./SandboxedVisualization.tsx";
 import type { MarkdownLiveEditorAdapters } from "./types.ts";

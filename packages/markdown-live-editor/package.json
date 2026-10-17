@@ -15,7 +15,11 @@
       "types": "./index.ts",
       "import": "./index.ts"
     },
-    "./styles.css": "./styles.css"
+    "./styles.css": "./styles.css",
+    "./visualization-contract": {
+      "types": "./visualization-contract.ts",
+      "import": "./visualization-contract.ts"
+    }
   },
   "peerDependencies": {
     "react": "19.3.0",

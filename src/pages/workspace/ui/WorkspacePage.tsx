@@ -36,6 +36,8 @@ import { MarkdownLiveEditor } from "../../../../packages/markdown-live-editor";
 import { SearchHighlight } from "./SearchHighlight";
 import { VaultSettingsDialog } from "./VaultSettingsDialog";
 import { createFieldnotesEditorAdapters } from "../api/editor-adapters";
+import { createBabiesPreviewAdapters } from "../api/baby-preview-adapters";
+import { createBabiesPreservedBlockRenderer } from "./BabiesPreservedBlock";
 import { formatDocumentDate } from "../lib/document-date";
 import { resolveMobileDrawerSwipe, resolveMobileDrawerSwipeDrag } from "../model/mobile-drawer-swipe";
 import { isSidebarToggleShortcut } from "../model/keyboard-shortcuts";
@@ -303,6 +305,7 @@ export function WorkspacePage() {
   const [isComposing, setIsComposing] = useState(false);
   const [draftRecoveryAvailable, setDraftRecoveryAvailable] = useState(true);
   const editorAdapters = useMemo(() => createFieldnotesEditorAdapters(), []);
+  const renderPreservedBlock = useMemo(() => createBabiesPreservedBlockRenderer(createBabiesPreviewAdapters()), []);
   const [query, setQuery] = useState("");
   const [showSearchSuggestions, setShowSearchSuggestions] = useState(false);
   const [sortOrder, setSortOrder] = useState<SortOrder>("updated-desc");
@@ -3001,6 +3004,7 @@ export function WorkspacePage() {
                   key={displayDocument.id}
                   value={draftBody}
                   adapters={editorAdapters}
+                  renderPreservedBlock={renderPreservedBlock}
                   previewContext={{
                     documentId: displayDocument.id,
                     documentPath: displayDocument.filePath,

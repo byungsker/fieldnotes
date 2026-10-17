@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { parseVisualizationUiEvent, type VisualizationNote, type VisualizationTrashNote, type VisualizationUiEvent, type VisualizationValue } from "../../shared/visualization.ts";
+import { parseVisualizationUiEvent, type VisualizationNote, type VisualizationTrashNote, type VisualizationUiEvent, type VisualizationValue } from "./visualization-contract.js";
 import { acquireVisualizationSlot } from "./visualization-worker-slots.ts";
 import { boundedVisualizationFrameHeight, INITIAL_VISUALIZATION_FRAME_HEIGHT } from "./visualization-frame-height.ts";
 

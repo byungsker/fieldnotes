@@ -1,4 +1,4 @@
-import type { FieldnotesViewConfig } from "../../shared/visualization.ts";
+import type { FieldnotesViewConfig } from "./visualization-contract.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
