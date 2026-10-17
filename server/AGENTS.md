@@ -7,9 +7,11 @@
 | 파일 | 소유하는 동작 | 함께 확인할 경계 |
 |---|---|---|
 | `index.ts` | 바인딩, 프로세스 lock, DB 시작, 종료 | `api.ts`의 drain과 vault monitor |
-| `api.ts`의 `createApp` | 요청 검증, routes, SSE, CSP | 클라이언트 API 계약과 시각화 runner |
-| `database.ts` | SQLite 트랜잭션, vault 인덱스, 변경 발행 | FileVault 성공 여부와 sequence |
-| `vault.ts`의 `FileVault` | manifest, 파일 쓰기, 복구, reconcile, migration | 파일·metadata의 내구성과 외부 편집 충돌 |
+| `api.ts`의 `createApp` | 라우트 조합, 인증·CSP, SSE, drain | 미들웨어 순서와 인스턴스별 종료 상태 |
+| `routes/` | 문서·폴더·설정·미리보기·북마크·시각화 API | 명시적으로 전달한 저장소·어댑터와 요청 계약 |
+| `http/validation.ts`, `http/errors.ts` | 공통 요청 검증·오류 응답 | 동일한 오류 클래스와 기존 상태·메시지 |
+| `storage/database.ts` | SQLite 트랜잭션, vault 인덱스, 변경 발행 | FileVault 성공 여부와 sequence |
+| `storage/vault.ts`의 `FileVault` | manifest, 파일 쓰기, 복구, reconcile, migration | 파일·metadata의 내구성과 외부 편집 충돌 |
 
 ## 시작·lock·종료
 
@@ -22,7 +24,7 @@
 
 ## API 변경
 
-- 요청 필드 추가는 `api.ts` 검증, `database.ts` 인자, `../src/shared/api/request.ts`, `../API.md`의 해당 계약을 함께 추적한다.
+- 요청 필드 추가는 해당 `routes/` 검증과 `http/validation.ts`, `storage/database.ts` 인자, `../src/shared/api/request.ts`, `../API.md`의 해당 계약을 함께 추적한다.
 - 변경 요청의 `expectedVersion`과 필요한 `expectedHash`가 검증 함수부터 저장소 호출까지 전달되는지 확인한다. 시각화 action의 기존 문서 변경은 현재 version/hash 비교를 유지한다.
 - 충돌 응답에는 현재 version/hash가 전달되는 흐름을 보존한다. 재시도에서 검사를 제거하거나 오래된 입력으로 자동 덮어쓰지 않는다.
 - 인증 설정 변경은 `KB_ALLOWED_TAILSCALE_LOGIN`과 경로·query·fragment 없는 HTTPS `KB_PUBLIC_ORIGIN`의 쌍 검증을 다룬다.
@@ -44,7 +46,9 @@
 
 ## 변경별 확인 위치
 
-- lock·signal·drain 변경: `../test/shutdown.test.ts`에서 진행 중 응답, SSE, 종료 후 lock을 확인한다.
-- 저장·복구 변경: `../test/vault.test.ts`와 `../test/vault-change-subscription.test.ts`에서 외부 편집 충돌, 재시작 복구, 인덱스와 변경 알림을 확인한다.
-- 시각화 API 변경: `../test/visualization-actions.test.ts`, `../test/visualization-assets.test.ts`, `../test/visualization-trust.test.ts`, `../test/visualization-runner-security.test.ts` 중 해당 경계를 확인한다.
+- lock·signal·drain 변경: `../test/runtime/shutdown.test.ts`에서 진행 중 응답, SSE, 종료 후 lock을 확인한다.
+- 저장·복구 변경: `../test/storage/vault.test.ts`와 `../test/workspace/vault-change-subscription.test.ts`에서 외부 편집 충돌, 재시작 복구, 인덱스와 변경 알림을 확인한다.
+- 시각화 API 변경: `../test/visualization/visualization-actions.test.ts`, `../test/visualization/visualization-assets.test.ts`, `../test/visualization/visualization-trust.test.ts`, `../test/visualization/visualization-runner-security.test.ts` 중 해당 경계를 확인한다.
+- `storage/`는 HTTP 라우트나 시각화 구현에 의존하지 않는다. 양쪽에서 사용하는 제한·오류 계약은 서버 공용 `view-query-limits.ts`를 따른다.
+- HTTP 오류·API 404·SPA 경계는 `../test/api/http-boundaries.test.ts`, API·CLI 통합은 `../test/api/library-integration.test.ts`로 확인한다.
 - 서버 타입 검사는 `../tsconfig.server.json`을 따른다. 테스트는 변경한 동작에 맞춰 선택하고 실제 데이터 경로와 분리한다.
