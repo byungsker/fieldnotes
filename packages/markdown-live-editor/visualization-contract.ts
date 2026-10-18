@@ -55,8 +55,7 @@ export type VisualizationUiEvent =
   | { type: "note.update"; noteId: string; fields: Record<string, string> }
   | { type: "note.frontmatter.patch"; noteId: string; fields: Record<string, string> }
   | { type: "note.trash"; noteId: string }
-  | { type: "trash.restore"; noteId: string }
-  | { type: "movies.search"; fields: Record<string, string> };
+  | { type: "trash.restore"; noteId: string };
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const SAFE_EVENT_KEY = /^(?!__proto__$|prototype$|constructor$)[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
@@ -105,7 +104,6 @@ export function parseVisualizationUiEvent(value: unknown): VisualizationUiEvent 
         ? { type: value.type, noteId: value.noteId }
         : null;
     case "note.create":
-    case "movies.search":
       return hasOnlyKeys(value, ["type", "fields"]) && isStringFields(value.fields)
         ? { type: value.type, fields: value.fields }
         : null;
@@ -126,17 +124,7 @@ export type VisualizationAction =
   | { type: "note.update"; id: string; expectedVersion: number; expectedHash: string; title?: string; body?: string; frontmatterPatch?: Record<string, VisualizationValue>; folderId?: string | null }
   | { type: "note.frontmatter.patch"; id: string; expectedVersion: number; expectedHash: string; patch: Record<string, VisualizationValue> }
   | { type: "note.trash"; id: string; expectedVersion: number; expectedHash: string }
-  | { type: "trash.restore"; id: string; expectedVersion: number; folderId?: string | null }
-  | { type: "movies.search"; provider: "tmdb"; query: string; language?: string };
-
-export type MovieSearchResult = {
-  id: number;
-  title: string;
-  originalTitle: string;
-  releaseDate: string | null;
-  overview: string;
-  posterPath: string | null;
-};
+  | { type: "trash.restore"; id: string; expectedVersion: number; folderId?: string | null };
 
 export type FieldnotesViewConfig = {
   version: 1;

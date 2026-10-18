@@ -1,8 +1,6 @@
 import path from "node:path";
 
 export const MAX_VISUALIZATION_IMAGE_BYTES = 1_000_000;
-const TMDB_IMAGE_ORIGIN = "https://image.tmdb.org";
-const TMDB_IMAGE_PATH = /^\/t\/p\/(?:w\d{1,4}|original)\/[A-Za-z0-9._/-]{1,1200}$/u;
 const LOCAL_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 
 export class VisualizationAssetError extends Error {
@@ -13,24 +11,12 @@ export class VisualizationAssetError extends Error {
 }
 
 export type VisualizationImage = { bytes: Buffer; contentType: string };
-export type PosterImageFetcher = (input: URL, init: RequestInit) => Promise<Response>;
 
 function hasControlCharacters(value: string): boolean {
   return [...value].some((character) => {
     const codePoint = character.codePointAt(0) ?? 0;
     return codePoint < 32 || codePoint === 127;
   });
-}
-
-/** Public TMDb poster references are the only remote image source accepted by views. */
-export function isAllowedTmdbPosterUrl(value: unknown): value is string {
-  if (typeof value !== "string" || value.length > 2_048 || hasControlCharacters(value) || [...value].some((character) => character.codePointAt(0) === 32)) return false;
-  let url: URL;
-  try { url = new URL(value); } catch { return false; }
-  if (url.origin !== TMDB_IMAGE_ORIGIN || url.username || url.password || url.port || url.search || url.hash) return false;
-  if (!TMDB_IMAGE_PATH.test(url.pathname)) return false;
-  if (url.pathname.split("/").some((segment) => segment === "." || segment === "..")) return false;
-  return url.href === value;
 }
 
 function localImageMime(bytes: Buffer): string | undefined {
@@ -128,70 +114,4 @@ export function extractLocalImageReferences(markdown: string, markdownPath: stri
     if (normalized) paths.add(normalized);
   }
   return [...paths].slice(0, 20);
-}
-
-async function readBoundedResponse(response: Response): Promise<Buffer> {
-  const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_VISUALIZATION_IMAGE_BYTES) {
-    throw new VisualizationAssetError(413, "visualization_asset_too_large", "Image exceeds the 1 MB view asset limit.");
-  }
-  if (!response.body) throw new VisualizationAssetError(502, "visualization_asset_unavailable", "The public image is unavailable.");
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > MAX_VISUALIZATION_IMAGE_BYTES) {
-        await reader.cancel();
-        throw new VisualizationAssetError(413, "visualization_asset_too_large", "Image exceeds the 1 MB view asset limit.");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return Buffer.concat(chunks, total);
-}
-
-function validateRemoteImage(bytes: Buffer, contentType: string): VisualizationImage {
-  const declaredType = contentType.split(";", 1)[0]?.trim().toLowerCase();
-  const actualType = localImageMime(bytes);
-  if (!actualType || actualType !== declaredType) {
-    throw new VisualizationAssetError(415, "visualization_asset_type", "The public image did not return a verified raster image.");
-  }
-  return { bytes, contentType: actualType };
-}
-
-export async function fetchPublicTmdbPoster(
-  value: string,
-  fetcher: PosterImageFetcher = fetch,
-): Promise<VisualizationImage> {
-  if (!isAllowedTmdbPosterUrl(value)) {
-    throw new VisualizationAssetError(404, "visualization_asset_not_found", "The referenced poster is not an approved public image.");
-  }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5_000);
-  try {
-    const response = await fetcher(new URL(value), {
-      method: "GET",
-      headers: { Accept: "image/jpeg, image/png, image/webp" },
-      redirect: "manual",
-      signal: controller.signal,
-    });
-    if (response.status !== 200) {
-      await response.body?.cancel();
-      throw new VisualizationAssetError(502, "visualization_asset_unavailable", "The public image is unavailable.");
-    }
-    const contentType = response.headers.get("content-type") ?? "";
-    const bytes = await readBoundedResponse(response);
-    return validateRemoteImage(bytes, contentType);
-  } catch (error) {
-    if (error instanceof VisualizationAssetError) throw error;
-    throw new VisualizationAssetError(502, "visualization_asset_unavailable", "The public image is unavailable.");
-  } finally {
-    clearTimeout(timeout);
-  }
 }

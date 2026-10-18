@@ -2,7 +2,7 @@
 
 ## 1. 분위기와 적용 원칙
 
-조용한 로컬 글쓰기 작업 공간의 기존 녹색 계열과 문서 중심 구성을 유지한다. 앱·모바일·Markdown 편집기·육아 기록 미리보기는 같은 의미 토큰을 사용한다. 같은 역할에 별도 색·크기·간격을 만들지 않는다.
+조용한 로컬 글쓰기 작업 공간의 기존 녹색 계열과 문서 중심 구성을 유지한다. 앱·모바일·Markdown 편집기·시각화 호스트는 같은 의미 토큰을 사용한다. 같은 역할에 별도 색·크기·간격을 만들지 않는다.
 
 실행 값의 단일 정의는 `packages/markdown-live-editor/tokens.css`다. 편집기 `styles.css`가 이를 불러오므로 패키지만 복사한 환경에서도 같은 기본 테마가 적용된다. 앱의 `--ink`·`--surface`와 편집기의 `--mle-*`는 이 토큰을 가리키는 호환 별칭이며 별도 값이 아니다. `DESIGN.md`는 용도·척도·컴포넌트 계약을 정하고, 자동 검증은 문서·정의·참조의 일치를 검사한다.
 
@@ -109,7 +109,7 @@
 | 입력·선택 | 앱 폼, `.mle-language-select`, 편집기 대화상자 | raised 면, ink/muted, line, radius-md, 명시적 접근성 이름 |
 | 대화상자 | `ActionDialog`, `VaultSettingsDialog`, `.mle-link-dialog` | surface/raised, backdrop, radius-xl, shadow-lg; 헤더·동작 고정, 내용 영역만 스크롤 |
 | 문서·원문 보존 | `MarkdownLiveEditor`, `PreservedMarkdownPreview` | reading 글자·행간, 원문 직렬화 보존, 코드 면 토큰, 안전한 링크·이미지 |
-| 시각화·육아 기록 카드 | `FieldnotesViewBlock`, `BabiesDataview` | surface/canvas, radius-lg, space-3/4, 상태 의미 색, 분류 색은 info/rose/violet/warning/success만 사용 |
+| 시각화 호스트 카드 | `FieldnotesViewBlock` | surface/canvas, radius-lg, space-3/4, 상태 의미 색, 분류 색은 info/rose/violet/warning/success만 사용 |
 
 새 상태나 변형도 먼저 이 계약과 토큰으로 표현한다. 같은 역할의 컨트롤을 별도 hex·px로 꾸미지 않는다. 사용자 작성 `fieldnotes-view`의 격리된 HTML/CSS는 문서 콘텐츠이며 호스트 디자인 계약을 강제로 주입하지 않는다. sandbox·CSP·원문 보존 계약은 유지한다.
 

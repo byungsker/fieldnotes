@@ -6,14 +6,11 @@ import { getChangesAfter, getLatestChangeSequence, getRecentChanges, reconcileVa
 import { VaultStorageError } from "./storage/vault.js";
 import { VaultSettingsService } from "./storage/vault-settings.js";
 import type { ChangeRecord } from "./storage/types.js";
-import type { MovieSearchAdapter } from "./visualization/movie-search.js";
-import type { PosterImageFetcher } from "./visualization/assets.js";
 import { errors, sendError } from "./http/errors.js";
 import { RequestValidationError } from "./http/validation.js";
 import { registerDocumentRoutes } from "./routes/documents.js";
 import { registerFolderRoutes } from "./routes/folders.js";
 import { registerVaultSettingsRoutes } from "./routes/vault-settings.js";
-import { registerPreviewRoutes } from "./routes/preview.js";
 import { registerBookmarkRoutes } from "./routes/bookmarks.js";
 import { registerVisualizationRoutes } from "./routes/visualizations.js";
 
@@ -41,7 +38,7 @@ function parseLimit(value: unknown, fallback: number, max: number): number {
   return Math.min(limit, max);
 }
 
-export function createApp(database: KnowledgeDatabase, staticDirectory?: string, adapters: { movieSearch?: MovieSearchAdapter; posterImageFetch?: PosterImageFetcher; vaultSettings?: { documentsRoot?: string; configuredVaultPath?: string | null } } = {}): Express {
+export function createApp(database: KnowledgeDatabase, staticDirectory?: string, adapters: { vaultSettings?: { documentsRoot?: string; configuredVaultPath?: string | null } } = {}): Express {
   const app = express();
   const resolvedStaticDirectory = staticDirectory ? path.resolve(staticDirectory) : undefined;
   const staticIndex = resolvedStaticDirectory ? path.join(resolvedStaticDirectory, "index.html") : undefined;
@@ -113,7 +110,7 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
       response.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     }
     response.setHeader("Content-Security-Policy", visualizationRunner
-      ? "default-src 'none'; script-src 'sha256-yxM1u5xKN+HdxiofbH9IksEsY1i/izbqS0P4nyjyLgc=' blob:; script-src-elem 'sha256-yxM1u5xKN+HdxiofbH9IksEsY1i/izbqS0P4nyjyLgc=' blob:; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'none'; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'; frame-ancestors 'self'; worker-src blob:"
+      ? "default-src 'none'; script-src 'sha256-ylbVNIpFTqvPbuIe+PTCST7LrtD0M8nNPAivkCtBPuI=' blob:; script-src-elem 'sha256-ylbVNIpFTqvPbuIe+PTCST7LrtD0M8nNPAivkCtBPuI=' blob:; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'none'; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'; frame-ancestors 'self'; worker-src blob:"
       : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
 
     if (allowedTailscaleLogin) {
@@ -187,13 +184,11 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
 
   registerVaultSettingsRoutes(app, database, vaultSettings);
 
-  registerPreviewRoutes(app, database);
-
   registerBookmarkRoutes(app);
 
   registerDocumentRoutes(app, database);
 
-  registerVisualizationRoutes(app, database, adapters);
+  registerVisualizationRoutes(app, database);
 
   registerFolderRoutes(app, database);
 

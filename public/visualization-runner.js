@@ -166,7 +166,7 @@ function sanitizeMarkup(markup, allowedImageSources = new Set()) {
 
 const ALLOWED_EVENTS = new Set([
   "state.set", "state.toggle", "note.open", "note.create", "note.update", "note.frontmatter.patch",
-  "note.trash", "trash.restore", "movies.search",
+  "note.trash", "trash.restore",
 ]);
 
 function readEventFields(form) {
@@ -198,7 +198,7 @@ function emitUiEvent(target) {
       : actionNode.value !== undefined && rawValue === null ? actionNode.value : rawValue;
     try { if (typeof value === "string") value = JSON.parse(value); } catch { /* plain text is also a supported state value */ }
     uiEvent = { type, key: actionNode.getAttribute("data-state-key") || "", value };
-  } else if (type === "note.create" || type === "movies.search") {
+  } else if (type === "note.create") {
     uiEvent = { type, fields: readEventFields(actionNode.closest("form")) };
   } else if (type === "note.update" || type === "note.frontmatter.patch") {
     uiEvent = { type, noteId, fields: readEventFields(actionNode.closest("form")) };
@@ -428,18 +428,6 @@ function runVisualization(message) {
   }, MAX_EXECUTION_MS);
 }
 
-function isSafePublicPosterReference(value) {
-  if (typeof value !== "string" || value.length > 2_048 || [...value].some((character) => {
-    const point = character.codePointAt(0) || 0;
-    return point < 32 || point === 32 || point === 127;
-  })) return false;
-  let url;
-  try { url = new URL(value); } catch { return false; }
-  return url.origin === "https://image.tmdb.org" && !url.username && !url.password && !url.port
-    && !url.search && !url.hash && /^\/t\/p\/(?:w\d{1,4}|original)\/[A-Za-z0-9._/-]{1,1200}$/.test(url.pathname)
-    && !url.pathname.split("/").some((segment) => segment === "." || segment === "..") && url.href === value;
-}
-
 function safeAssetPath(value) {
   return typeof value === "string" && value.length > 0 && value.length <= 1_024
     && !value.includes("\\") && ![...value].some((character) => {
@@ -454,9 +442,6 @@ function buildAllowedImageSources(notes) {
   const sources = new Set();
   for (const note of notes) {
     if (!note || !NOTE_ID_PATTERN.test(note.id || "") || !NOTE_HASH_PATTERN.test(note.contentHash || "")) continue;
-    if (isSafePublicPosterReference(note.frontmatter?.poster)) {
-      sources.add(`/api/views/assets/${note.id}?field=poster&v=${note.contentHash}`);
-    }
     if (Array.isArray(note.assetPaths)) {
       for (const assetPath of note.assetPaths.slice(0, 20)) {
         if (sources.size >= MAX_ASSET_SOURCES) return sources;

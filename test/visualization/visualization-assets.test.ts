@@ -8,8 +8,6 @@ import { closeDatabase, createDocument, createFolder, openDatabase } from "../..
 import { readDescriptorBounded, VaultStorageError } from "../../server/storage/vault.js";
 import {
   extractLocalImageReferences,
-  fetchPublicTmdbPoster,
-  isAllowedTmdbPosterUrl,
   MAX_VISUALIZATION_IMAGE_BYTES,
   validateLocalImage,
 } from "../../server/visualization/assets.js";
@@ -19,8 +17,6 @@ const database = openDatabase(path.join(temporaryRoot, "data"), { seedDemo: fals
 const moviesFolder = createFolder(database, "movies", null);
 const recordsFolder = createFolder(database, "records", moviesFolder.id);
 createFolder(database, "attachments", moviesFolder.id);
-const posterBytes = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
-let servedPosterBytes = posterBytes;
 const localBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lS8AAAAASUVORK5CYII=", "base64");
 const localPath = path.join(database.vault!.rootDir, "movies", "attachments", "synthetic-cover.png");
 writeFileSync(localPath, localBytes);
@@ -30,17 +26,8 @@ writeFileSync(misnamedLocalPath, localBytes);
 const misnamedLocalNote = createDocument(database, "Synthetic PNG with JPG extension", "---\nkind: fixture\n---\n\n![[../attachments/synthetic-misnamed-cover.jpg]]", recordsFolder.id);
 const publicPosterUrl = "https://image.tmdb.org/t/p/w500/synthetic-poster.jpg";
 const publicNote = createDocument(database, "Synthetic public poster", `---\nposter: ${publicPosterUrl}\n---\nSynthetic fixture.`, recordsFolder.id);
-const unsafeNote = createDocument(database, "Synthetic unsafe poster", "---\nposter: https://image.tmdb.org.evil.example/t/p/w500/nope.jpg\n---\nSynthetic fixture.", recordsFolder.id);
 const fencedNote = createDocument(database, "Synthetic fenced image example", "```markdown\n![[../attachments/synthetic-cover.png]]\n```", recordsFolder.id);
-let posterRequests = 0;
-let receivedPosterRequest: { url: string; init: RequestInit } | undefined;
-const app = createApp(database, undefined, {
-  posterImageFetch: async (url, init) => {
-    posterRequests += 1;
-    receivedPosterRequest = { url: url.href, init };
-    return new Response(servedPosterBytes, { status: 200, headers: { "content-type": "image/jpeg", "content-length": String(servedPosterBytes.byteLength) } });
-  },
-});
+const app = createApp(database);
 const server = app.listen(0, "127.0.0.1");
 let baseUrl = "";
 
@@ -58,18 +45,6 @@ after(async () => {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   closeDatabase(database);
   rmSync(temporaryRoot, { recursive: true, force: true });
-});
-
-test("public poster validation accepts only credential-free TMDb image references", () => {
-  assert.equal(isAllowedTmdbPosterUrl(publicPosterUrl), true);
-  for (const value of [
-    "http://image.tmdb.org/t/p/w500/example.jpg",
-    "https://image.tmdb.org.evil.example/t/p/w500/example.jpg",
-    "https://user@image.tmdb.org/t/p/w500/example.jpg",
-    "https://image.tmdb.org:444/t/p/w500/example.jpg",
-    "https://image.tmdb.org/t/p/w500/example.jpg?token=secret",
-    "https://image.tmdb.org/t/p/w500/../private.jpg",
-  ]) assert.equal(isAllowedTmdbPosterUrl(value), false);
 });
 
 test("local image extraction resolves only explicit relative raster references", () => {
@@ -144,24 +119,7 @@ test("bounded descriptor reads stop at the limit plus one byte if the open file 
   }
 });
 
-test("public poster fetch is credential-free, redirect-free, and byte-bounded", async () => {
-  let request: { url: string; init: RequestInit } | undefined;
-  const image = await fetchPublicTmdbPoster(publicPosterUrl, async (url, init) => {
-    request = { url: url.href, init };
-    return new Response(posterBytes, { status: 200, headers: { "content-type": "image/jpeg" } });
-  });
-  assert.equal(image.contentType, "image/jpeg");
-  assert.deepEqual(image.bytes, posterBytes);
-  assert.equal(request?.url, publicPosterUrl);
-  assert.equal(request?.init.redirect, "manual");
-  assert.deepEqual(request?.init.headers, { Accept: "image/jpeg, image/png, image/webp" });
-  assert.equal(await fetchPublicTmdbPoster(publicPosterUrl, async () => new Response("redirect", { status: 302, headers: { location: "https://example.invalid/" } })).then(() => false, () => true), true);
-  await assert.rejects(fetchPublicTmdbPoster("https://image.tmdb.org.evil.example/t/p/w500/nope.jpg", async () => {
-    throw new Error("must not fetch invalid host");
-  }), /approved public image/u);
-});
-
-test("view asset API serves referenced local images and validated public posters from synthetic notes only", async () => {
+test("view asset API serves only explicitly referenced local images and rejects remote metadata", async () => {
   const queryResponse = await fetch(`${baseUrl}/api/views/query`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -197,46 +155,27 @@ test("view asset API serves referenced local images and validated public posters
   const fencedReference = `${baseUrl}/api/views/assets/${fencedNote.id}?asset=${encodeURIComponent("movies/attachments/synthetic-cover.png")}&v=${fencedNote.contentHash}`;
   assert.equal((await fetch(fencedReference)).status, 404);
 
-  const posterResponse = await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`);
-  assert.equal(posterResponse.status, 200);
-  assert.equal(posterResponse.headers.get("content-type"), "image/jpeg");
-  assert.deepEqual(Buffer.from(await posterResponse.arrayBuffer()), posterBytes);
-  const initialEtag = posterResponse.headers.get("etag");
-  assert.ok(initialEtag);
-  const entityTagList = await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`, {
-    headers: { "If-None-Match": `"other,opaque", W/${initialEtag}` },
-  });
-  assert.equal(entityTagList.status, 304);
-  const wildcard = await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`, {
-    headers: { "If-None-Match": "*" },
-  });
-  assert.equal(wildcard.status, 304);
-  const quotedWildcard = await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`, {
-    headers: { "If-None-Match": '"*"' },
-  });
-  assert.equal(quotedWildcard.status, 200);
-  const malformedTag = await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`, {
-    headers: { "If-None-Match": `prefix${initialEtag}suffix` },
-  });
-  assert.equal(malformedTag.status, 200);
-  const malformedList = await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`, {
-    headers: { "If-None-Match": `${initialEtag}, malformed` },
-  });
-  assert.equal(malformedList.status, 200);
-  servedPosterBytes = Buffer.from([0xff, 0xd8, 0xff, 0x01, 0x02, 0xff, 0xd9]);
-  const refreshedPoster = await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`, {
-    headers: { "If-None-Match": initialEtag },
-  });
-  assert.equal(refreshedPoster.status, 200);
-  assert.notEqual(refreshedPoster.headers.get("etag"), initialEtag);
-  assert.deepEqual(Buffer.from(await refreshedPoster.arrayBuffer()), servedPosterBytes);
-  assert.equal(posterRequests, 7);
-  assert.equal(receivedPosterRequest?.url, publicPosterUrl);
-  assert.equal(receivedPosterRequest?.init.headers && "Authorization" in (receivedPosterRequest.init.headers as Record<string, string>), false);
+  const currentEtag = refreshedLocal.headers.get("etag");
+  assert.ok(currentEtag);
+  for (const [header, status] of [
+    [`"other,opaque", W/${currentEtag}`, 304],
+    ["*", 304],
+    ['"*"', 200],
+    [`prefix${currentEtag}suffix`, 200],
+    [`${currentEtag}, malformed`, 200],
+  ] as const) {
+    const response = await fetch(localUrl, { headers: { "If-None-Match": header } });
+    assert.equal(response.status, status, header);
+  }
+  appendFileSync(localPath, Buffer.from([2]));
+  const changedAgain = await fetch(localUrl, { headers: { "If-None-Match": currentEtag } });
+  assert.equal(changedAgain.status, 200);
+  assert.notEqual(changedAgain.headers.get("etag"), currentEtag);
 
-  const unsafeResponse = await fetch(`${baseUrl}/api/views/assets/${unsafeNote.id}?field=poster&v=${unsafeNote.contentHash}`);
-  assert.equal(unsafeResponse.status, 404);
-  assert.equal(posterRequests, 7);
+  assert.equal((await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`)).status, 400);
+  assert.equal((await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?asset=${encodeURIComponent(publicPosterUrl)}&v=${publicNote.contentHash}`)).status, 404);
+  assert.equal((await fetch(localUrl.replace(localNote.contentHash, "0".repeat(64)))).status, 409);
+  assert.equal((await fetch(localUrl.replace(`&v=${localNote.contentHash}`, ""))).status, 400);
   const unreferencedResponse = await fetch(`${baseUrl}/api/views/assets/${localNote.id}?asset=${encodeURIComponent("movies/attachments/other.png")}&v=${localNote.contentHash}`);
   assert.equal(unreferencedResponse.status, 404);
 });

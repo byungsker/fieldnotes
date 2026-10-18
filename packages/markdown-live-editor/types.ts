@@ -35,7 +35,6 @@ export interface MarkdownPreviewContext {
   documentId?: string;
   documentPath?: string;
   documentHash?: string;
-  recordsFolderId?: string;
   onOpenDocument?: (documentId: string) => void;
 }
 

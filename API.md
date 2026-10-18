@@ -18,6 +18,7 @@ All routes are under the same origin as the web app. Requests and responses are 
 | `GET` | `/api/documents/:id` | Read a complete note, including `version` |
 | `POST` | `/api/views/query` | Read note metadata and a safe frontmatter subset for a local visualization; never mutates notes |
 | `POST` | `/api/views/actions` | Validate and dispatch a bounded visualization action |
+| `GET` | `/api/views/assets/:id?asset=...&v=...` | 문서 hash와 명시적 참조를 검증한 로컬 이미지 |
 | `PUT` | `/api/documents/:id` | Update `{expectedVersion, title, body, folderId?, expectedHash?}`; `folderId` moves the note |
 | `DELETE` | `/api/documents/:id` | Delete `{expectedVersion, expectedHash?}` |
 | `GET` | `/api/folders` | List folders, including empty folders and direct-note counts |
@@ -42,7 +43,9 @@ Vault settings accept relative paths only. The server resolves and checks each d
 
 ### Visualization actions
 
-`POST /api/views/actions` accepts one bounded action from the Fieldnotes visualization action schema. `note.create` requires a caller-generated UUID `actionId` for idempotent retries. `note.update`, `note.frontmatter.patch`, and `note.trash` require the current `expectedVersion` and `expectedHash`; `trash.restore` requires the current trashed-note `expectedVersion`. The server validates IDs, action types, allowed fields, sizes, and versions/hashes before mutation. A stale write returns `409 version_conflict`. Movie search is available only when the approved TMDb adapter is configured; otherwise the endpoint returns `503 movie_search_unavailable`.
+`POST /api/views/actions`는 공통 문서 액션을 처리한다. `note.create`는 멱등 재시도를 위해 호출자가 만든 UUID `actionId`를 요구한다. `note.update`, `note.frontmatter.patch`, `note.trash`는 현재 `expectedVersion`·`expectedHash`, `trash.restore`는 휴지통 문서의 `expectedVersion`이 필요하다. 허용 액션·필드·ID·크기를 검증하며 오래된 쓰기는 `409 version_conflict`다. 카테고리별 액션이나 API는 없고 분류 값은 사용자 frontmatter에 둔다. `movies.search`는 지원하지 않는다.
+
+`GET /api/views/assets/:id?asset=<상대 경로>&v=<문서 hash>`는 해당 문서 본문에 명시한 로컬 JPEG·PNG·WebP 이미지만 제공하며 1 MB로 제한한다. hash 불일치는 `409`, 미참조·외부 URL은 `404`, 과거 `field=poster`는 `400`이다. 원격 이미지를 다운로드하지 않는다. [사용자 JS 예시](docs/custom-js-record-views.md)와 [기존 뷰 이관](docs/custom-js-view-migration.md)을 참고한다.
 
 The parser reads safe YAML scalars, lists, and mappings without evaluating tags, scripts, or expressions. Unsupported or malformed frontmatter is returned with `frontmatterError`; it is not written back. Query scans stop at 1,000 candidate notes or 20 MB of Markdown and responses are capped at 1.5 MB, so a broad query can return `413` and ask for a folder scope. The route uses the same loopback/origin and Tailscale identity checks as every other API endpoint.
 

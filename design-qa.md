@@ -62,3 +62,18 @@ Synthetic captures are kept outside Git under `/tmp/fieldnotes-qa-*`; no referen
 Node 22에서 루트 린트·185개 테스트·타입 검사를 포함한 빌드가 통과했다. 편집기 디렉터리만 저장소 밖으로 복사한 환경에서도 `npm ci`, 타입 검사, 55개 테스트가 통과했다. 빌드의 기존 대형 청크 경고는 별도 성능 검증 결과로 간주하지 않는다.
 
 이번 캡처와 측정은 로컬 `.omo/evidence/design-tokens-20261018/`의 `desktop-{light,dark}-*.png`, `mobile-{light,dark}-*.png`, `browser-metrics.jsonl`, `autosave.json`에 남겼다. 생성한 이미지와 합성 저장소는 Git에 포함하지 않는다.
+
+## 2026-10-18 사용자 JS 기록 뷰 검증
+
+기록 종류를 앱 코드에서 분리한 변경을 합성 vault와 빌드된 Node 22 서버에서 검증했다. 기존 디자인 토큰 기록은 당시 결과로 남긴다.
+
+- Aside 데스크톱에서 책 예시의 소스 검토·승인, 기록 생성, 완료 변경, 완료 숨김, 문서 열기를 조작했다. 육아 예시도 같은 승인 흐름과 공통 iframe에서 표시되었다.
+- Aside에 viewport 변경 API가 없어 별도 임시 Chrome 프로필에서 390×844, scale factor 1, 모바일·터치 에뮬레이션을 사용했다. 영화 기록 생성과 임의의 `exercise-qa` 카테고리 생성·완료 변경이 동작했다. 앱을 다시 빌드하거나 카테고리를 등록하지 않았다.
+- 승인 철회 후 iframe이 사라지고 `Trust was revoked. This script has stopped.` 상태가 표시되었다. 기록은 남았다.
+- 저장 결과를 API로 다시 읽어 생성한 세 기록의 type과 완료 값을 확인했다. 기존 `babies/legacy.md`의 DataviewJS는 실행되지 않는 안내로 표시되었고 원문 SHA-256은 초기값과 같았다.
+- 공통 로컬 이미지 URL이 `/api/views/assets/:id?asset=...&v=...`로 생성되었고 합성 PNG의 `complete=true`, natural size 1×1을 확인했다. 전용 육아 이미지 경로는 사용하지 않았다.
+- 밝은·어두운 앱 화면과 데스크톱·모바일 렌더링을 확인했다. 모바일 문서의 viewport와 root scrollWidth는 모두 390px이었다. 사용자 JS 내부 스타일은 격리된 runner의 기본 스타일을 사용한다. 실제 iPhone·Safari는 검증하지 않았다.
+
+Node 22에서 루트 린트·171개 테스트·타입 검사를 포함한 빌드가 통과했다. 편집기만 별도로 복사한 환경의 설치·타입 검사·55개 테스트도 통과했다. 제거된 전용 동작의 테스트를 공통 카테고리 CRUD·원문 보존·제거 경로 거부 검증으로 교체했으며 기존 격리·승인·이미지 검증은 유지했다.
+
+로컬 `.omo/evidence/generic-js-views-20261018/`에 브라우저 캡처, 저장 결과, 검증 로그를 남겼다. 캡처와 합성 저장소는 Git에 포함하지 않는다. 검증용 탭·Chrome 프로필·임시 서버와 vault를 종료·정리했다.

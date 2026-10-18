@@ -11,7 +11,6 @@ import {
 import { VaultStorageError } from "../storage/vault.js";
 import { VisualizationQueryError } from "../visualization/query.js";
 import { VisualizationAssetError } from "../visualization/assets.js";
-import { MovieSearchProviderError } from "../visualization/movie-search.js";
 import { ViewQueryLimitError } from "../view-query-limits.js";
 import { RequestValidationError } from "./validation.js";
 
@@ -46,10 +45,6 @@ export const errors: ErrorRequestHandler = (error, _request, response, next) => 
   }
   if (error instanceof BookmarkMetadataFetchError) {
     sendError(response, 502, "bookmark_metadata_unavailable", error.message);
-    return;
-  }
-  if (error instanceof MovieSearchProviderError) {
-    sendError(response, 502, "movie_search_failed", error.message);
     return;
   }
   if (error instanceof VersionConflictError) {

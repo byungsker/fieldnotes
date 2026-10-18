@@ -162,11 +162,7 @@ export function createFieldnotesEditorAdapters(): MarkdownLiveEditorAdapters {
       try { window.localStorage.removeItem(visualizationTrustKey(documentId, blockIndex, sourceHash)); }
       catch { throw new Error("Could not revoke this visualization's trust record."); }
     },
-    resolveLocalImage({ documentId, documentPath, documentHash, source, assetPath }) {
-      if (documentPath.startsWith("babies/")) {
-        const query = new URLSearchParams({ documentId, source });
-        return `/api/preview/babies/asset?${query.toString()}`;
-      }
+    resolveLocalImage({ documentId, documentHash, assetPath }) {
       if (!documentHash) return null;
       const query = new URLSearchParams({ asset: assetPath, v: documentHash });
       return `/api/views/assets/${encodeURIComponent(documentId)}?${query.toString()}`;

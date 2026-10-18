@@ -7,16 +7,14 @@ import { after, before, test } from "node:test";
 import { createApp } from "../../server/api.js";
 import { closeDatabase, createDocument, listTrashedDocuments, openDatabase, trashDocument, restoreTrashedDocument } from "../../server/storage/database.js";
 import { parseFrontmatter } from "../../server/visualization/frontmatter.js";
-import { TmdbMovieSearchAdapter } from "../../server/visualization/movie-search.js";
 import { ViewQueryLimitError } from "../../server/view-query-limits.js";
-import { parseVisualizationUiEvent, type MovieSearchResult } from "../../shared/visualization.js";
+import { parseVisualizationUiEvent } from "../../shared/visualization.js";
 import { parseFieldnotesViewConfig } from "../../packages/markdown-live-editor/fieldnotes-view-config.js";
 
 type ApiResponseBody = {
   notes?: Array<{ id: string; title: string; version: number; contentHash: string; frontmatter: Record<string, unknown> }>;
   trash?: Array<{ id: string; title: string; version: number; folderId: string | null; trashedAt: string; excerpt: string }>;
   note?: { id: string; title: string; version: number; path: string };
-  results?: MovieSearchResult[];
   error?: string;
   sequence?: number;
 };
@@ -31,30 +29,12 @@ const baby = createDocument(database, "Fixture milestone", readFileSync(path.joi
 createDocument(database, "Fixture movie", readFileSync(path.join(fixtureDirectory, "movie-entry.md"), "utf8"));
 const dashboards = ["goals-dashboard.md", "articles-dashboard.md", "babies-dashboard.md", "movies-dashboard.md"]
   .map((filename) => readFileSync(path.join(fixtureDirectory, filename), "utf8"));
-const mockResults: MovieSearchResult[] = [{
-  id: 123,
-  title: "Arrival",
-  originalTitle: "Arrival",
-  releaseDate: "2016-11-11",
-  overview: "A synthetic search result.",
-  posterPath: null,
-}];
-let receivedMovieQuery = "";
-let receivedMovieLanguage = "";
 const staticDirectory = path.join(temporaryRoot, "static");
 mkdirSync(staticDirectory);
 writeFileSync(path.join(staticDirectory, "index.html"), "<!doctype html><title>Fixture</title>");
 copyFileSync(path.join(process.cwd(), "public", "visualization-runner.html"), path.join(staticDirectory, "visualization-runner.html"));
 copyFileSync(path.join(process.cwd(), "public", "visualization-runner.js"), path.join(staticDirectory, "visualization-runner.js"));
-const app = createApp(database, staticDirectory, {
-  movieSearch: {
-    async search(query, language) {
-      receivedMovieQuery = query;
-      receivedMovieLanguage = language;
-      return mockResults;
-    },
-  },
-});
+const app = createApp(database, staticDirectory);
 const server = app.listen(0, "127.0.0.1");
 let baseUrl = "";
 
@@ -123,6 +103,7 @@ test("sandbox action messages parse into the bounded host event vocabulary", () 
   assert.equal(parseVisualizationUiEvent({ type: "state.set", key: "__proto__", value: true }), null);
   assert.equal(parseVisualizationUiEvent({ type: "note.update", noteId: goal.id, fields: {}, extra: true }), null);
   assert.equal(parseVisualizationUiEvent({ type: "arbitrary", fields: {} }), null);
+  assert.equal(parseVisualizationUiEvent({ type: "movies.search", fields: { query: "Arrival" } }), null);
 });
 
 test("read-only query filters fixture metadata without returning note bodies and refreshes after a committed action", async () => {
@@ -243,38 +224,41 @@ test("trash view queries cap candidates at the runner limit and enforce a byte b
   assert.equal(overBudget.body.error, "invalid_view_query");
 });
 
-test("TMDb search uses only the injected mock adapter and returns bounded fixture results", async () => {
-  const response = await post("/api/views/actions", { type: "movies.search", provider: "tmdb", query: " Arrival ", language: "en-US" });
-  assert.equal(response.response.status, 200);
-  assert.equal(receivedMovieQuery, "Arrival");
-  assert.equal(receivedMovieLanguage, "en-US");
-  assert.deepEqual(response.body.results, mockResults);
-  const unsupported = await post("/api/views/actions", { type: "movies.search", provider: "arbitrary", query: "Arrival" });
-  assert.equal(unsupported.response.status, 400);
+test("카테고리 전용 액션과 과거 preview 경로는 제공하지 않는다", async () => {
+  const legacy = await post("/api/views/actions", { type: "movies.search", provider: "tmdb", query: "Arrival" });
+  assert.equal(legacy.response.status, 400);
+  for (const category of ["babies", "reading", "movies"]) {
+    assert.equal((await fetch(`${baseUrl}/api/preview/${category}`)).status, 404);
+    assert.equal((await fetch(`${baseUrl}/api/${category}`)).status, 404);
+  }
 });
 
-test("TMDb adapter uses a fixed official endpoint and bearer token only through a mocked fetch", async () => {
-  let requestedUrl: URL | undefined;
-  let authorization = "";
-  const adapter = new TmdbMovieSearchAdapter("synthetic-access-token", async (input, init) => {
-    requestedUrl = new URL(String(input));
-    authorization = new Headers(init?.headers).get("Authorization") ?? "";
-    return new Response(JSON.stringify({ results: [
-      { id: 7, title: "Arrival", original_title: "Arrival", release_date: "2016-11-11", overview: "Fixture.", poster_path: "/sample.jpg" },
-      { id: "invalid", title: "Ignore this row" },
-    ] }), { status: 200, headers: { "Content-Type": "application/json" } });
-  });
-  const results = await adapter.search("Arrival", "en-US");
-  assert.equal(requestedUrl?.origin, "https://api.themoviedb.org");
-  assert.equal(requestedUrl?.pathname, "/3/search/movie");
-  assert.equal(requestedUrl?.searchParams.get("query"), "Arrival");
-  assert.equal(requestedUrl?.searchParams.get("include_adult"), "false");
-  assert.equal(requestedUrl?.searchParams.get("language"), "en-US");
-  assert.equal(authorization, "Bearer synthetic-access-token");
-  assert.deepEqual(results, [{
-    id: 7, title: "Arrival", originalTitle: "Arrival", releaseDate: "2016-11-11",
-    overview: "Fixture.", posterPath: "/sample.jpg",
-  }]);
+test("책·영화·육아와 실행 중 새로 정한 카테고리가 동일한 query/actions 계약을 사용한다", async () => {
+  for (const category of ["reading", "movies", "babies", `new-${randomUUID()}`]) {
+    const actionId = randomUUID();
+    const created = await post("/api/views/actions", {
+      type: "note.create", actionId, title: `합성 ${category} 기록`, body: "사용자 정의 본문",
+      frontmatter: { category, customScore: 7, completed: false },
+    });
+    assert.equal(created.response.status, 201);
+    const query = { where: [{ field: "frontmatter.category", operator: "eq", value: category }] };
+    const queried = await post("/api/views/query", { query });
+    assert.equal(queried.response.status, 200);
+    assert.deepEqual(queried.body.notes?.map((note) => note.id), [actionId]);
+    const note = queried.body.notes?.[0];
+    assert.ok(note);
+    assert.equal(note.frontmatter.customScore, 7);
+    assert.equal(Object.hasOwn(note, "body"), false);
+    const patched = await post("/api/views/actions", {
+      type: "note.frontmatter.patch", id: note.id, expectedVersion: note.version, expectedHash: note.contentHash,
+      patch: { completed: true, userAddedField: ["임의", "분류"] },
+    });
+    assert.equal(patched.response.status, 200);
+    const refreshed = (await post("/api/views/query", { query })).body.notes?.[0];
+    assert.equal(refreshed?.version, note.version + 1);
+    assert.deepEqual(refreshed?.frontmatter.userAddedField, ["임의", "분류"]);
+    assert.equal(refreshed?.frontmatter.completed, true);
+  }
 });
 
 test("filesystem trash is private and restore handles a folder deleted while the note was trashed", () => {
@@ -340,27 +324,5 @@ test("filesystem view queries use the bounded index without triggering a full va
   } finally {
     await new Promise<void>((resolve, reject) => queryServer.close((error) => error ? reject(error) : resolve()));
     closeDatabase(fsDatabase);
-  }
-});
-
-test("TMDb provider is disabled unless an approved adapter is injected", async () => {
-  const unconfigured = createApp(database);
-  const isolated = unconfigured.listen(0, "127.0.0.1");
-  await new Promise<void>((resolve, reject) => {
-    isolated.once("listening", resolve);
-    isolated.once("error", reject);
-  });
-  const address = isolated.address();
-  assert.ok(address && typeof address !== "string");
-  try {
-    const response = await fetch(`http://127.0.0.1:${address.port}/api/views/actions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "movies.search", provider: "tmdb", query: "Arrival" }),
-      signal: AbortSignal.timeout(5_000),
-    });
-    assert.equal(response.status, 503);
-  } finally {
-    await new Promise<void>((resolve) => isolated.close(() => resolve()));
   }
 });

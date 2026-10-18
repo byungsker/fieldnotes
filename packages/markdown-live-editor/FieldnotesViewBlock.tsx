@@ -170,12 +170,6 @@ function isVisualizationValue(value: unknown, depth = 0): value is Visualization
   return entries.length <= 50 && entries.every(([key, item]) => SAFE_VIEW_KEY.test(key) && isVisualizationValue(item, depth + 1));
 }
 
-function visualizationValues(value: unknown): VisualizationValue[] | undefined {
-  return Array.isArray(value) && value.length <= 50 && value.every((item) => isVisualizationValue(item))
-    ? value
-    : undefined;
-}
-
 function recordFromJson(value: string | undefined, label: string): Record<string, VisualizationValue> | undefined {
   if (!value?.trim()) return undefined;
   let parsed: unknown;
@@ -394,19 +388,11 @@ function FieldnotesViewNodeView({ node, editor, getPos, updateAttributes, option
       if (!trash) throw new Error("This note is no longer in the current trash view.");
       action = { type: "trash.restore", id: trash.id, expectedVersion: trash.version };
       refreshAfter = true;
-    } else if (event.type === "movies.search") {
-      const query = event.fields.query?.trim();
-      if (!query) throw new Error("Enter a movie title to search.");
-      action = { type: "movies.search", provider: "tmdb", query, language: event.fields.language || "en-US" };
     }
 
     if (!action) throw new Error("This visualization action is not supported.");
     const response = await options.runVisualizationAction(action);
-    if (event.type === "movies.search") {
-      const movies = visualizationValues(response.results);
-      if (movies) setViewState((previous) => ({ ...previous, movies }));
-    }
-    setActionMessage(event.type === "movies.search" ? "Movie search finished." : "Change saved.");
+    setActionMessage("Change saved.");
     if (refreshAfter) refreshRef.current?.();
     return response;
   }
