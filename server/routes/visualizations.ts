@@ -15,8 +15,8 @@ import { queryVisualizationNotes, validateVisualizationQuery } from "../visualiz
 import { MAX_VIEW_TRASH_BYTES, MAX_VIEW_TRASH_CANDIDATES } from "../view-query-limits.js";
 import { patchFrontmatter, serializeFrontmatter } from "../visualization/frontmatter.js";
 import {
-  extractLocalImageReferences,
   MAX_VISUALIZATION_IMAGE_BYTES,
+  resolveReferencedLocalImagePath,
   validateLocalImage,
 } from "../visualization/assets.js";
 import type { VisualizationAction, VisualizationValue } from "../../shared/visualization.js";
@@ -177,11 +177,21 @@ export function registerVisualizationRoutes(app: Express, database: KnowledgeDat
       throw new RequestValidationError("A view asset must name one referenced local image.");
     }
     const assetPath = request.query.asset;
-    if (!database.vault || !current.filePath || !extractLocalImageReferences(current.body, current.filePath).includes(assetPath)) {
+    if (!database.vault || !current.filePath) {
       sendError(response, 404, "not_found", "The note does not reference this local image.");
       return;
     }
-    const bytes = database.vault.readAsset(assetPath, MAX_VISUALIZATION_IMAGE_BYTES);
+    const resolvedAssetPath = resolveReferencedLocalImagePath(
+      current.body,
+      current.filePath,
+      assetPath,
+      (relativePath, resolveUniqueBasename) => database.vault!.resolveAssetPath(relativePath, resolveUniqueBasename),
+    );
+    if (!resolvedAssetPath) {
+      sendError(response, 404, "not_found", "The referenced local image is missing or ambiguous.");
+      return;
+    }
+    const bytes = database.vault.readAsset(resolvedAssetPath, MAX_VISUALIZATION_IMAGE_BYTES);
     const image = validateLocalImage(bytes, assetPath);
 
     const imageHash = createHash("sha256").update(image.bytes).digest("hex");
