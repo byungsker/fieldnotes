@@ -53,13 +53,13 @@ In controlled use, an echo of the editor's own latest value does not reset the P
 
 `minHeight`는 픽셀 숫자 또는 유효한 CSS 길이를 받습니다. `styles.css`는 패키지 내부 `tokens.css`를 불러옵니다. 색상·타이포그래피·간격·반경·그림자·전환 시간은 이 파일의 `--ds-*` 토큰을 사용하며, 토큰만 필요한 호스트는 `markdown-live-editor/tokens.css`를 가져올 수 있습니다. `data-theme="dark"`를 루트 요소에 설정하면 같은 의미 토큰의 어두운 테마 값을 사용합니다.
 
-`.mle-*` 클래스와 `--mle-*` 공개 별칭은 유지합니다. 기본 별칭은 공통 `--ds-color-*`에 연결되며, 호스트는 편집기 범위에서 별칭을 덮어쓸 수 있습니다. 육아 기록 등 호스트 미리보기는 공통 토큰을 직접 사용합니다. 새로운 컴포넌트에서 원시 색상이나 별도 크기 값을 추가하지 않고 기존 의미 토큰과 스케일을 재사용합니다.
+`.mle-*` 클래스와 `--mle-*` 공개 별칭은 유지합니다. 기본 별칭은 공통 `--ds-color-*`에 연결되며, 호스트는 편집기 범위에서 별칭을 덮어쓸 수 있습니다. 호스트 미리보기는 공통 토큰을 직접 사용합니다. 새로운 컴포넌트에서 원시 색상이나 별도 크기 값을 추가하지 않고 기존 의미 토큰과 스케일을 재사용합니다.
 
 ## 호스트별 미리보기
 
 호스트는 `renderPreservedBlock(raw, context)`로 보존 블록의 React UI를 제공할 수 있습니다. `null` 또는 `undefined`를 반환하면 기본 미리보기를 사용합니다. 확장은 신뢰할 수 있는 호스트 코드이며, Markdown에 포함된 JavaScript를 실행하는 경로가 아닙니다. 보존 노드의 원문과 직렬화는 렌더링 결과에 영향을 받지 않습니다.
 
-`adapters.resolveLocalImage`는 검증을 통과한 이미지의 원문 `source`, 해석된 `assetPath`, 문서 ID·경로·hash를 받습니다. 호스트가 URL을 반환하거나 `null`로 미리보기를 거절할 수 있습니다. 이 어댑터가 없으면 기존 `resolveReferencedVaultAsset`를 사용하며, 둘 다 없으면 이미지를 불러오지 않습니다. Fieldnotes의 육아 기록 UI·API·스타일은 호스트 `src/pages/workspace/`에 있습니다.
+`adapters.resolveLocalImage`는 검증을 통과한 이미지의 원문 `source`, 해석된 `assetPath`, 문서 ID·경로·hash를 받습니다. 호스트가 URL을 반환하거나 `null`로 미리보기를 거절할 수 있습니다. 이 어댑터가 없으면 기존 `resolveReferencedVaultAsset`를 사용하며, 둘 다 없으면 이미지를 불러오지 않습니다. Fieldnotes 호스트는 공통 문서 query/action과 로컬 자산 API를 연결합니다. 기록 종류는 사용자 Markdown·frontmatter·custom JS로 구성하며 앱·패키지에 카테고리별 코드를 추가하지 않습니다. [기록 뷰 예시](../../docs/custom-js-record-views.md)와 [이관 안내](../../docs/custom-js-view-migration.md)를 참고하세요.
 
 시각화 타입과 이벤트 검증은 패키지 내부 `visualization-contract.ts`에 한 번 정의합니다. `markdown-live-editor/visualization-contract`로 React UI 없이 계약 모듈을 참조할 수 있고, 호스트의 `shared/visualization.ts`는 같은 정의를 재export합니다. 패키지 소스는 상위 저장소 모듈을 import하지 않습니다.
 

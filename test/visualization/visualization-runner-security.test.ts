@@ -12,7 +12,6 @@ const runnerSource = readFileSync(path.join(projectRoot, "public/visualization-r
 const runnerHtml = readFileSync(path.join(projectRoot, "public/visualization-runner.html"), "utf8");
 const apiSource = readFileSync(path.join(projectRoot, "server/api.ts"), "utf8");
 const viewRoutesSource = readFileSync(path.join(projectRoot, "server/routes/visualizations.ts"), "utf8");
-const assetSource = readFileSync(path.join(projectRoot, "server/visualization/assets.ts"), "utf8");
 const editorSource = readFileSync(path.join(projectRoot, "packages/markdown-live-editor/SandboxedVisualization.tsx"), "utf8");
 const viewBlockSource = readFileSync(path.join(projectRoot, "packages/markdown-live-editor/FieldnotesViewBlock.tsx"), "utf8");
 const adaptersSource = readFileSync(path.join(projectRoot, "src/pages/workspace/api/editor-adapters.ts"), "utf8");
@@ -316,15 +315,21 @@ test("generated Worker locks global and prototype escape routes before custom co
   assert.equal(messages[0]?.html, "<p>fixture</p>");
 });
 
-test("sandbox images are limited to note-scoped same-origin asset routes", () => {
-  assert.match(runnerSource, /function buildAllowedImageSources\(notes\)/u);
-  assert.match(runnerSource, /sources\.add\(`\/api\/views\/assets\/\$\{note\.id\}\?field=poster&v=\$\{note\.contentHash\}`\)/u);
+test("sandbox images accept only explicit note-scoped local assets regardless of metadata", () => {
+  const context = sanitizerContext();
+  const id = "11111111-1111-4111-8111-111111111111";
+  const contentHash = "a".repeat(64);
+  context.__fixtureNotes = [{
+    id, contentHash,
+    assetPaths: ["new-category/cover.png", "../outside.png", "https://example.invalid/cover.png", ".fieldnotes/secret.png"],
+    frontmatter: { poster: "https://image.tmdb.org/t/p/w500/example.jpg" },
+  }, { id, assetPaths: ["without-hash.png"] }];
+  const sources = vm.runInContext("buildAllowedImageSources(__fixtureNotes)", context) as Set<string>;
+  assert.deepEqual([...sources], [`/api/views/assets/${id}?asset=new-category%2Fcover.png&v=${contentHash}`]);
   assert.match(runnerSource, /allowedImageSources\.has\(attribute\.value\)/u);
-  assert.match(runnerSource, /url\.origin === "https:\/\/image\.tmdb\.org"/u);
   assert.match(runnerSource, /MAX_ASSET_SOURCES = 50/u);
   assert.doesNotMatch(runnerHtml, /img-src 'none'/u);
   assert.match(apiSource, /img-src 'self'/u);
-  assert.match(assetSource, /redirect: "manual"/u);
   assert.match(viewRoutesSource, /Content-Length/u);
 });
 
@@ -346,7 +351,7 @@ test("synthetic custom-view examples follow the render-function-body contract an
     ["articles-dashboard.md", "Continue writing"],
     ["babies-dashboard.md", "Add milestone"],
     ["goals-dashboard.md", "Add goal"],
-    ["movies-dashboard.md", "Search TMDb"],
+    ["movies-dashboard.md", "영화 기록 추가"],
   ] as const;
   const input = {
     requestId: 11,
@@ -372,6 +377,25 @@ test("synthetic custom-view examples follow the render-function-body contract an
     assert.equal(message?.type, "result", `${filename}: ${message?.message ?? "render did not return a result"}`);
     assert.ok(message?.html?.includes(expectedContent), `${filename} should render its expected controls`);
     if (filename === "goals-dashboard.md") assert.match(message?.html ?? "", /aria-label="New goal title"/u);
+  }
+});
+
+test("배포 없이 복사할 수 있는 사용자 기록 예시는 승인 실행기의 공통 이벤트를 사용한다", () => {
+  const markdown = readFileSync(path.join(projectRoot, "docs/custom-js-record-views.md"), "utf8");
+  const blocks = [...markdown.matchAll(/```fieldnotes-view\n[\s\S]*?\n```/gu)];
+  assert.equal(blocks.length, 3);
+  for (const block of blocks) {
+    const config = parseFieldnotesViewConfig(block[0]);
+    assert.ok(config.js);
+    const { context } = workerContext(config.js);
+    const note = { id: "11111111-1111-4111-8111-111111111111", title: "사용자 합성 기록", frontmatter: { completed: false, date: "2026-10-18" } };
+    vm.runInContext(`self.onmessage({ data: ${JSON.stringify({ requestId: 12, notes: [note], state: {}, trash: [] })} });`, context);
+    const message = (context.__messages as Array<{ type: string; html?: string; message?: string }>)[0];
+    assert.equal(message?.type, "result", message?.message);
+    assert.match(message?.html ?? "", /사용자 합성 기록/u);
+    for (const event of ["note.create", "note.open", "note.frontmatter.patch", "state.toggle"]) {
+      assert.ok(message?.html?.includes(`data-fn-event="${event}"`));
+    }
   }
 });
 

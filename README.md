@@ -92,3 +92,7 @@ Transfer the project source, `package.json`, `package-lock.json`, and `.env.exam
 ## Remote access
 
 The server refuses non-loopback `KB_HOST` values. For private Tailscale Serve use, set `KB_ALLOWED_TAILSCALE_LOGIN` to the exact permitted tailnet login and `KB_PUBLIC_ORIGIN` to the Serve HTTPS origin, for example `https://your-machine.example.invalid:8443`; the app refuses to start if only one is configured. The API requires the matching `Tailscale-User-Login` header on every route and accepts it only from a loopback connection. Tailscale Serve strips client-supplied identity headers and injects the authenticated user's identity; keep Fieldnotes bound to `127.0.0.1` and do not enable Express proxy trust. Restrict Tailscale access to the same user rather than all tailnet members. Set `KB_BASE_URL` for agent CLI clients to the Serve HTTPS origin so their requests pass through that proxy. `KB_PUBLIC_ORIGIN` is an origin/CSRF check, not authentication. This project does not configure Serve, tailnet policy, credentials, firewall, or autostart; test the complete path before enabling it.
+
+## 사용자 정의 기록 뷰
+
+책·영화·육아 등 기록 종류는 사용자 Markdown·frontmatter·custom JS로 구성한다. 새 분류마다 앱 코드를 변경하거나 배포하지 않는다. [실행 가능한 기록 뷰 예시](docs/custom-js-record-views.md), [기존 뷰의 변경 사항](docs/custom-js-view-migration.md), [실행 보안 계약](docs/fieldnotes-visualizations-security.md)을 참고한다.

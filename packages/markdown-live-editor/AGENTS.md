@@ -12,7 +12,7 @@
 - 어댑터가 없을 때 앱 API 주소나 저장소를 직접 참조하는 대체 경로를 추가하지 않는다.
 - 시각화 계약과 이벤트 검증의 단일 정의는 `visualization-contract.ts`다. `../../shared/visualization.ts`는 이를 재export한다. 패키지에서 상위 저장소 소스를 import하거나 계약을 복제하지 않는다.
 - 호스트별 보존 블록 UI는 `renderPreservedBlock`으로 주입한다. `null`·`undefined`를 반환하면 안전한 기본 미리보기를 사용하며 원문 직렬화는 바뀌지 않는다. 렌더러는 신뢰할 수 있는 호스트 React UI를 반환하며 보존된 사용자 JavaScript를 직접 실행하지 않는다.
-- 로컬 이미지 경로는 먼저 패키지에서 검증한 뒤 선택적 `resolveLocalImage`에 원문 source와 해석한 assetPath를 전달한다. 전용 폴더·API 선택과 문서 조회·생성은 호스트가 소유한다.
+- 로컬 이미지 경로는 먼저 패키지에서 검증한 뒤 선택적 `resolveLocalImage`에 원문 source와 해석한 assetPath를 전달한다. 문서 범위의 자산 URL과 조회·생성 연결은 호스트가 소유하며 카테고리별 분기를 추가하지 않는다.
 
 ## 원문 보존 경로
 
@@ -47,7 +47,7 @@
 - 의존성 변경은 이 디렉터리의 `package.json`과 `package-lock.json`을 기준으로 한다. 독립 `tsconfig.json`의 검사 범위도 확인한다.
 - 패키지 코드 검증 명령은 이 디렉터리에서 `npm run typecheck`, `npm test`다. 루트 검증과 패키지 검증 결과를 혼동하지 않는다.
 - 원문 보존 변경은 `markdown-roundtrip.test.ts`, `markdown-line-endings.test.ts`, `node-view-regression.test.ts`의 관련 시나리오를 확인한다.
-- URL·미리보기·시각화 변경은 `markdown-safety.test.ts`, `preserved-block-preview.test.ts`, `preserved-markdown-preview.test.ts`, `fieldnotes-view-config.test.ts` 및 관련 `visualization-*.test.ts`를 확인한다. 육아 기록 호스트 연결은 `../../test/workspace/baby-preview-integration.test.ts`와 `babies-dataview.test.ts`에서 확인한다.
+- URL·미리보기·시각화 변경은 `markdown-safety.test.ts`, `preserved-block-preview.test.ts`, `preserved-markdown-preview.test.ts`, `fieldnotes-view-config.test.ts` 및 관련 `visualization-*.test.ts`를 확인한다. 카테고리 공통 미리보기·이미지 연결은 `../../test/workspace/custom-view-boundaries.test.ts`에서 확인한다.
 - 독립성을 확인할 때 이 패키지만 임시 디렉터리에 복사하고 `npm ci`, `npm run typecheck`, `npm test`를 실행한다. 상위 저장소의 node_modules나 shared 소스가 없어도 통과해야 한다.
 - 스타일은 `.mle-*` 클래스와 `--mle-*` 별칭을 유지한다. 별칭과 컴포넌트는 공통 `tokens.css`의 `--ds-*`를 사용하며, 원시 디자인 값의 정의는 이 파일에만 둔다. 토큰은 루트 custom property만 정의하고 호스트 요소를 꾸미는 전역 선택자는 추가하지 않는다. 저장소의 `../../DESIGN.md`와 토큰 회귀 검증도 함께 갱신한다.
 - `licenses/`의 원본 라이선스 문구는 보존한다. 패키지 설명을 갱신하면서 번역하거나 재작성하지 않는다.

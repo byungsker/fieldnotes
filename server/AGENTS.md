@@ -8,7 +8,7 @@
 |---|---|---|
 | `index.ts` | 바인딩, 프로세스 lock, DB 시작, 종료 | `api.ts`의 drain과 vault monitor |
 | `api.ts`의 `createApp` | 라우트 조합, 인증·CSP, SSE, drain | 미들웨어 순서와 인스턴스별 종료 상태 |
-| `routes/` | 문서·폴더·설정·미리보기·북마크·시각화 API | 명시적으로 전달한 저장소·어댑터와 요청 계약 |
+| `routes/` | 문서·폴더·설정·북마크·시각화 API | 명시적으로 전달한 저장소·어댑터와 요청 계약 |
 | `http/validation.ts`, `http/errors.ts` | 공통 요청 검증·오류 응답 | 동일한 오류 클래스와 기존 상태·메시지 |
 | `storage/database.ts` | 저장소 열기·닫기와 공개 API 조합 | 데이터·vault 경로 검증과 저장 모드 선택 |
 | `storage/database/` | SQLite 스키마·행 변환·조회·트랜잭션, vault 인덱스·monitor | FileVault 성공 여부와 sequence, commit 후 변경 발행 |
@@ -33,6 +33,7 @@
 - Tailscale 요청은 실제 socket의 loopback 주소와 주입된 login을 검사한다. `index.ts`의 loopback 바인딩과 Express의 proxy trust 비활성 상태를 함께 확인한다.
 - `Origin: null` 예외는 sandbox가 읽는 runner JavaScript의 GET 요청에 한정한다. 일반 API나 다른 자산으로 확대하지 않는다.
 - runner 응답의 CSP는 일반 앱 응답과 분리되어 있다. 관련 변경은 `../public/visualization-runner.html`, `../public/visualization-runner.js`, `../vite.config.ts`의 정책과 대조한다.
+- 카테고리를 사용자 frontmatter 값으로 취급한다. 전용 기록 API·검색 provider·폴더별 자산 경로를 추가하지 않는다.
 - `/api/views/actions`는 payload 크기와 허용 action·필드를 검증한다. 새 action도 이 경로를 거치게 하고, 편집기 host의 사용자 승인 흐름과 생성 action의 재실행 충돌 처리를 함께 확인한다.
 
 ## 파일 저장과 SQLite 인덱스

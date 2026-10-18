@@ -13,16 +13,11 @@ import {
 } from "../storage/database.js";
 import { queryVisualizationNotes, validateVisualizationQuery } from "../visualization/query.js";
 import { MAX_VIEW_TRASH_BYTES, MAX_VIEW_TRASH_CANDIDATES } from "../view-query-limits.js";
-import { parseFrontmatter, patchFrontmatter, serializeFrontmatter } from "../visualization/frontmatter.js";
-import type { MovieSearchAdapter } from "../visualization/movie-search.js";
+import { patchFrontmatter, serializeFrontmatter } from "../visualization/frontmatter.js";
 import {
   extractLocalImageReferences,
-  fetchPublicTmdbPoster,
-  isAllowedTmdbPosterUrl,
   MAX_VISUALIZATION_IMAGE_BYTES,
   validateLocalImage,
-  type PosterImageFetcher,
-  type VisualizationImage,
 } from "../visualization/assets.js";
 import type { VisualizationAction, VisualizationValue } from "../../shared/visualization.js";
 import { sendError } from "../http/errors.js";
@@ -150,20 +145,12 @@ function validateVisualizationAction(value: unknown): VisualizationAction {
         type: "trash.restore", id: validateDocumentId(String(action.id)), expectedVersion: validateVersion(action.expectedVersion),
         ...(Object.hasOwn(action, "folderId") ? { folderId: action.folderId === null ? null : validateFolderId(action.folderId) } : {}),
       };
-    case "movies.search": {
-      assertOnlyKeys(action, ["type", "provider", "query", "language"], "Movie search action");
-      if (action.provider !== "tmdb") throw new RequestValidationError("Only the TMDb movie search adapter is supported.");
-      if (typeof action.query !== "string" || !action.query.trim() || action.query.length > 120) throw new RequestValidationError("Movie search query must be 1–120 characters.");
-      const language = action.language === undefined ? "en-US" : action.language;
-      if (typeof language !== "string" || !/^[a-z]{2}(?:-[A-Z]{2})?$/u.test(language)) throw new RequestValidationError("Movie search language is invalid.");
-      return { type: "movies.search", provider: "tmdb", query: action.query.trim(), language };
-    }
     default:
       throw new RequestValidationError("This visualization action is not supported.");
   }
 }
 
-export function registerVisualizationRoutes(app: Express, database: KnowledgeDatabase, adapters: { movieSearch?: MovieSearchAdapter; posterImageFetch?: PosterImageFetcher }): void {
+export function registerVisualizationRoutes(app: Express, database: KnowledgeDatabase): void {
   app.post("/api/views/query", (request, response) => {
     const serialized = JSON.stringify(request.body?.query);
     if (!serialized || Buffer.byteLength(serialized, "utf8") > 16_000) {
@@ -177,7 +164,7 @@ export function registerVisualizationRoutes(app: Express, database: KnowledgeDat
     ));
   });
 
-  app.get("/api/views/assets/:id", async (request, response) => {
+  app.get("/api/views/assets/:id", (request, response) => {
     const id = requestDocumentId(request);
     const expectedHash = validateHash(request.query.v);
     if (!expectedHash) throw new RequestValidationError("A note content hash is required for view assets.");
@@ -186,29 +173,16 @@ export function registerVisualizationRoutes(app: Express, database: KnowledgeDat
     const currentHash = current.contentHash || createHash("sha256").update(current.body, "utf8").digest("hex");
     if (expectedHash !== currentHash) throw new VersionConflictError(current.version, currentHash);
 
-    let image: VisualizationImage;
-    if (Object.keys(request.query).some((key) => !["v", "asset", "field"].includes(key))) {
-      throw new RequestValidationError("View asset query contains an unsupported option.");
+    if (Object.keys(request.query).some((key) => !["v", "asset"].includes(key)) || typeof request.query.asset !== "string") {
+      throw new RequestValidationError("A view asset must name one referenced local image.");
     }
     const assetPath = request.query.asset;
-    const field = request.query.field;
-    if (typeof assetPath === "string" && field === undefined) {
-      if (!database.vault || !current.filePath || !extractLocalImageReferences(current.body, current.filePath).includes(assetPath)) {
-        sendError(response, 404, "not_found", "The note does not reference this local image.");
-        return;
-      }
-      const bytes = database.vault.readAsset(assetPath, MAX_VISUALIZATION_IMAGE_BYTES);
-      image = validateLocalImage(bytes, assetPath);
-    } else if (assetPath === undefined && field === "poster") {
-      const poster = parseFrontmatter(current.body).values.poster;
-      if (!isAllowedTmdbPosterUrl(poster)) {
-        sendError(response, 404, "not_found", "The note does not reference an approved public poster.");
-        return;
-      }
-      image = await fetchPublicTmdbPoster(poster, adapters.posterImageFetch);
-    } else {
-      throw new RequestValidationError("A view asset must name one referenced local image or poster field.");
+    if (!database.vault || !current.filePath || !extractLocalImageReferences(current.body, current.filePath).includes(assetPath)) {
+      sendError(response, 404, "not_found", "The note does not reference this local image.");
+      return;
     }
+    const bytes = database.vault.readAsset(assetPath, MAX_VISUALIZATION_IMAGE_BYTES);
+    const image = validateLocalImage(bytes, assetPath);
 
     const imageHash = createHash("sha256").update(image.bytes).digest("hex");
     const etag = `"${imageHash}"`;
@@ -224,20 +198,12 @@ export function registerVisualizationRoutes(app: Express, database: KnowledgeDat
     response.status(200).end(image.bytes);
   });
 
-  app.post("/api/views/actions", async (request, response) => {
+  app.post("/api/views/actions", (request, response) => {
     const serialized = JSON.stringify(request.body);
     if (!serialized || Buffer.byteLength(serialized, "utf8") > MAX_VIEW_ACTION_BYTES) {
       throw new RequestValidationError("Visualization actions must be smaller than 300 KB.");
     }
     const action = validateVisualizationAction(request.body);
-    if (action.type === "movies.search") {
-      if (!adapters.movieSearch) {
-        sendError(response, 503, "movie_search_unavailable", "Movie search is disabled until an approved provider is configured.");
-        return;
-      }
-      response.json({ results: await adapters.movieSearch.search(action.query, action.language ?? "en-US") });
-      return;
-    }
     if (action.type === "note.create") {
       let frontmatter: string;
       try { frontmatter = action.frontmatter ? serializeFrontmatter(action.frontmatter) : ""; }
