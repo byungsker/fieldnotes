@@ -82,6 +82,6 @@
 
 예시를 복사해 `query.where`의 `value`와 JS `metadata.type`을 원하는 문자열로 바꾸고 제목·표시할 필드를 편집한다. 예를 들어 운동 기록은 둘 다 `exercise`로 정하면 된다. 새로운 분류를 앱에 등록하거나 빌드·배포할 필요가 없다. 코드를 바꾸면 변경된 소스에 다시 실행 승인이 필요하다.
 
-로컬 첨부 이미지는 기록 본문에 `![[../photos/cover.png]]` 같은 명시적 참조를 둔다. 조회 결과의 `note.assetPaths`와 `note.contentHash`로 허용된 이미지 URL을 구성할 수 있다. 예: `/api/views/assets/${note.id}?asset=${encodeURIComponent(note.assetPaths[0])}&v=${note.contentHash}`. JPEG·PNG·WebP, 최대 1 MB만 허용하며 JS 문자열이나 frontmatter URL만으로 이미지 접근 권한이 생기지 않는다.
+로컬 첨부 이미지는 기록 본문에 `![[/photos/cover.png]]` 같은 명시적 참조를 둔다. `/`로 시작하면 vault 최상위 기준이므로 예시 form이 최상위에 생성한 기록에서도 사용할 수 있다. 조회 결과의 `note.assetPaths`와 `note.contentHash`로 허용된 이미지 URL을 구성할 수 있다. 예: `/api/views/assets/${note.id}?asset=${encodeURIComponent(note.assetPaths[0])}&v=${note.contentHash}`. JPEG·PNG·WebP, 최대 1 MB만 허용하며 JS 문자열이나 frontmatter URL만으로 이미지 접근 권한이 생기지 않는다.
 
 기존 DataviewJS와 영화 검색·포스터 연동의 변경 사항은 [이관 안내](custom-js-view-migration.md), 제한과 실행 경계는 [보안 계약](fieldnotes-visualizations-security.md)을 참고한다.
