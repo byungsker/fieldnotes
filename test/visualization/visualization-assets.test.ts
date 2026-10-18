@@ -9,6 +9,7 @@ import { readDescriptorBounded, VaultStorageError } from "../../server/storage/v
 import {
   extractLocalImageReferences,
   MAX_VISUALIZATION_IMAGE_BYTES,
+  resolveReferencedLocalImagePath,
   validateLocalImage,
 } from "../../server/visualization/assets.js";
 
@@ -20,6 +21,11 @@ createFolder(database, "attachments", moviesFolder.id);
 const localBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lS8AAAAASUVORK5CYII=", "base64");
 const localPath = path.join(database.vault!.rootDir, "movies", "attachments", "synthetic-cover.png");
 writeFileSync(localPath, localBytes);
+const largeImageBytes = Buffer.alloc(8_100_000);
+largeImageBytes.set([0xff, 0xd8, 0xff]);
+const largeImagePath = path.join(database.vault!.rootDir, "movies", "attachments", "synthetic-large-cover.jpg");
+writeFileSync(largeImagePath, largeImageBytes);
+const largeImageNote = createDocument(database, "Synthetic large local poster", "---\nkind: fixture\n---\n\n![[../attachments/synthetic-large-cover.jpg]]", recordsFolder.id);
 const localNote = createDocument(database, "Synthetic local poster", "---\nkind: fixture\n---\n\n![[../attachments/synthetic-cover.png]]", recordsFolder.id);
 const misnamedLocalPath = path.join(database.vault!.rootDir, "movies", "attachments", "synthetic-misnamed-cover.jpg");
 writeFileSync(misnamedLocalPath, localBytes);
@@ -86,14 +92,59 @@ test("local image extraction ignores fenced code using delimiter-aware boundarie
   ]);
 });
 
+test("referenced local images retain vault-root and unique-basename compatibility", () => {
+  const resolvedRootPath = resolveReferencedLocalImagePath(
+    "![[images/cover.png]]",
+    "babies/records/entry.md",
+    "babies/records/images/cover.png",
+    (relativePath) => relativePath === "images/cover.png" ? relativePath : undefined,
+  );
+  assert.equal(resolvedRootPath, "images/cover.png");
+
+  const resolvedUniqueBasename = resolveReferencedLocalImagePath(
+    "![[cover.png]]",
+    "babies/records/entry.md",
+    "babies/records/cover.png",
+    (relativePath, resolveUniqueBasename) => resolveUniqueBasename && relativePath === "babies/records/cover.png"
+      ? "babies/attachments/cover.png"
+      : undefined,
+  );
+  assert.equal(resolvedUniqueBasename, "babies/attachments/cover.png");
+
+  let resolverCalled = false;
+  const unreferenced = resolveReferencedLocalImagePath(
+    "A local image exists but is not linked.",
+    "babies/records/entry.md",
+    "images/private.png",
+    () => { resolverCalled = true; return "images/private.png"; },
+  );
+  assert.equal(unreferenced, undefined);
+  assert.equal(resolverCalled, false);
+});
+
 test("local images require an allowed extension, verified raster bytes, and the size cap", () => {
   const image = validateLocalImage(localBytes, "cover.png");
   assert.equal(image.contentType, "image/png");
   assert.equal(validateLocalImage(localBytes, "cover.jpg").contentType, "image/png");
   assert.equal(validateLocalImage(Buffer.from([0xff, 0xd8, 0xff]), "cover.png").contentType, "image/jpeg");
+  assert.equal(validateLocalImage(Buffer.from("GIF89a"), "cover.gif").contentType, "image/gif");
+  const majorBrandAvif = Buffer.alloc(20);
+  majorBrandAvif.writeUInt32BE(20, 0);
+  majorBrandAvif.write("ftyp", 4, "ascii");
+  majorBrandAvif.write("avif", 8, "ascii");
+  majorBrandAvif.write("mif1", 16, "ascii");
+  assert.equal(validateLocalImage(majorBrandAvif, "cover.avif").contentType, "image/avif");
+  const compatibleBrandAvif = Buffer.alloc(24);
+  compatibleBrandAvif.writeUInt32BE(24, 0);
+  compatibleBrandAvif.write("ftyp", 4, "ascii");
+  compatibleBrandAvif.write("mif1", 8, "ascii");
+  compatibleBrandAvif.write("avis", 16, "ascii");
+  compatibleBrandAvif.write("mif1", 20, "ascii");
+  assert.equal(validateLocalImage(compatibleBrandAvif, "cover.avif").contentType, "image/avif");
+  assert.equal(validateLocalImage(largeImageBytes, "large-cover.jpg").contentType, "image/jpeg");
   assert.throws(() => validateLocalImage(Buffer.from("not an image"), "cover.png"), /verified JPEG/u);
-  assert.throws(() => validateLocalImage(localBytes, "cover.gif"), /verified JPEG/u);
-  assert.throws(() => validateLocalImage(Buffer.alloc(MAX_VISUALIZATION_IMAGE_BYTES + 1), "cover.png"), /1 MB/u);
+  assert.throws(() => validateLocalImage(localBytes, "cover.svg"), /verified JPEG/u);
+  assert.throws(() => validateLocalImage(Buffer.alloc(MAX_VISUALIZATION_IMAGE_BYTES + 1), "cover.png"), /25 MB/u);
 });
 
 test("bounded descriptor reads stop at the limit plus one byte if the open file grows", () => {
@@ -128,6 +179,7 @@ test("view asset API serves only explicitly referenced local images and rejects 
   assert.equal(queryResponse.status, 200);
   const query = await queryResponse.json() as { notes: Array<{ id: string; assetPaths?: string[] }> };
   assert.deepEqual(query.notes.find((note) => note.id === localNote.id)?.assetPaths, ["movies/attachments/synthetic-cover.png"]);
+  assert.deepEqual(query.notes.find((note) => note.id === largeImageNote.id)?.assetPaths, ["movies/attachments/synthetic-large-cover.jpg"]);
   assert.deepEqual(query.notes.find((note) => note.id === misnamedLocalNote.id)?.assetPaths, ["movies/attachments/synthetic-misnamed-cover.jpg"]);
   assert.equal(query.notes.find((note) => note.id === fencedNote.id)?.assetPaths, undefined);
 
@@ -136,6 +188,12 @@ test("view asset API serves only explicitly referenced local images and rejects 
   assert.equal(localResponse.status, 200, await localResponse.clone().text());
   assert.equal(localResponse.headers.get("content-type"), "image/png");
   assert.deepEqual(Buffer.from(await localResponse.arrayBuffer()), localBytes);
+
+  const largeImageUrl = `${baseUrl}/api/views/assets/${largeImageNote.id}?asset=${encodeURIComponent("movies/attachments/synthetic-large-cover.jpg")}&v=${largeImageNote.contentHash}`;
+  const largeImageResponse = await fetch(largeImageUrl, { method: "HEAD" });
+  assert.equal(largeImageResponse.status, 200);
+  assert.equal(largeImageResponse.headers.get("content-type"), "image/jpeg");
+  assert.equal(Number(largeImageResponse.headers.get("content-length")), largeImageBytes.length);
 
   const misnamedLocalUrl = `${baseUrl}/api/views/assets/${misnamedLocalNote.id}?asset=${encodeURIComponent("movies/attachments/synthetic-misnamed-cover.jpg")}&v=${misnamedLocalNote.contentHash}`;
   const misnamedLocalResponse = await fetch(misnamedLocalUrl);

@@ -30,6 +30,9 @@ export class VisualizationQueryError extends Error {
   }
 }
 
+const PATH_FILTER_SQL_FUNCTION = "fieldnotes_view_path_matches";
+const registeredPathFilterDatabases = new WeakSet<DatabaseSync>();
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -158,6 +161,27 @@ function matchesFilter(note: VisualizationNote, filter: VisualizationFilter): bo
   return filter.operator === "before" ? actualComparable < expectedComparable : actualComparable > expectedComparable;
 }
 
+function registerPathFilterSqlFunction(db: DatabaseSync): void {
+  if (registeredPathFilterDatabases.has(db)) return;
+  db.function(PATH_FILTER_SQL_FUNCTION, { deterministic: true, directOnly: true }, (filePath, serializedFilter) => {
+    if (typeof serializedFilter !== "string") return 0;
+    const filter = JSON.parse(serializedFilter) as VisualizationFilter;
+    const note = {
+      id: "",
+      title: "",
+      path: typeof filePath === "string" ? filePath : "",
+      createdAt: "",
+      updatedAt: "",
+      version: 1,
+      contentHash: "",
+      excerpt: "",
+      frontmatter: {},
+    } satisfies VisualizationNote;
+    return Number(matchesFilter(note, filter));
+  });
+  registeredPathFilterDatabases.add(db);
+}
+
 function sortNotes(notes: VisualizationNote[], query: VisualizationQuery): void {
   if (!query.sort) return;
   const direction = query.sort.direction === "asc" ? 1 : -1;
@@ -176,12 +200,24 @@ export function queryVisualizationNotes(
   query: VisualizationQuery,
   trashNotes: VisualizationTrashNote[] = [],
 ): VisualizationQueryResponse {
-  const folderClause = query.folderId === undefined ? "" : query.folderId === null ? "WHERE folder_id IS NULL" : "WHERE folder_id = ?";
-  const parameters: (string | number)[] = query.folderId === undefined || query.folderId === null
-    ? [MAX_SCAN_NOTES + 1]
-    : [query.folderId, MAX_SCAN_NOTES + 1];
+  const clauses: string[] = [];
+  const parameters: (string | number)[] = [];
+  if (query.folderId !== undefined) {
+    clauses.push(query.folderId === null ? "folder_id IS NULL" : "folder_id = ?");
+    if (query.folderId !== null) parameters.push(query.folderId);
+  }
+  const pathFilters = query.where?.filter((filter) => filter.field === "path") ?? [];
+  if (pathFilters.length) {
+    registerPathFilterSqlFunction(db);
+    for (const filter of pathFilters) {
+      clauses.push(`${PATH_FILTER_SQL_FUNCTION}(file_path, ?) = 1`);
+      parameters.push(JSON.stringify(filter));
+    }
+  }
+  const whereClause = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  parameters.push(MAX_SCAN_NOTES + 1);
   const candidates = db.prepare(
-    `SELECT id FROM documents ${folderClause} ORDER BY updated_at DESC, title COLLATE NOCASE ASC LIMIT ?`,
+    `SELECT id FROM documents ${whereClause} ORDER BY updated_at DESC, title COLLATE NOCASE ASC LIMIT ?`,
   ).all(...parameters) as Array<{ id: string }>;
   if (candidates.length > MAX_SCAN_NOTES) {
     throw new VisualizationQueryError("This view would scan too many notes. Choose a folder to narrow it.", 413);

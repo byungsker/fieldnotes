@@ -6,7 +6,7 @@
 
 `POST /api/views/query`는 선택적 폴더 UUID 또는 최상위 문서를 뜻하는 `null`, 최대 120자 검색어, 최대 8개 필터, 정렬, 1~200개 제한값을 받는다. 기본 제한은 100개다. 지원 필드는 `title`, `path`, `createdAt`, `updatedAt`, `excerpt`, `frontmatter.<key>`이며 중첩 frontmatter는 점 경로를 사용한다. 연산자는 `eq`, `contains`, `exists`, `before`, `after`, `in`이다.
 
-결과에는 ID·제목·상대 경로·시간·version·content hash·150자 excerpt·frontmatter와 선택적 `frontmatterError`가 있다. 전체 Markdown 본문과 절대 경로는 전달하지 않는다. 파일 저장소에서는 문서에 명시적으로 삽입한 JPEG·PNG·WebP의 정규화된 상대 경로를 최대 20개 제공한다. 경로는 참조이며 파일 바이트가 아니다. 최대 1,000개 후보·20,000,000 UTF-8 바이트를 검사하고 JSON 응답을 1.5 MB로 제한한다. 초과하면 `413`이므로 query 범위를 줄여야 한다.
+결과에는 ID·제목·상대 경로·시간·version·content hash·150자 excerpt·frontmatter와 선택적 `frontmatterError`가 있다. 전체 Markdown 본문과 절대 경로는 전달하지 않는다. 파일 저장소에서는 문서에 명시적으로 삽입한 JPEG·PNG·WebP·GIF·AVIF의 정규화된 상대 경로를 최대 20개 제공한다. 경로는 참조이며 파일 바이트가 아니다. `path` 필터는 본문을 읽기 전에 경로 메타데이터에서 적용하고, 나머지 필터는 최대 1,000개 후보·20,000,000 UTF-8 바이트 제한 안에서 검사한다. JSON 응답은 1.5 MB로 제한한다. 초과하면 `413`이므로 폴더나 경로 조건으로 query 범위를 줄여야 한다.
 
 `includeTrash`는 최근 휴지통 항목 최대 100개와 최대 20,000,000 UTF-8 바이트에서 ID·제목·폴더 ID·삭제 시간·version·excerpt를 읽는다. 초과 조회는 `413`이다. 조회는 동기화된 인덱스를 사용하며 vault monitor가 파일 변경을 반영한다. 매 렌더마다 vault 전체를 탐색하지 않는다. YAML은 안전한 scalar·list·mapping 부분집합으로 읽으며 태그·생성자·표현식을 평가하지 않는다. 해석 실패는 `frontmatterError`로 보고하고 원문을 재작성하지 않는다.
 
@@ -24,7 +24,7 @@ Chrome은 CSP WebRTC 지시어를 지원하지 않으므로 Worker의 전역 객
 
 `img-src 'self'`는 Fieldnotes origin만 허용한다. runner는 현재 query 결과의 문서 ID·content hash·검증된 `assetPaths`에서 만든 **정확한 자산 URL**만 이미지 src로 허용한다. frontmatter의 `poster` 등 임의 URL 필드는 접근 권한을 부여하지 않는다. 원격 호스트에 요청하거나 카테고리 전용 프록시를 제공하지 않는다.
 
-`GET /api/views/assets/:id`는 현재 문서 hash와 본문에 명시한 정규화 경로를 검증한다. fenced code 안의 이미지나 JS 문자열은 참조가 아니다. vault의 no-follow 경로 검사로 읽고 1 MB·JPEG/PNG/WebP 확장자·실제 이미지 바이트를 검사한다. 응답 MIME은 검증한 바이트로 정하며 이미지 바이트 hash로 ETag를 만든다. `If-None-Match`의 완전한 entity tag를 weak comparison으로 비교하고, 단독 wildcard 또는 유효한 일치 tag만 `304`로 응답한다.
+`GET /api/views/assets/:id`는 현재 문서 hash와 본문에 명시한 정규화 경로를 검증한다. fenced code 안의 이미지나 JS 문자열은 참조가 아니다. vault의 no-follow 경로 검사로 읽고 최대 25 MB·JPEG/PNG/WebP/GIF/AVIF 확장자·실제 이미지 바이트를 검사한다. 경로는 문서 기준 상대 경로 또는 `/`로 시작하는 vault 최상위 경로를 지원한다. 경로 없는 wiki 첨부 링크는 vault에서 같은 이름의 파일이 하나일 때만 기존 노트를 위해 해석한다. 응답 MIME은 검증한 바이트로 정하며 이미지 바이트 hash로 ETag를 만든다. `If-None-Match`의 완전한 entity tag를 weak comparison으로 비교하고, 단독 wildcard 또는 유효한 일치 tag만 `304`로 응답한다.
 
 파일 open 뒤 경로와 열린 파일 identity를 다시 확인해 상위 디렉터리 symlink 교체를 검사한다. Node의 이식 가능한 파일 API에는 descriptor 기준 `openat` 탐색이 없어, 디렉터리를 동시에 바꾸는 로컬 프로세스에 대해 완전한 방어를 보장하지 않는다. vault의 쓰기 접근을 다른 프로세스와 공유하지 않는 운영 경계가 필요하다.
 

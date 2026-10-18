@@ -1,7 +1,8 @@
 import path from "node:path";
+import { LOCAL_RASTER_EXTENSIONS, MAX_VAULT_ASSET_BYTES } from "../storage/vault/constants.js";
 
-export const MAX_VISUALIZATION_IMAGE_BYTES = 1_000_000;
-const LOCAL_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
+export const MAX_VISUALIZATION_IMAGE_BYTES = MAX_VAULT_ASSET_BYTES;
+const LOCAL_IMAGE_EXTENSIONS = LOCAL_RASTER_EXTENSIONS;
 
 export class VisualizationAssetError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -19,22 +20,49 @@ function hasControlCharacters(value: string): boolean {
   });
 }
 
+function hasAvifFileTypeBrand(bytes: Buffer): boolean {
+  if (bytes.length < 16 || bytes.toString("ascii", 4, 8) !== "ftyp") return false;
+
+  const size32 = bytes.readUInt32BE(0);
+  let brandsOffset = 8;
+  let boxEnd = size32 === 0 ? bytes.length : size32;
+  if (size32 === 1) {
+    if (bytes.length < 24) return false;
+    const largeSize = bytes.readBigUInt64BE(8);
+    if (largeSize < 24n || largeSize > BigInt(bytes.length)) return false;
+    brandsOffset = 16;
+    boxEnd = Number(largeSize);
+  } else if (size32 !== 0 && (size32 < 16 || size32 > bytes.length)) {
+    return false;
+  }
+  if (boxEnd < brandsOffset + 8) return false;
+
+  const isAvifBrand = (offset: number) => ["avif", "avis"].includes(bytes.toString("ascii", offset, offset + 4));
+  if (isAvifBrand(brandsOffset)) return true;
+  for (let offset = brandsOffset + 8; offset + 4 <= boxEnd; offset += 4) {
+    if (isAvifBrand(offset)) return true;
+  }
+  return false;
+}
+
 function localImageMime(bytes: Buffer): string | undefined {
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
   if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
     && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return "image/png";
+  if (bytes.length >= 6 && (bytes.toString("ascii", 0, 6) === "GIF87a" || bytes.toString("ascii", 0, 6) === "GIF89a")) return "image/gif";
   if (bytes.length >= 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+  if (hasAvifFileTypeBrand(bytes)) return "image/avif";
   return undefined;
 }
 
 export function validateLocalImage(bytes: Buffer, relativePath: string): VisualizationImage {
   if (bytes.byteLength > MAX_VISUALIZATION_IMAGE_BYTES) {
-    throw new VisualizationAssetError(413, "visualization_asset_too_large", "Image exceeds the 1 MB view asset limit.");
+    throw new VisualizationAssetError(413, "visualization_asset_too_large", "Image exceeds the 25 MB view asset limit.");
   }
   const extension = path.posix.extname(relativePath).toLowerCase();
   const contentType = localImageMime(bytes);
   if (!LOCAL_IMAGE_EXTENSIONS.has(extension) || !contentType) {
-    throw new VisualizationAssetError(415, "visualization_asset_type", "Only verified JPEG, PNG, and WebP images are available to views.");
+    throw new VisualizationAssetError(415, "visualization_asset_type", "Only verified JPEG, PNG, WebP, GIF, and AVIF images are available to views.");
   }
   return { bytes, contentType };
 }
@@ -114,4 +142,42 @@ export function extractLocalImageReferences(markdown: string, markdownPath: stri
     if (normalized) paths.add(normalized);
   }
   return [...paths].slice(0, 20);
+}
+
+/** Resolve a referenced asset while retaining the older vault-root and unique-basename link behavior. */
+export function resolveReferencedLocalImagePath(
+  markdown: string,
+  markdownPath: string,
+  assetPath: string,
+  resolveAssetPath: (relativePath: string, resolveUniqueBasename?: boolean) => string | undefined,
+): string | undefined {
+  if (!extractLocalImageReferences(markdown, markdownPath).includes(assetPath)) return undefined;
+
+  const exactPath = resolveAssetPath(assetPath, false);
+  if (exactPath) return exactPath;
+
+  for (const rawTarget of extractLocalImageReferenceTargets(markdown, markdownPath)) {
+    const target = rawTarget.split("|", 1)[0]?.split("#", 1)[0]?.split("?", 1)[0]?.trim() ?? "";
+    let decodedTarget: string;
+    try { decodedTarget = decodeURIComponent(target); }
+    catch { continue; }
+    if (normalizeLocalReference(decodedTarget, markdownPath) !== assetPath) continue;
+
+    if (!decodedTarget.includes("/") && !decodedTarget.startsWith("/")) {
+      const uniqueMatch = resolveAssetPath(assetPath, true);
+      if (uniqueMatch) return uniqueMatch;
+      continue;
+    }
+
+    if (!decodedTarget.startsWith("./") && !decodedTarget.startsWith("../")) {
+      const rootTarget = decodedTarget.startsWith("/") ? decodedTarget : `/${decodedTarget}`;
+      const rootPath = normalizeLocalReference(rootTarget, "");
+      if (rootPath) {
+        const rootMatch = resolveAssetPath(rootPath, false);
+        if (rootMatch) return rootMatch;
+      }
+    }
+  }
+
+  return undefined;
 }

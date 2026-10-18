@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
+import { randomUUID } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -222,6 +223,67 @@ test("host returns a realistic 44-note dashboard fixture within query-result lim
   assert.ok(Buffer.byteLength(JSON.stringify(result), "utf8") < 1_500_000, "host result fits MAX_RESULT_BYTES");
   assert.ok(JSON.stringify(result).length < 1_000_000, "host result fits the runner input cap");
   assert.ok(result.notes.every((note) => !Object.hasOwn(note, "body")), "query results stay metadata-only");
+});
+
+test("path filters narrow large vaults before applying the scan limit", async () => {
+  const insert = database.db.prepare(`
+    INSERT INTO documents (id, title, body, created_at, updated_at, version, file_path)
+    VALUES (?, ?, ?, ?, ?, 1, ?)
+  `);
+  const timestamp = "2026-01-01T00:00:00.000Z";
+  const syntheticIds: string[] = [];
+  try {
+    database.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (let index = 0; index < 1_001; index += 1) {
+        const id = randomUUID();
+        insert.run(id, `Synthetic article ${index}`, "Small synthetic body.", timestamp, timestamp, `articles/${index}.md`);
+        syntheticIds.push(id);
+      }
+      const movieId = randomUUID();
+      insert.run(movieId, "Synthetic movie path match", "Small synthetic body.", timestamp, timestamp, "movies/records/path-match.md");
+      syntheticIds.push(movieId);
+      const unicodeId = randomUUID();
+      insert.run(unicodeId, "Synthetic Unicode path", "Small synthetic body.", timestamp, timestamp, "archive/İndice.md");
+      syntheticIds.push(unicodeId);
+      database.db.exec("COMMIT");
+    } catch (error) {
+      database.db.exec("ROLLBACK");
+      throw error;
+    }
+
+    const movieResponse = await fetch(`${baseUrl}/api/views/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: {
+        where: [{ field: "path", operator: "contains", value: "movies/" }],
+        limit: 100,
+      } }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    assert.equal(movieResponse.status, 200);
+    const movieResult = await movieResponse.json() as { notes: Array<{ path: string }> };
+    assert.ok(movieResult.notes.some((note) => note.path === "movies/records/path-match.md"));
+    assert.ok(movieResult.notes.every((note) => note.path.toLocaleLowerCase().includes("movies/")));
+
+    const unicodeResponse = await fetch(`${baseUrl}/api/views/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: {
+        where: [{ field: "path", operator: "eq", value: "archive/i\u0307ndice.md" }],
+        limit: 100,
+      } }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    assert.equal(unicodeResponse.status, 200);
+    const unicodeResult = await unicodeResponse.json() as { notes: Array<{ path: string }> };
+    assert.deepEqual(unicodeResult.notes.map((note) => note.path), ["archive/İndice.md"]);
+  } finally {
+    database.db.exec("BEGIN IMMEDIATE");
+    const remove = database.db.prepare("DELETE FROM documents WHERE id = ?");
+    for (const id of syntheticIds) remove.run(id);
+    database.db.exec("COMMIT");
+  }
 });
 
 test("view query follows newly saved notes on the next read", async () => {

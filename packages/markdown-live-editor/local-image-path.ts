@@ -1,4 +1,4 @@
-const LOCAL_RASTER_EXTENSION = /\.(?:jpe?g|png|webp)$/iu;
+const LOCAL_RASTER_EXTENSION = /\.(?:avif|gif|jpe?g|png|webp)$/iu;
 
 /** Resolve one preserved Markdown image target to the vault-root path used by the safe asset API. */
 export function resolveLocalImageAssetPath(rawSource: string, markdownPath: string): string | null {
