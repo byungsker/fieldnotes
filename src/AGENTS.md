@@ -8,7 +8,6 @@
 | 문서·폴더 화면, 선택 상태, 저장 큐, 외부 변경 | `pages/workspace/ui/WorkspacePage.tsx` |
 | HTTP 요청과 오류 분류 | `shared/api/request.ts`, `pages/workspace/model/workspace-types.ts` |
 | 편집기 호스트 기능과 브라우저 저장소 | `pages/workspace/api/editor-adapters.ts` |
-| 육아 기록 보존 블록 미리보기 | `pages/workspace/ui/BabiesPreservedBlock.tsx`, `BabiesDataview.tsx`, `pages/workspace/api/baby-preview-adapters.ts` |
 | 로컬 draft 형식·복구·비교 | `pages/workspace/model/autosave.ts` |
 | URL 변환과 브라우저 history 상태 | `pages/workspace/model/workspace-routing.ts` |
 | 모바일 activity와 화면 context | `pages/workspace/ui/MobileWorkspace.tsx`, `pages/workspace/config/activities.ts`, `pages/workspace/ui/WorkspaceViewContext.ts` |
@@ -41,10 +40,10 @@
 
 - 앱 요청은 `apiRequest`와 `ApiError`의 오류 전달 방식을 따른다. 상태 코드·오류 코드·현재 버전 정보가 충돌 UI까지 전달되도록 유지한다.
 - 호스트 API·localStorage 기능은 `createFieldnotesEditorAdapters`에서 편집기 계약으로 연결한다. 앱의 저장·탐색 상태를 재사용 편집기 내부로 옮기지 않는다.
-- 육아 기록 미리보기는 `createBabiesPreservedBlockRenderer`와 `createBabiesPreviewAdapters`로 연결한다. 지원하는 정적 패턴만 렌더링하고 DataviewJS 원문은 실행하지 않는다. 이미지의 babies 전용 범위는 호스트 `resolveLocalImage`가 선택하며 패키지는 경로 안전성을 먼저 검사한다.
+- 카테고리별 React 미리보기나 폴더 이름 분기를 두지 않는다. 사용자 custom JS는 공통 query/action 계약을 사용하고 DataviewJS 원문은 보존하되 실행하지 않는다. 로컬 이미지는 패키지 경로 검사와 공통 자산 API의 문서 hash·명시적 참조 검사를 모두 통과해야 한다.
 - 외부 변경 구독은 `vault-change-subscription.ts`와 연결해 확인한다. 새 구독이 기존 정리·재연결 흐름을 누락하지 않게 한다.
 - 앱 shell 스타일과 편집기 패키지 스타일의 소유 범위를 구분한다. `app/main.tsx`의 CSS 로딩 순서가 바뀌면 두 영역의 우선순위를 확인한다.
-- 앱과 육아 기록 스타일은 공통 `--ds-*`를 사용한다. `--ink`·`--surface` 등 기존 별칭도 공통 토큰에만 연결한다. 테마별 컴포넌트 색상 덮어쓰기를 늘리지 않고 토큰의 밝은·어두운 값을 함께 바꾼다. 원시 색상과 별도 글자·간격·모서리 값은 추가하지 않는다.
+- 앱 스타일은 공통 `--ds-*`를 사용한다. `--ink`·`--surface` 등 기존 별칭도 공통 토큰에만 연결한다. 테마별 컴포넌트 색상 덮어쓰기를 늘리지 않고 토큰의 밝은·어두운 값을 함께 바꾼다. 원시 색상과 별도 글자·간격·모서리 값은 추가하지 않는다.
 
 ## 검증 선택
 

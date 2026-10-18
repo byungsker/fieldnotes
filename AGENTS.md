@@ -72,7 +72,7 @@ fieldnotes/
 - Node.js `22.13.0` 이상과 npm을 사용한다. 프로젝트는 ESM이며 Node 내장 `node:sqlite`를 사용한다.
 - 루트 `tsconfig.json`은 브라우저 코드와 `shared/`를 Bundler 해석으로 검사한다. `tsconfig.server.json`은 서버·운영 TypeScript를 NodeNext로 검사한다. 두 설정 모두 strict 모드다.
 - `packages/markdown-live-editor`는 자체 `package.json`, lockfile, `tsconfig.json`, 공개 `index.ts`를 가진 독립 소스 패키지다. 루트 npm workspace가 아니며 패키지 밖 소스를 import하지 않는다. 시각화 계약은 패키지에 한 번 정의하고 `shared/visualization.ts`가 앱·서버에 재export한다.
-- 육아 기록의 Dataview 정적 미리보기와 전용 API·스타일은 `src/pages/workspace/`가 소유한다. 편집기는 `renderPreservedBlock`과 `resolveLocalImage`를 통해 호스트 기능을 선택적으로 받는다.
+- 기록 카테고리는 사용자 Markdown·frontmatter·custom JS가 소유한다. 앱·서버·편집기·runner에 카테고리별 UI·API·폴더 분기를 추가하지 않는다. 편집기는 범용 query/action·로컬 이미지 어댑터와 선택적 `renderPreservedBlock` 확장을 제공한다. 새 카테고리는 배포 없이 사용자 문서로 구성한다.
 - 디자인 값의 단일 정의는 `packages/markdown-live-editor/tokens.css`다. 새 색상·타이포그래피·간격·모서리·그림자·전환 값은 `DESIGN.md` 계약과 함께 이 파일에서 정한다. 앱·편집기의 호환 별칭은 같은 의미 토큰에 연결하며 화면별 원시 값을 추가하지 않는다. `test/workspace/design-system.test.ts`가 원시 값·정의 누락·문서 불일치·텍스트 대비를 검사한다.
 - API 등록은 `server/routes/`의 `registerXRoutes`로 나누고 필요한 의존성을 명시적으로 전달한다. 공통 요청 오류는 `server/http/validation.ts`의 한 클래스를 사용하며 `server/http/errors.ts`에서 HTTP 응답으로 변환한다.
 - 보안·인증·Origin·응답 추적 → JSON parser → vault reconcile → API routes·SSE → API 404 → 정적 파일·SPA → 오류 처리 순서를 유지한다. SSE와 drain 상태는 `createApp` 인스턴스마다 소유한다.
