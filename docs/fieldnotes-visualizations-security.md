@@ -30,7 +30,7 @@ Chrome은 CSP WebRTC 지시어를 지원하지 않으므로 Worker의 전역 객
 
 ## 크기·동작 제한
 
-Worker 기한은 부모가 제어하는 700 ms다. 입력은 500개 문서·1 MB, JS 소스는 16 KB, HTML은 48 KB, CSS는 12 KB·80개 규칙, 정화된 DOM은 1,000개 요소·깊이 20, 이미지 참조는 렌더당 50개로 제한한다. 동시에 실행하는 Worker는 2개, 대기는 6개다.
+Worker 기한은 부모가 제어하는 700 ms다. 입력은 500개 문서·1 MB, JS 소스는 16 KB, HTML은 96 KB, CSS는 12 KB·80개 규칙, 정화된 DOM은 2,048개 요소·깊이 20, 이미지 참조는 렌더당 50개로 제한한다. 동시에 실행하는 Worker는 2개, 대기는 6개다.
 
 허용한 요소·속성·CSS 속성만 DOM에 복사한다. script·style·frame·link·media·object를 제거하고 지원하지 않는 중립 요소는 자식만 남긴다. 이미지 외의 URL 속성은 제거하며 CSS `url()`, import, font face, escape 등 자원 로딩 구문을 거절한다. 버튼·form은 허용된 일반 상태·문서 이벤트만 내보내며 브라우저의 신뢰된 click·submit·change를 요구한다. 필드는 개수·크기·형식을 검증한다.
 

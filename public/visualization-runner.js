@@ -1,11 +1,11 @@
 const MAX_EXECUTION_MS = 700;
-const MAX_HTML_CHARS = 48_000;
+const MAX_HTML_CHARS = 96_000;
 const MAX_CSS_CHARS = 12_000;
 const MAX_NOTES = 500;
 const MAX_TRASH = 100;
 const MAX_INPUT_CHARS = 1_000_000;
 const MAX_JAVASCRIPT_CHARS = 16_000;
-const MAX_ELEMENTS = 1_000;
+const MAX_ELEMENTS = 2_048;
 const MAX_DEPTH = 20;
 const MAX_ASSET_SOURCES = 50;
 const MIN_FRAME_HEIGHT = 160;
@@ -115,7 +115,7 @@ function stopWorker() {
 }
 
 function sanitizeMarkup(markup, allowedImageSources = new Set()) {
-  if (markup.length > MAX_HTML_CHARS) throw new Error("HTML output is larger than 48 KB.");
+  if (markup.length > MAX_HTML_CHARS) throw new Error("HTML output is larger than 96 KB.");
   const parsed = new DOMParser().parseFromString(markup, "text/html");
   const output = document.createDocumentFragment();
   let elementCount = 0;
