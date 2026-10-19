@@ -4,7 +4,7 @@
 
 ## 읽기 전용 조회
 
-`POST /api/views/query`는 선택적 폴더 UUID 또는 최상위 문서를 뜻하는 `null`, 최대 120자 검색어, 최대 8개 필터, 정렬, 1~200개 제한값을 받는다. 기본 제한은 100개다. 지원 필드는 `title`, `path`, `createdAt`, `updatedAt`, `excerpt`, `frontmatter.<key>`이며 중첩 frontmatter는 점 경로를 사용한다. 연산자는 `eq`, `contains`, `exists`, `before`, `after`, `in`이다.
+`POST /api/views/query`는 선택적 폴더 UUID 또는 최상위 문서를 뜻하는 `null`, 최대 120자 검색어, 최대 8개 필터, 정렬, 1~500개 제한값을 받는다. 기본 제한은 100개다. 지원 필드는 `title`, `path`, `createdAt`, `updatedAt`, `excerpt`, `frontmatter.<key>`이며 중첩 frontmatter는 점 경로를 사용한다. 연산자는 `eq`, `contains`, `exists`, `before`, `after`, `in`이다.
 
 결과에는 ID·제목·상대 경로·시간·version·content hash·150자 excerpt·frontmatter와 선택적 `frontmatterError`가 있다. 전체 Markdown 본문과 절대 경로는 전달하지 않는다. 파일 저장소에서는 문서에 명시적으로 삽입한 JPEG·PNG·WebP·GIF·AVIF의 정규화된 상대 경로를 최대 20개 제공한다. 경로는 참조이며 파일 바이트가 아니다. `path` 필터는 본문을 읽기 전에 경로 메타데이터에서 적용하고, 나머지 필터는 최대 1,000개 후보·20,000,000 UTF-8 바이트 제한 안에서 검사한다. JSON 응답은 1.5 MB로 제한한다. 초과하면 `413`이므로 폴더나 경로 조건으로 query 범위를 줄여야 한다.
 
@@ -30,7 +30,7 @@ Chrome은 CSP WebRTC 지시어를 지원하지 않으므로 Worker의 전역 객
 
 ## 크기·동작 제한
 
-Worker 기한은 부모가 제어하는 700 ms다. 입력은 200개 문서·1 MB, JS 소스는 16 KB, HTML은 48 KB, CSS는 12 KB·80개 규칙, 정화된 DOM은 1,000개 요소·깊이 20, 이미지 참조는 렌더당 50개로 제한한다. 동시에 실행하는 Worker는 2개, 대기는 6개다.
+Worker 기한은 부모가 제어하는 700 ms다. 입력은 500개 문서·1 MB, JS 소스는 16 KB, HTML은 48 KB, CSS는 12 KB·80개 규칙, 정화된 DOM은 1,000개 요소·깊이 20, 이미지 참조는 렌더당 50개로 제한한다. 동시에 실행하는 Worker는 2개, 대기는 6개다.
 
 허용한 요소·속성·CSS 속성만 DOM에 복사한다. script·style·frame·link·media·object를 제거하고 지원하지 않는 중립 요소는 자식만 남긴다. 이미지 외의 URL 속성은 제거하며 CSS `url()`, import, font face, escape 등 자원 로딩 구문을 거절한다. 버튼·form은 허용된 일반 상태·문서 이벤트만 내보내며 브라우저의 신뢰된 click·submit·change를 요구한다. 필드는 개수·크기·형식을 검증한다.
 

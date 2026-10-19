@@ -16,6 +16,7 @@ import { MAX_VIEW_TRASH_CANDIDATES } from "../view-query-limits.js";
 
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_SCAN_NOTES = 1_000;
+const MAX_RESULT_NOTES = 500;
 const MAX_SCAN_BYTES = 20_000_000;
 const MAX_RESULT_BYTES = 1_500_000;
 const FIELD_PATTERN = /^(?:title|path|createdAt|updatedAt|excerpt|frontmatter\.[A-Za-z0-9_.-]{1,120})$/;
@@ -104,7 +105,7 @@ export function validateVisualizationQuery(value: unknown): VisualizationQuery {
     if (!Number.isInteger(value.limit) || Number(value.limit) < 1) {
       throw new VisualizationQueryError("limit must be a positive integer.");
     }
-    query.limit = Math.min(Number(value.limit), 200);
+    query.limit = Math.min(Number(value.limit), MAX_RESULT_NOTES);
   }
   if (Object.hasOwn(value, "includeTrash")) {
     if (typeof value.includeTrash !== "boolean") throw new VisualizationQueryError("includeTrash must be true or false.");

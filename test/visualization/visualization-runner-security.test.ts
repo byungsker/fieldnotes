@@ -353,7 +353,7 @@ test("generated Worker rejects excessive HTML and CSS before posting output", ()
 
 test("synthetic custom-view examples follow the render-function-body contract and produce HTML", () => {
   const examples = [
-    ["articles-dashboard.md", "Continue writing"],
+    ["articles-dashboard.md", "아티클 아카이브"],
     ["babies-dashboard.md", "Add milestone"],
     ["goals-dashboard.md", "Add goal"],
     ["movies-dashboard.md", "영화 기록 추가"],
@@ -383,6 +383,58 @@ test("synthetic custom-view examples follow the render-function-body contract an
     assert.ok(message?.html?.includes(expectedContent), `${filename} should render its expected controls`);
     if (filename === "goals-dashboard.md") assert.match(message?.html ?? "", /aria-label="New goal title"/u);
   }
+});
+
+test("article dashboard renders 422 queried notes as bounded 40-note pages", () => {
+  const markdown = readFileSync(path.join(projectRoot, "test/fixtures/native-visualizations/articles-dashboard.md"), "utf8");
+  const block = [...markdown.matchAll(/```fieldnotes-view\n[\s\S]*?\n```/gu)]
+    .map((match) => match[0] ?? "")
+    .find((candidate) => parseFieldnotesViewConfig(candidate).view === "custom");
+  assert.ok(block);
+  const config = parseFieldnotesViewConfig(block);
+  assert.equal(config.query?.limit, 500);
+  assert.ok(config.js);
+  const notes = Array.from({ length: 422 }, (_, index) => ({
+    id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+    title: `Synthetic article ${index + 1}`,
+    path: `article/2026-Q3/fixture-${index + 1}.md`,
+    createdAt: "2026-10-19T00:00:00.000Z",
+    updatedAt: "2026-10-19T00:00:00.000Z",
+    version: 1,
+    contentHash: "a".repeat(64),
+    excerpt: `Synthetic article summary ${index + 1}`,
+    frontmatter: {
+      date: `2026-10-${String((index % 28) + 1).padStart(2, "0")}`,
+      read: index % 2 === 0,
+      category: "engineering",
+      tags: ["fieldnotes", "dashboard"],
+      summary: `Synthetic article summary ${index + 1}`,
+      source: "https://example.com/article",
+    },
+  }));
+  const input = { requestId: 501, notes, trash: [], state: {} };
+  const serialized = JSON.stringify(input);
+  assert.ok(serialized.length < 1_000_000, "the full 422-note metadata fits the unchanged 1 MB runner input cap");
+
+  const firstPage = workerContext(config.js);
+  vm.runInContext(`self.onmessage({ data: ${serialized} });`, firstPage.context);
+  const firstMessage = (firstPage.context.__messages as Array<{ type: string; html?: string; css?: string; message?: string }>)[0];
+  assert.equal(firstMessage?.type, "result", firstMessage?.message);
+  assert.match(firstMessage?.html ?? "", /총 422편/u);
+  assert.match(firstMessage?.html ?? "", /1 \/ 11/u);
+  assert.equal(firstMessage?.html?.match(/<tr>/gu)?.length, 41, "the first page renders 40 notes plus its table header");
+  assert.ok((firstMessage?.html?.length ?? 0) < 48_000, "the first page fits the HTML output cap");
+  const sanitizer = sanitizerContext();
+  sanitizer.__fixtureCss = firstMessage?.css ?? "";
+  const sanitizedCss = vm.runInContext("sanitizeStyles(__fixtureCss)", sanitizer) as string;
+  assert.match(sanitizedCss, /fieldnotes-custom-root \.article-view/u, "the actual runner retains the dashboard's bounded CSS");
+
+  const secondPage = workerContext(config.js);
+  vm.runInContext(`self.onmessage({ data: ${JSON.stringify({ ...input, requestId: 502, state: { page: 2 } })} });`, secondPage.context);
+  const secondMessage = (secondPage.context.__messages as Array<{ type: string; html?: string; message?: string }>)[0];
+  assert.equal(secondMessage?.type, "result", secondMessage?.message);
+  assert.match(secondMessage?.html ?? "", /2 \/ 11/u);
+  assert.equal(secondMessage?.html?.match(/<tr>/gu)?.length, 41, "the next page renders a different bounded slice");
 });
 
 test("배포 없이 복사할 수 있는 사용자 기록 예시는 승인 실행기의 공통 이벤트를 사용한다", () => {
@@ -488,7 +540,7 @@ test("full-size synthetic movie dashboard fits host, worker, asset, and sanitize
   assert.equal(notes.length, 44);
   assert.equal(records.length, 41);
   assert.equal(watchlist.length, 2);
-  assert.ok(notes.length <= 200, "the fixture fits the runner note cap");
+  assert.ok(notes.length <= 500, "the fixture fits the runner note cap");
   assert.ok(serializedInput.length < 1_000_000, "the fixture fits the runner input cap");
 
   const { context } = workerContext(renderSource);
@@ -565,7 +617,7 @@ test("runner source masks network APIs and drops outbound HTML/CSS surfaces", ()
     '"localStorage"', '"showSaveFilePicker"', '"OffscreenCanvas"', '"constructor"',
   ]) assert.ok(runnerSource.includes(api), `missing blocked API ${api}`);
   assert.match(runnerSource, /const MAX_EXECUTION_MS = 700/);
-  assert.match(runnerSource, /const MAX_NOTES = 200/);
+  assert.match(runnerSource, /const MAX_NOTES = 500/);
   assert.match(runnerSource, /const MAX_INPUT_CHARS = 1_000_000/);
   assert.match(runnerSource, /const MAX_JAVASCRIPT_CHARS = 16_000/);
   assert.match(runnerSource, /const MAX_HTML_CHARS = 48_000/);
