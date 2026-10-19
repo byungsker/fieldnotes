@@ -75,7 +75,7 @@ fieldnotes/
 - 기록 카테고리는 사용자 Markdown·frontmatter·custom JS가 소유한다. 앱·서버·편집기·runner에 카테고리별 UI·API·폴더 분기를 추가하지 않는다. 편집기는 범용 query/action·로컬 이미지 어댑터와 선택적 `renderPreservedBlock` 확장을 제공한다. 새 카테고리는 배포 없이 사용자 문서로 구성한다.
 - 디자인 값의 단일 정의는 `packages/markdown-live-editor/tokens.css`다. 새 색상·타이포그래피·간격·모서리·그림자·전환 값은 `DESIGN.md` 계약과 함께 이 파일에서 정한다. 앱·편집기의 호환 별칭은 같은 의미 토큰에 연결하며 화면별 원시 값을 추가하지 않는다. `test/workspace/design-system.test.ts`가 원시 값·정의 누락·문서 불일치·텍스트 대비를 검사한다.
 - API 등록은 `server/routes/`의 `registerXRoutes`로 나누고 필요한 의존성을 명시적으로 전달한다. 공통 요청 오류는 `server/http/validation.ts`의 한 클래스를 사용하며 `server/http/errors.ts`에서 HTTP 응답으로 변환한다.
-- 보안·인증·Origin·응답 추적 → JSON parser → vault reconcile → API routes·SSE → API 404 → 정적 파일·SPA → 오류 처리 순서를 유지한다. SSE와 drain 상태는 `createApp` 인스턴스마다 소유한다.
+- 보안·인증·Origin·응답 추적 → JSON parser → API routes·SSE → API 404 → 정적 파일·SPA → 오류 처리 순서를 유지한다. 일반 API 요청에서 전체 vault reconcile을 실행하지 않으며, 전체 파일 검색은 서버 시작과 명시적 `POST /api/vault/sync`에서 수행한다. SSE와 drain 상태는 `createApp` 인스턴스마다 소유한다.
 - 저장 모드는 구분한다. SQLite 모드에서는 SQLite가 기준 데이터이고, vault 모드에서는 Markdown 파일과 `.fieldnotes` metadata가 기준 데이터다.
 - 저장소 소비자는 `server/storage/database.ts`와 `server/storage/vault.ts`의 공개 API를 사용한다. 내부 구현은 `database/`와 `vault/`에 두며 내부 모듈이 공개 진입점을 다시 import해 순환하지 않도록 한다.
 - 문서·폴더 변경 요청은 읽은 버전을 요구한다. vault 문서는 `expectedHash`도 검증하며, 충돌 시 최신 값을 덮어쓰지 않는다.
@@ -88,6 +88,12 @@ fieldnotes/
 - 실행 중인 SQLite 파일을 직접 복사하지 않는다. `.fieldnotes/state.json`을 손으로 수정하지 않는다. 복원·전체 vault 백업은 문서에 적힌 서버 중지 절차를 따른다.
 - 실제 저장소를 대상으로 `db:restore`, `vault:restore`, 마이그레이션, LaunchAgent 설치 명령을 검증 용도로 실행하지 않는다. 스크립트는 `.env`를 읽을 수 있고 실제 데이터를 바꿀 수 있다.
 - 시각화 runner의 Worker 제한, sandbox 속성, 입력·출력 크기 제한, HTML/CSS 정화, 사용자 승인 검증을 약화하지 않는다. `visualization-runner.js` 수정 시 HTML의 CSP hash·integrity, `server/api.ts` CSP와 관련 테스트를 함께 갱신한다.
+
+## PR 검증과 배포
+
+- 이 저장소에서는 CodeRabbit 검토를 사용하지 않는다. CodeRabbit 스킬·CLI·봇 명령으로 검토를 요청하지 않으며, CodeRabbit 상태나 코멘트를 PR 머지·배포의 대기 조건으로 삼지 않는다.
+- `.coderabbit.yaml`은 자동 검토와 추가 push에 대한 자동 검토를 비활성화한다. 검증에는 저장소 CI, 변경에 맞는 테스트·build, 실제 UI·API 확인 결과를 사용한다.
+- 사용자가 머지와 배포를 지시하거나 승인했다면 PR 생성만으로 완료 처리하지 않는다. CI 성공을 확인하고 main 머지, 운영 build 반영, 서버 재시작, 배포 후 동작 확인까지 수행한다.
 
 ## 자주 쓰는 명령
 
