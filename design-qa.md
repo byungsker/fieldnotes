@@ -77,3 +77,11 @@ Node 22에서 루트 린트·185개 테스트·타입 검사를 포함한 빌드
 Node 22에서 루트 린트·171개 테스트·타입 검사를 포함한 빌드가 통과했다. 편집기만 별도로 복사한 환경의 설치·타입 검사·55개 테스트도 통과했다. 제거된 전용 동작의 테스트를 공통 카테고리 CRUD·원문 보존·제거 경로 거부 검증으로 교체했으며 기존 격리·승인·이미지 검증은 유지했다.
 
 로컬 `.omo/evidence/generic-js-views-20261018/`에 브라우저 캡처, 저장 결과, 검증 로그를 남겼다. 캡처와 합성 저장소는 Git에 포함하지 않는다. 검증용 탭·Chrome 프로필·임시 서버와 vault를 종료·정리했다.
+
+## 2026-10-19 폴더 하위 펼치기·접기 검증
+
+- 환경: 임시 합성 vault를 연결한 빌드 서버(`127.0.0.1:4178`)와 Aside Browser. 사용자 vault와 운영 서버는 사용하지 않았다. 화면 캡처 크기는 2880×1800이다.
+- `Parent`를 Alt/Option-click해 `Child`, `Grandchild`, `Sibling`까지 접히는 것을 확인했다. 다시 Alt/Option-click하자 세 하위 폴더와 `Leaf`, `Branch`가 모두 나타났다.
+- 일반 클릭은 선택한 폴더만 접고 펼쳤으며, 하위 폴더의 기존 펼침 상태를 보존했다. 별도 `Separate/Nested` 경로도 계속 펼쳐진 상태였다.
+- 브라우저 page error는 0건이었다. 화면과 합성 custom view 결과 캡처는 로컬 `.omo/evidence/folder-subtree-toggle-20261019/folder-tree-and-view.png`에 저장했으며 Git에는 포함하지 않았다.
+- Node 테스트 175개, 린트, 타입 검사를 포함한 production build가 통과했다. build에는 기존 1,206 kB JavaScript chunk 경고가 남았다.

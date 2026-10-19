@@ -40,6 +40,7 @@ import { formatDocumentDate } from "../lib/document-date";
 import { resolveMobileDrawerSwipe, resolveMobileDrawerSwipeDrag } from "../model/mobile-drawer-swipe";
 import { isSidebarToggleShortcut } from "../model/keyboard-shortcuts";
 import { pushVaultSettingsHistoryEntry } from "../model/vault-settings-history";
+import { folderSubtreeIds, toggleFolderSubtree } from "../model/folder-tree";
 import {
   AUTOSAVE_DELAY_MS,
   clearLocalDraft,
@@ -173,26 +174,6 @@ function folderPaths(folders: FolderRecord[]): Map<string, string> {
     }
   }
   return paths;
-}
-
-function descendantIds(folders: FolderRecord[], id: string): Set<string> {
-  const children = new Map<string, string[]>();
-  for (const folder of folders) {
-    if (!folder.parentId) continue;
-    const list = children.get(folder.parentId) ?? [];
-    list.push(folder.id);
-    children.set(folder.parentId, list);
-  }
-  const descendants = new Set([id]);
-  const stack = [id];
-  while (stack.length) {
-    for (const child of children.get(stack.pop() as string) ?? []) {
-      if (descendants.has(child)) continue;
-      descendants.add(child);
-      stack.push(child);
-    }
-  }
-  return descendants;
 }
 
 function relativeDate(value: string): string {
@@ -743,7 +724,7 @@ export function WorkspacePage() {
     ? folders.find((folder) => folder.id === activeFolderId) ?? null
     : null;
   const excludedFolderParents = useMemo(
-    () => activeFolder ? descendantIds(folders, activeFolder.id) : new Set<string>(),
+    () => activeFolder ? folderSubtreeIds(folders, activeFolder.id) : new Set<string>(),
     [activeFolder, folders],
   );
 
@@ -2249,12 +2230,17 @@ export function WorkspacePage() {
                     className="folder-disclosure"
                     aria-label={`${expanded ? "Collapse" : "Expand"} ${folder.name}`}
                     aria-expanded={expanded}
-                    onClick={() => setExpandedFolderIds((current) => {
-                      const next = new Set(current);
-                      if (next.has(folder.id)) next.delete(folder.id);
-                      else next.add(folder.id);
-                      return next;
-                    })}
+                    title={!queryText ? "Alt/Option-click to toggle this folder and all nested folders" : undefined}
+                    onClick={(event) => {
+                      const toggleSubtree = event.altKey && !queryText;
+                      setExpandedFolderIds((current) => {
+                        if (toggleSubtree) return toggleFolderSubtree(current, folders, folder.id);
+                        const next = new Set(current);
+                        if (next.has(folder.id)) next.delete(folder.id);
+                        else next.add(folder.id);
+                        return next;
+                      });
+                    }}
                   >{expanded ? <ChevronDown size="var(--ds-icon-md)" /> : <ChevronRight size="var(--ds-icon-md)" />}</button>
                 ) : <span className="folder-disclosure-spacer" aria-hidden="true" />}
                 <button
