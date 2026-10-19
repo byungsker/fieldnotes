@@ -1,4 +1,4 @@
-import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
   ArrowDownToLine,
   ArrowDownUp,
@@ -42,6 +42,10 @@ import { isSidebarToggleShortcut } from "../model/keyboard-shortcuts";
 import { pushVaultSettingsHistoryEntry } from "../model/vault-settings-history";
 import { folderSubtreeIds, toggleFolderSubtree } from "../model/folder-tree";
 import {
+  clampDesktopSidebarWidth,
+  normalizeDesktopSidebarWidth,
+} from "../model/sidebar-width";
+import {
   AUTOSAVE_DELAY_MS,
   clearLocalDraft,
   draftMatchesDocument,
@@ -81,6 +85,7 @@ type VaultSyncResponse = { enabled: boolean; changed: boolean; changes: number; 
 const LAST_SEQUENCE_KEY = "fieldnotes:last-change-sequence";
 const THEME_KEY = "fieldnotes:theme";
 const DESKTOP_SIDEBAR_KEY = "fieldnotes:desktop-sidebar-collapsed";
+const DESKTOP_SIDEBAR_WIDTH_KEY = "fieldnotes:desktop-sidebar-width";
 const MOBILE_DRAWER_HISTORY_KEY = "fieldnotes:mobile-drawer";
 const UNFILED_TREE_ID = "__fieldnotes_unfiled__";
 const MobileWorkspace = lazy(() => import("./MobileWorkspace").then((module) => ({ default: module.MobileWorkspace })));
@@ -130,6 +135,20 @@ function initialDesktopSidebarCollapsed(): boolean {
   } catch {
     return false;
   }
+}
+
+function initialDesktopSidebarWidth(): number | null {
+  try {
+    return normalizeDesktopSidebarWidth(window.localStorage.getItem(DESKTOP_SIDEBAR_WIDTH_KEY));
+  } catch {
+    return null;
+  }
+}
+
+function defaultDesktopSidebarWidth(): number {
+  if (window.innerWidth <= 900) return 232;
+  if (window.innerWidth <= 1150) return 248;
+  return 268;
 }
 
 function hasDraftChanged(
@@ -290,6 +309,8 @@ export function WorkspacePage() {
   const [sortOrder, setSortOrder] = useState<SortOrder>("updated-desc");
   const [theme, setTheme] = useState<ColorTheme>(initialTheme);
   const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(initialDesktopSidebarCollapsed);
+  const [desktopSidebarWidth, setDesktopSidebarWidth] = useState<number | null>(initialDesktopSidebarWidth);
+  const [desktopSidebarResizing, setDesktopSidebarResizing] = useState(false);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [reconciliationError, setReconciliationError] = useState(false);
   const [markdownSafeToSave, setMarkdownSafeToSave] = useState(true);
@@ -311,6 +332,8 @@ export function WorkspacePage() {
   const editorHostRef = useRef<HTMLDivElement>(null);
   const notesHeadingRef = useRef<HTMLHeadingElement>(null);
   const actionDialogRef = useRef(actionDialog);
+  const desktopSidebarWidthRef = useRef<number | null>(desktopSidebarWidth);
+  const desktopSidebarResizePointerRef = useRef<number | null>(null);
   const selectedRef = useRef<DocumentRecord | null>(null);
   const draftTitleRef = useRef("");
   const draftBodyRef = useRef("");
@@ -1821,6 +1844,63 @@ export function WorkspacePage() {
     }
   }, [desktopSidebarCollapsed]);
 
+  const updateDesktopSidebarWidth = (nextWidth: number, persist: boolean) => {
+    const width = clampDesktopSidebarWidth(nextWidth);
+    desktopSidebarWidthRef.current = width;
+    setDesktopSidebarWidth(width);
+    if (!persist) return;
+    try {
+      window.localStorage.setItem(DESKTOP_SIDEBAR_WIDTH_KEY, String(width));
+    } catch {
+      // Keep the current sidebar width for this tab if storage is unavailable.
+    }
+  };
+
+  const handleSidebarResizePointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    desktopSidebarResizePointerRef.current = event.pointerId;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDesktopSidebarResizing(true);
+  };
+
+  const handleSidebarResizePointerMove = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (desktopSidebarResizePointerRef.current !== event.pointerId) return;
+    const appShell = event.currentTarget.parentElement;
+    if (!appShell) return;
+    updateDesktopSidebarWidth(event.clientX - appShell.getBoundingClientRect().left, false);
+  };
+
+  const finishSidebarResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (desktopSidebarResizePointerRef.current !== event.pointerId) return;
+    desktopSidebarResizePointerRef.current = null;
+    setDesktopSidebarResizing(false);
+    updateDesktopSidebarWidth(desktopSidebarWidthRef.current ?? defaultDesktopSidebarWidth(), true);
+  };
+
+  const handleSidebarResizeKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    const currentWidth = desktopSidebarWidthRef.current ?? defaultDesktopSidebarWidth();
+    const step = event.shiftKey ? 32 : 16;
+    const nextWidth = event.key === "ArrowLeft" ? currentWidth - step
+      : event.key === "ArrowRight" ? currentWidth + step
+        : event.key === "Home" ? 200
+          : event.key === "End" ? 420
+            : undefined;
+    if (nextWidth === undefined) return;
+    event.preventDefault();
+    updateDesktopSidebarWidth(nextWidth, true);
+  };
+
+  const resetDesktopSidebarWidth = () => {
+    desktopSidebarWidthRef.current = null;
+    setDesktopSidebarWidth(null);
+    try {
+      window.localStorage.removeItem(DESKTOP_SIDEBAR_WIDTH_KEY);
+    } catch {
+      // Keep the default responsive width for this tab if storage is unavailable.
+    }
+  };
+
   useEffect(() => {
     const viewport = window.visualViewport;
     const updateAppViewport = () => {
@@ -2603,7 +2683,10 @@ export function WorkspacePage() {
     <div
       id={`fieldnotes-activity-${screen.activityId}`}
       data-fieldnotes-route={screen.kind}
-      className={`app-shell route-${screen.kind}${displayDocument ? " has-selection" : ""}${workspaceRenderer === "desktop" ? " sidebar-explorer-layout" : ""}${workspaceRenderer === "desktop" && desktopSidebarCollapsed ? " sidebar-collapsed" : ""}`}
+      className={`app-shell route-${screen.kind}${displayDocument ? " has-selection" : ""}${workspaceRenderer === "desktop" ? " sidebar-explorer-layout" : ""}${workspaceRenderer === "desktop" && desktopSidebarCollapsed ? " sidebar-collapsed" : ""}${desktopSidebarResizing ? " sidebar-resizing" : ""}`}
+      style={desktopSidebarWidth === null ? undefined : ({
+        "--workspace-sidebar-width": `${desktopSidebarCollapsed ? 72 : desktopSidebarWidth}px`,
+      } as CSSProperties)}
       onTouchStart={handleMobileTouchStart}
       onTouchMove={handleMobileTouchMove}
       onTouchEnd={handleMobileTouchEnd}
@@ -2745,6 +2828,29 @@ export function WorkspacePage() {
           <p>Stored on this Mac<br />and ready for your agents.</p>
         </div>
       </aside>
+
+      {workspaceRenderer === "desktop" && !desktopSidebarCollapsed && (
+        <button
+          type="button"
+          className={`sidebar-resize-handle${desktopSidebarResizing ? " active" : ""}`}
+          role="separator"
+          aria-label="Resize sidebar"
+          aria-controls={`fieldnotes-mobile-drawer-${screen.activityId}`}
+          aria-orientation="vertical"
+          aria-valuemin={200}
+          aria-valuemax={420}
+          aria-valuenow={desktopSidebarWidth ?? defaultDesktopSidebarWidth()}
+          aria-valuetext={`${desktopSidebarWidth ?? defaultDesktopSidebarWidth()} pixels`}
+          title="Drag to resize. Use arrow keys to adjust and double-click to reset."
+          onPointerDown={handleSidebarResizePointerDown}
+          onPointerMove={handleSidebarResizePointerMove}
+          onPointerUp={finishSidebarResize}
+          onPointerCancel={finishSidebarResize}
+          onLostPointerCapture={finishSidebarResize}
+          onKeyDown={handleSidebarResizeKeyDown}
+          onDoubleClick={resetDesktopSidebarWidth}
+        />
+      )}
 
       <section className="note-column" id="fieldnotes-note-list" aria-label="Notes">
         <div className="list-header">

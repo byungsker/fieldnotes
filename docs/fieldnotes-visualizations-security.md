@@ -22,9 +22,9 @@ Chrome은 CSP WebRTC 지시어를 지원하지 않으므로 Worker의 전역 객
 
 ## 로컬 이미지
 
-`img-src 'self'`는 Fieldnotes origin만 허용한다. runner는 현재 query 결과의 문서 ID·content hash·검증된 `assetPaths`에서 만든 **정확한 자산 URL**만 이미지 src로 허용한다. frontmatter의 `poster` 등 임의 URL 필드는 접근 권한을 부여하지 않는다. 원격 호스트에 요청하거나 카테고리 전용 프록시를 제공하지 않는다.
+`img-src 'self'`는 Fieldnotes origin만 허용한다. runner는 현재 query 결과의 문서 ID·content hash·검증된 `assetPaths` 또는 `imageFields`에서 만든 **정확한 자산 URL**만 이미지 src로 허용한다. frontmatter URL은 `cover`, `image`, `photo`, `poster`, `thumbnail` 필드와 승인된 세 이미지 호스트에 한해 서버 자산 경로를 사용할 수 있다. 서버는 HTTPS·host·포트·경로 확장자를 검증하고 redirect 없이 가져오며, 이미지 실제 바이트와 25 MB 한도를 검사한다. 외부 이미지 요청은 Worker에서 직접 실행되지 않는다.
 
-`GET /api/views/assets/:id`는 현재 문서 hash와 본문에 명시한 정규화 경로를 검증한다. fenced code 안의 이미지나 JS 문자열은 참조가 아니다. vault의 no-follow 경로 검사로 읽고 최대 25 MB·JPEG/PNG/WebP/GIF/AVIF 확장자·실제 이미지 바이트를 검사한다. 경로는 문서 기준 상대 경로 또는 `/`로 시작하는 vault 최상위 경로를 지원한다. 경로 없는 wiki 첨부 링크는 vault에서 같은 이름의 파일이 하나일 때만 기존 노트를 위해 해석한다. 응답 MIME은 검증한 바이트로 정하며 이미지 바이트 hash로 ETag를 만든다. `If-None-Match`의 완전한 entity tag를 weak comparison으로 비교하고, 단독 wildcard 또는 유효한 일치 tag만 `304`로 응답한다.
+`GET /api/views/assets/:id`의 `asset` 요청은 현재 문서 hash와 본문에 명시한 정규화 경로를 검증한다. fenced code 안의 이미지나 JS 문자열은 참조가 아니다. vault의 no-follow 경로 검사로 읽고 최대 25 MB·JPEG/PNG/WebP/GIF/AVIF 확장자·실제 이미지 바이트를 검사한다. `field` 요청은 다섯 공통 frontmatter image field 중 하나를 읽고 승인된 이미지 origin만 요청하며 redirect를 따르지 않는다. 로컬 경로는 문서 기준 상대 경로 또는 `/`로 시작하는 vault 최상위 경로를 지원한다. 경로 없는 wiki 첨부 링크는 vault에서 같은 이름의 파일이 하나일 때만 기존 노트를 위해 해석한다. 응답 MIME은 검증한 바이트로 정하며 이미지 바이트 hash로 ETag를 만든다. `If-None-Match`의 완전한 entity tag를 weak comparison으로 비교하고, 단독 wildcard 또는 유효한 일치 tag만 `304`로 응답한다.
 
 파일 open 뒤 경로와 열린 파일 identity를 다시 확인해 상위 디렉터리 symlink 교체를 검사한다. Node의 이식 가능한 파일 API에는 descriptor 기준 `openat` 탐색이 없어, 디렉터리를 동시에 바꾸는 로컬 프로세스에 대해 완전한 방어를 보장하지 않는다. vault의 쓰기 접근을 다른 프로세스와 공유하지 않는 운영 경계가 필요하다.
 

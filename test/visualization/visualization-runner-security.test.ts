@@ -322,10 +322,15 @@ test("sandbox images accept only explicit note-scoped local assets regardless of
   context.__fixtureNotes = [{
     id, contentHash,
     assetPaths: ["new-category/cover.png", "../outside.png", "https://example.invalid/cover.png", ".fieldnotes/secret.png"],
+    imageFields: ["poster", "cover", "constructor", "../outside"],
     frontmatter: { poster: "https://image.tmdb.org/t/p/w500/example.jpg" },
   }, { id, assetPaths: ["without-hash.png"] }];
   const sources = vm.runInContext("buildAllowedImageSources(__fixtureNotes)", context) as Set<string>;
-  assert.deepEqual([...sources], [`/api/views/assets/${id}?asset=new-category%2Fcover.png&v=${contentHash}`]);
+  assert.deepEqual([...sources], [
+    `/api/views/assets/${id}?asset=new-category%2Fcover.png&v=${contentHash}`,
+    `/api/views/assets/${id}?field=poster&v=${contentHash}`,
+    `/api/views/assets/${id}?field=cover&v=${contentHash}`,
+  ]);
   assert.match(runnerSource, /allowedImageSources\.has\(attribute\.value\)/u);
   assert.match(runnerSource, /MAX_ASSET_SOURCES = 50/u);
   assert.doesNotMatch(runnerHtml, /img-src 'none'/u);

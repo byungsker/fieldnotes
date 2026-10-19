@@ -13,9 +13,12 @@ import {
 } from "../storage/database.js";
 import { queryVisualizationNotes, validateVisualizationQuery } from "../visualization/query.js";
 import { MAX_VIEW_TRASH_BYTES, MAX_VIEW_TRASH_CANDIDATES } from "../view-query-limits.js";
-import { patchFrontmatter, serializeFrontmatter } from "../visualization/frontmatter.js";
+import { parseFrontmatter, patchFrontmatter, serializeFrontmatter } from "../visualization/frontmatter.js";
 import {
+  extractFrontmatterImageFields,
+  fetchRemoteVisualizationImage,
   MAX_VISUALIZATION_IMAGE_BYTES,
+  resolveFrontmatterImageSource,
   resolveReferencedLocalImagePath,
   validateLocalImage,
 } from "../visualization/assets.js";
@@ -165,7 +168,7 @@ export function registerVisualizationRoutes(app: Express, database: KnowledgeDat
     ));
   });
 
-  app.get("/api/views/assets/:id", (request, response) => {
+  app.get("/api/views/assets/:id", async (request, response) => {
     const id = requestDocumentId(request);
     const expectedHash = validateHash(request.query.v);
     if (!expectedHash) throw new RequestValidationError("A note content hash is required for view assets.");
@@ -174,26 +177,60 @@ export function registerVisualizationRoutes(app: Express, database: KnowledgeDat
     const currentHash = current.contentHash || createHash("sha256").update(current.body, "utf8").digest("hex");
     if (expectedHash !== currentHash) throw new VersionConflictError(current.version, currentHash);
 
-    if (Object.keys(request.query).some((key) => !["v", "asset"].includes(key)) || typeof request.query.asset !== "string") {
-      throw new RequestValidationError("A view asset must name one referenced local image.");
+    const allowedQueryKeys = ["v", "asset", "field"];
+    const hasAsset = typeof request.query.asset === "string";
+    const hasField = typeof request.query.field === "string";
+    if (Object.keys(request.query).some((key) => !allowedQueryKeys.includes(key)) || hasAsset === hasField) {
+      throw new RequestValidationError("A view asset must name one referenced local image or supported frontmatter image field.");
     }
-    const assetPath = request.query.asset;
-    if (!database.vault || !current.filePath) {
-      sendError(response, 404, "not_found", "The note does not reference this local image.");
-      return;
+
+    let image: ReturnType<typeof validateLocalImage>;
+    if (hasAsset) {
+      const assetPath = request.query.asset as string;
+      if (!database.vault || !current.filePath) {
+        sendError(response, 404, "not_found", "The note does not reference this local image.");
+        return;
+      }
+      const resolvedAssetPath = resolveReferencedLocalImagePath(
+        current.body,
+        current.filePath,
+        assetPath,
+        (relativePath, resolveUniqueBasename) => database.vault!.resolveAssetPath(relativePath, resolveUniqueBasename),
+      );
+      if (!resolvedAssetPath) {
+        sendError(response, 404, "not_found", "The referenced local image is missing or ambiguous.");
+        return;
+      }
+      const bytes = database.vault.readAsset(resolvedAssetPath, MAX_VISUALIZATION_IMAGE_BYTES);
+      image = validateLocalImage(bytes, assetPath);
+    } else {
+      const field = request.query.field as string;
+      const parsed = parseFrontmatter(current.body);
+      const supportedFields = extractFrontmatterImageFields(parsed.values, current.filePath);
+      if (!supportedFields.includes(field)) {
+        sendError(response, 404, "not_found", "The note does not reference an approved image field.");
+        return;
+      }
+      const source = resolveFrontmatterImageSource(
+        parsed.values[field],
+        current.filePath,
+        (relativePath, resolveUniqueBasename) => database.vault?.resolveAssetPath(relativePath, resolveUniqueBasename),
+      );
+      if (!source) {
+        sendError(response, 404, "not_found", "The referenced image is missing or unsupported.");
+        return;
+      }
+      if (source.type === "remote") {
+        image = await fetchRemoteVisualizationImage(source.url);
+      } else {
+        if (!database.vault) {
+          sendError(response, 404, "not_found", "The referenced local image is unavailable.");
+          return;
+        }
+        const bytes = database.vault.readAsset(source.path, MAX_VISUALIZATION_IMAGE_BYTES);
+        image = validateLocalImage(bytes, source.path);
+      }
     }
-    const resolvedAssetPath = resolveReferencedLocalImagePath(
-      current.body,
-      current.filePath,
-      assetPath,
-      (relativePath, resolveUniqueBasename) => database.vault!.resolveAssetPath(relativePath, resolveUniqueBasename),
-    );
-    if (!resolvedAssetPath) {
-      sendError(response, 404, "not_found", "The referenced local image is missing or ambiguous.");
-      return;
-    }
-    const bytes = database.vault.readAsset(resolvedAssetPath, MAX_VISUALIZATION_IMAGE_BYTES);
-    const image = validateLocalImage(bytes, assetPath);
 
     const imageHash = createHash("sha256").update(image.bytes).digest("hex");
     const etag = `"${imageHash}"`;

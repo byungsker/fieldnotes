@@ -3,6 +3,12 @@ import { LOCAL_RASTER_EXTENSIONS, MAX_VAULT_ASSET_BYTES } from "../storage/vault
 
 export const MAX_VISUALIZATION_IMAGE_BYTES = MAX_VAULT_ASSET_BYTES;
 const LOCAL_IMAGE_EXTENSIONS = LOCAL_RASTER_EXTENSIONS;
+const VIEW_IMAGE_FRONTMATTER_FIELDS = ["cover", "image", "photo", "poster", "thumbnail"] as const;
+const TRUSTED_REMOTE_IMAGE_HOSTS = new Set([
+  "contents.kyobobook.co.kr",
+  "image.aladin.co.kr",
+  "image.tmdb.org",
+]);
 
 export class VisualizationAssetError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -12,6 +18,7 @@ export class VisualizationAssetError extends Error {
 }
 
 export type VisualizationImage = { bytes: Buffer; contentType: string };
+export type FrontmatterImageSource = { type: "local"; path: string } | { type: "remote"; url: string };
 
 function hasControlCharacters(value: string): boolean {
   return [...value].some((character) => {
@@ -65,6 +72,102 @@ export function validateLocalImage(bytes: Buffer, relativePath: string): Visuali
     throw new VisualizationAssetError(415, "visualization_asset_type", "Only verified JPEG, PNG, WebP, GIF, and AVIF images are available to views.");
   }
   return { bytes, contentType };
+}
+
+function normalizedRemoteImageUrl(value: string): string | undefined {
+  if (value.length > 2_048 || value.trim() !== value || hasControlCharacters(value)) return undefined;
+  let url: URL;
+  try { url = new URL(value); }
+  catch { return undefined; }
+  if (url.protocol !== "https:" || !TRUSTED_REMOTE_IMAGE_HOSTS.has(url.hostname.toLowerCase())
+    || url.username || url.password || url.port || url.hash
+    || !LOCAL_IMAGE_EXTENSIONS.has(path.posix.extname(url.pathname).toLowerCase())) return undefined;
+  return url.href;
+}
+
+/** frontmatter 이미지가 지원되는 로컬 경로 또는 원격 호스트로 확인된 필드만 반환한다. */
+export function extractFrontmatterImageFields(
+  values: Record<string, unknown>,
+  markdownPath?: string,
+): string[] {
+  return VIEW_IMAGE_FRONTMATTER_FIELDS.filter((field) => {
+    const value = values[field];
+    if (typeof value !== "string" || !value) return false;
+    if (normalizedRemoteImageUrl(value)) return true;
+    return Boolean(markdownPath && normalizeLocalReference(value, markdownPath));
+  });
+}
+
+/** 임의의 로컬 경로나 원격 호스트를 허용하지 않고 frontmatter 이미지 필드를 해석한다. */
+export function resolveFrontmatterImageSource(
+  value: unknown,
+  markdownPath: string | undefined,
+  resolveAssetPath: (relativePath: string, resolveUniqueBasename?: boolean) => string | undefined,
+): FrontmatterImageSource | undefined {
+  if (typeof value !== "string" || !value) return undefined;
+  const remoteUrl = normalizedRemoteImageUrl(value);
+  if (remoteUrl) return { type: "remote", url: remoteUrl };
+  if (!markdownPath) return undefined;
+  let decoded: string;
+  try { decoded = decodeURIComponent(value); }
+  catch { return undefined; }
+  const assetPath = normalizeLocalReference(decoded, markdownPath);
+  if (!assetPath) return undefined;
+  const exactPath = resolveAssetPath(assetPath, false);
+  if (exactPath) return { type: "local", path: exactPath };
+  if (!decoded.includes("/") && !decoded.startsWith("/")) {
+    const uniquePath = resolveAssetPath(assetPath, true);
+    if (uniquePath) return { type: "local", path: uniquePath };
+  }
+  return undefined;
+}
+
+/** 승인된 공개 이미지 origin에서만 이미지를 가져오고 바이트 형식을 확인한다. */
+export async function fetchRemoteVisualizationImage(
+  url: string,
+  fetcher: typeof fetch = fetch,
+): Promise<VisualizationImage> {
+  const normalizedUrl = normalizedRemoteImageUrl(url);
+  if (!normalizedUrl) throw new VisualizationAssetError(404, "visualization_asset_missing", "The note does not reference an approved remote image.");
+  let response: Response;
+  try {
+    response = await fetcher(normalizedUrl, {
+      redirect: "error",
+      headers: { Accept: "image/avif,image/webp,image/png,image/jpeg,image/gif" },
+      signal: AbortSignal.timeout(5_000),
+    });
+  } catch {
+    throw new VisualizationAssetError(502, "visualization_remote_image_unavailable", "The referenced image provider is unavailable.");
+  }
+  if (!response.ok || !response.body) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new VisualizationAssetError(502, "visualization_remote_image_unavailable", "The referenced image provider is unavailable.");
+  }
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > MAX_VISUALIZATION_IMAGE_BYTES) {
+    void response.body.cancel().catch(() => undefined);
+    throw new VisualizationAssetError(413, "visualization_asset_too_large", "Image exceeds the 25 MB view asset limit.");
+  }
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      byteLength += chunk.byteLength;
+      if (byteLength > MAX_VISUALIZATION_IMAGE_BYTES) {
+        void reader.cancel().catch(() => undefined);
+        throw new VisualizationAssetError(413, "visualization_asset_too_large", "Image exceeds the 25 MB view asset limit.");
+      }
+      chunks.push(chunk);
+    }
+  } catch (error) {
+    if (error instanceof VisualizationAssetError) throw error;
+    throw new VisualizationAssetError(502, "visualization_remote_image_unavailable", "The referenced image provider is unavailable.");
+  }
+  return validateLocalImage(Buffer.concat(chunks, byteLength), new URL(normalizedUrl).pathname);
 }
 
 function normalizeLocalReference(target: string, markdownPath: string, allowedExtensions = LOCAL_IMAGE_EXTENSIONS): string | undefined {
