@@ -12,6 +12,7 @@ const MIN_FRAME_HEIGHT = 160;
 const MAX_FRAME_HEIGHT = 16_000;
 const NOTE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const NOTE_HASH_PATTERN = /^[0-9a-f]{64}$/i;
+const IMAGE_FRONTMATTER_FIELDS = new Set(["cover", "image", "photo", "poster", "thumbnail"]);
 const ALLOWED_TAGS = new Set([
   "div", "section", "article", "header", "footer", "h1", "h2", "h3", "h4", "p", "span",
   "strong", "em", "small", "code", "pre", "ul", "ol", "li", "table", "thead", "tbody", "img",
@@ -447,6 +448,14 @@ function buildAllowedImageSources(notes) {
         if (sources.size >= MAX_ASSET_SOURCES) return sources;
         if (safeAssetPath(assetPath)) {
           sources.add(`/api/views/assets/${note.id}?asset=${encodeURIComponent(assetPath)}&v=${note.contentHash}`);
+        }
+      }
+    }
+    if (Array.isArray(note.imageFields)) {
+      for (const field of note.imageFields.slice(0, 10)) {
+        if (sources.size >= MAX_ASSET_SOURCES) return sources;
+        if (IMAGE_FRONTMATTER_FIELDS.has(field)) {
+          sources.add(`/api/views/assets/${note.id}?field=${encodeURIComponent(field)}&v=${note.contentHash}`);
         }
       }
     }

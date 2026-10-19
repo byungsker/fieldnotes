@@ -9,7 +9,7 @@
 | `babies/` 경로와 일부 DataviewJS 패턴에 육아 React UI 표시 | 모든 경로에 동일한 보존 블록 미리보기 적용 |
 | `/api/preview/babies`, `/api/preview/babies/asset` | 경로 제거, `404` 응답 |
 | `movies.search` 액션과 검색 결과 `state.movies` | 전용 액션 제거, `400` 응답. `state`는 사용자 JS의 일반 상태로만 사용 |
-| `?field=poster`와 TMDb 원격 이미지 다운로드 | 전용 쿼리 제거, `400` 응답. 명시적 로컬 이미지 참조만 제공 |
+| `?field=poster`와 TMDb 포스터 | 공통 `field` 경로에서 문서 hash와 승인된 이미지 host를 검증해 제공 |
 | 책·영화별 기록 REST API | 기존에도 별도 기록 REST API는 없었으며 공통 문서 API 사용 |
 
 기존 영화 검색은 어댑터를 주입했을 때만 동작했고 기본 서버에서는 비활성이었다. 원격 포스터 다운로드는 기본 서버에서도 사용할 수 있었다. 현재는 두 경로 모두 제거했다. 외부 검색 서비스를 대체하는 새 네트워크 API를 추가하지 않는다.
@@ -22,9 +22,9 @@
 
 ## 로컬 이미지 호환성
 
-공통 자산 API는 현재 문서 hash와 본문에 명시한 Markdown·wiki 이미지 참조를 검증한다. 문서 기준 상대 경로와 `/photos/image.png` 같은 vault 최상위 경로를 지원한다. `![[cover.jpg]]`처럼 경로가 없는 wiki 첨부 링크는 문서 폴더를 먼저 확인하고, 없으면 vault 전체에서 같은 이름의 파일이 하나일 때 연결한다. 경로가 모호하면 이미지를 제공하지 않는다. 코드 fence 안의 예시는 참조로 인정하지 않는다.
+공통 자산 API는 현재 문서 hash와 본문에 명시한 Markdown·wiki 이미지 참조를 검증한다. 문서 기준 상대 경로와 `/photos/image.png` 같은 vault 최상위 경로를 지원한다. `![[cover.jpg]]`처럼 경로가 없는 wiki 첨부 링크는 문서 폴더를 먼저 확인하고, 없으면 vault 전체에서 같은 이름의 파일이 하나일 때 연결한다. 경로가 모호하면 이미지를 제공하지 않는다. 코드 fence 안의 예시는 참조로 인정하지 않는다. `cover`, `image`, `photo`, `poster`, `thumbnail` frontmatter 필드는 문서에서 확인된 로컬 이미지 경로나 승인된 HTTPS 이미지 출처에 한해 같은 자산 API로 제공한다. 승인된 외부 출처는 `image.tmdb.org`, `image.aladin.co.kr`, `contents.kyobobook.co.kr`다.
 
-실제 이미지 바이트를 확인해 JPEG·PNG·WebP·GIF·AVIF를 최대 25 MB까지 제공한다. 따라서 기존 8.1 MB 사진은 다른 경로·형식 문제가 없다면 공통 자산 API의 크기 제한에 걸리지 않는다. JS 문자열이나 frontmatter의 외부 URL만으로 이미지 접근 권한이 생기지는 않으며 원격 poster URL도 자동 다운로드하지 않는다.
+실제 이미지 바이트를 확인해 JPEG·PNG·WebP·GIF·AVIF를 최대 25 MB까지 제공한다. 따라서 기존 8.1 MB 사진은 다른 경로·형식 문제가 없다면 공통 자산 API의 크기 제한에 걸리지 않는다. JS 문자열만으로 이미지 접근 권한이 생기지 않으며, frontmatter 원격 URL도 허용된 field와 host 조합을 통과하고 문서 hash에 묶인 경로를 통해서만 내려받는다. 원격 요청은 redirect를 따르지 않는다.
 
 ## 기존 DataviewJS 대시보드
 

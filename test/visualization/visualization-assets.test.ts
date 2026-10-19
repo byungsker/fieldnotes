@@ -32,6 +32,8 @@ writeFileSync(misnamedLocalPath, localBytes);
 const misnamedLocalNote = createDocument(database, "Synthetic PNG with JPG extension", "---\nkind: fixture\n---\n\n![[../attachments/synthetic-misnamed-cover.jpg]]", recordsFolder.id);
 const publicPosterUrl = "https://image.tmdb.org/t/p/w500/synthetic-poster.jpg";
 const publicNote = createDocument(database, "Synthetic public poster", `---\nposter: ${publicPosterUrl}\n---\nSynthetic fixture.`, recordsFolder.id);
+const frontmatterLocalNote = createDocument(database, "Synthetic frontmatter image", "---\nphoto: ../attachments/synthetic-cover.png\n---\nSynthetic fixture.", recordsFolder.id);
+const untrustedRemoteNote = createDocument(database, "Synthetic untrusted image", "---\nposter: https://example.invalid/cover.jpg\n---\nSynthetic fixture.", recordsFolder.id);
 const fencedNote = createDocument(database, "Synthetic fenced image example", "```markdown\n![[../attachments/synthetic-cover.png]]\n```", recordsFolder.id);
 const app = createApp(database);
 const server = app.listen(0, "127.0.0.1");
@@ -170,18 +172,21 @@ test("bounded descriptor reads stop at the limit plus one byte if the open file 
   }
 });
 
-test("view asset API serves only explicitly referenced local images and rejects remote metadata", async () => {
+test("view asset API serves explicit local images and approved frontmatter image fields", async () => {
   const queryResponse = await fetch(`${baseUrl}/api/views/query`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query: { folderId: recordsFolder.id, limit: 20 } }),
   });
   assert.equal(queryResponse.status, 200);
-  const query = await queryResponse.json() as { notes: Array<{ id: string; assetPaths?: string[] }> };
+  const query = await queryResponse.json() as { notes: Array<{ id: string; assetPaths?: string[]; imageFields?: string[] }> };
   assert.deepEqual(query.notes.find((note) => note.id === localNote.id)?.assetPaths, ["movies/attachments/synthetic-cover.png"]);
   assert.deepEqual(query.notes.find((note) => note.id === largeImageNote.id)?.assetPaths, ["movies/attachments/synthetic-large-cover.jpg"]);
   assert.deepEqual(query.notes.find((note) => note.id === misnamedLocalNote.id)?.assetPaths, ["movies/attachments/synthetic-misnamed-cover.jpg"]);
   assert.equal(query.notes.find((note) => note.id === fencedNote.id)?.assetPaths, undefined);
+  assert.deepEqual(query.notes.find((note) => note.id === publicNote.id)?.imageFields, ["poster"]);
+  assert.deepEqual(query.notes.find((note) => note.id === frontmatterLocalNote.id)?.imageFields, ["photo"]);
+  assert.equal(query.notes.find((note) => note.id === untrustedRemoteNote.id)?.imageFields, undefined);
 
   const localUrl = `${baseUrl}/api/views/assets/${localNote.id}?asset=${encodeURIComponent("movies/attachments/synthetic-cover.png")}&v=${localNote.contentHash}`;
   const localResponse = await fetch(localUrl);
@@ -213,6 +218,33 @@ test("view asset API serves only explicitly referenced local images and rejects 
   const fencedReference = `${baseUrl}/api/views/assets/${fencedNote.id}?asset=${encodeURIComponent("movies/attachments/synthetic-cover.png")}&v=${fencedNote.contentHash}`;
   assert.equal((await fetch(fencedReference)).status, 404);
 
+  const frontmatterLocalUrl = `${baseUrl}/api/views/assets/${frontmatterLocalNote.id}?field=photo&v=${frontmatterLocalNote.contentHash}`;
+  const frontmatterLocalResponse = await fetch(frontmatterLocalUrl);
+  assert.equal(frontmatterLocalResponse.status, 200);
+  assert.deepEqual(Buffer.from(await frontmatterLocalResponse.arrayBuffer()), updatedLocalBytes);
+
+  const originalFetch: typeof fetch = globalThis.fetch.bind(globalThis);
+  const remoteFetches: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const requestUrl = input instanceof Request ? input.url : String(input);
+    if (requestUrl === publicPosterUrl) {
+      remoteFetches.push(requestUrl);
+      assert.equal(init?.redirect, "error", "the proxy must not follow untrusted redirects");
+      return new Response(localBytes, { status: 200, headers: { "Content-Type": "image/png" } });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  try {
+    const remoteUrl = `${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`;
+    const remoteResponse = await originalFetch(remoteUrl);
+    assert.equal(remoteResponse.status, 200, await remoteResponse.clone().text());
+    assert.equal(remoteResponse.headers.get("content-type"), "image/png");
+    assert.deepEqual(Buffer.from(await remoteResponse.arrayBuffer()), localBytes);
+    assert.deepEqual(remoteFetches, [publicPosterUrl]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
   const currentEtag = refreshedLocal.headers.get("etag");
   assert.ok(currentEtag);
   for (const [header, status] of [
@@ -230,7 +262,8 @@ test("view asset API serves only explicitly referenced local images and rejects 
   assert.equal(changedAgain.status, 200);
   assert.notEqual(changedAgain.headers.get("etag"), currentEtag);
 
-  assert.equal((await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=poster&v=${publicNote.contentHash}`)).status, 400);
+  assert.equal((await fetch(`${baseUrl}/api/views/assets/${untrustedRemoteNote.id}?field=poster&v=${untrustedRemoteNote.contentHash}`)).status, 404);
+  assert.equal((await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?field=constructor&v=${publicNote.contentHash}`)).status, 404);
   assert.equal((await fetch(`${baseUrl}/api/views/assets/${publicNote.id}?asset=${encodeURIComponent(publicPosterUrl)}&v=${publicNote.contentHash}`)).status, 404);
   assert.equal((await fetch(localUrl.replace(localNote.contentHash, "0".repeat(64)))).status, 409);
   assert.equal((await fetch(localUrl.replace(`&v=${localNote.contentHash}`, ""))).status, 400);

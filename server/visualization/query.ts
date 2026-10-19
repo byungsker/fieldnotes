@@ -11,7 +11,7 @@ import type {
 import { getDocument, getLatestChangeSequence } from "../storage/database.js";
 import type { DocumentRecord } from "../storage/types.js";
 import { parseFrontmatter } from "./frontmatter.js";
-import { extractLocalImageReferences } from "./assets.js";
+import { extractFrontmatterImageFields, extractLocalImageReferences } from "./assets.js";
 import { MAX_VIEW_TRASH_CANDIDATES } from "../view-query-limits.js";
 
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -236,6 +236,7 @@ export function queryVisualizationNotes(
     }
     const parsed = parseFrontmatter(document.body);
     const assetPaths = document.filePath ? extractLocalImageReferences(document.body, document.filePath) : [];
+    const imageFields = extractFrontmatterImageFields(parsed.values, document.filePath);
     const note: VisualizationNote = {
       id: document.id,
       title: document.title,
@@ -247,6 +248,7 @@ export function queryVisualizationNotes(
       excerpt: document.excerpt,
       frontmatter: parsed.values,
       ...(assetPaths.length ? { assetPaths } : {}),
+      ...(imageFields.length ? { imageFields } : {}),
       ...(parsed.error ? { frontmatterError: parsed.error } : {}),
     };
     if (query.where?.some((filter) => !matchesFilter(note, filter))) continue;

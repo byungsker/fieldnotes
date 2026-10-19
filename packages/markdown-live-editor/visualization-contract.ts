@@ -28,6 +28,8 @@ export type VisualizationNote = {
   frontmatter: Record<string, VisualizationValue>;
   /** Safe relative raster images explicitly embedded by this note, if any. */
   assetPaths?: string[];
+  /** 호스트 자산 정책을 통과한 이미지 frontmatter 필드. */
+  imageFields?: string[];
   frontmatterError?: string;
 };
 
