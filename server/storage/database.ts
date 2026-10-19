@@ -10,9 +10,9 @@ import { rebuildVaultIndex } from "./database/vault-index.js";
 
 export type { KnowledgeDatabase } from "./database/context.js";
 export { VersionConflictError, MissingFolderError, FolderNotEmptyError, FolderCycleError, DuplicateFolderNameError, MissingDocumentError } from "./database/errors.js";
-export { reconcileVault, startVaultMonitor } from "./database/vault-index.js";
+export { reconcileVault } from "./database/vault-index.js";
 export { listFolders, getFolder, createFolder, updateFolder, deleteFolder } from "./database/folders.js";
-export { listDocuments, getDocument, listTrashDocuments, listTrashedDocuments, trashDocument, restoreTrashedDocument, createDocument, updateDocument, deleteDocument, importDocuments, getBacklinks, exportDocuments } from "./database/documents.js";
+export { listDocuments, getDocument, readCurrentDocument, listTrashDocuments, listTrashedDocuments, trashDocument, restoreTrashedDocument, createDocument, updateDocument, deleteDocument, importDocuments, getBacklinks, exportDocuments } from "./database/documents.js";
 export type { ImportedDocument } from "./database/documents.js";
 export { getChangesAfter, getRecentChanges, getLatestChangeSequence } from "./database/changes.js";
 

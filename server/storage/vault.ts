@@ -61,6 +61,7 @@ import type {
   PendingOperation,
   VaultState,
   VaultSnapshot,
+  VaultDocumentReadResult,
   ScannedFolder,
   ScannedDocument,
 } from "./vault/types.js";
@@ -250,6 +251,59 @@ export class FileVault {
     return this.getDocumentMeta(id)?.relativePath;
   }
 
+  readDocument(id: string): VaultDocumentReadResult {
+    let meta = this.getDocumentMeta(id);
+    if (!meta) return { changes: [], fullReconcile: false };
+
+    let info: ReturnType<FileVault["fileInfo"]>;
+    try {
+      info = this.fileInfo(meta.relativePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const result = this.reconcile();
+      meta = this.getDocumentMeta(id);
+      if (!meta) return { changes: result.changes, fullReconcile: true };
+      info = this.fileInfo(meta.relativePath);
+      return {
+        document: this.documentRecord(meta, info.body),
+        changes: result.changes,
+        fullReconcile: true,
+      };
+    }
+
+    const changedContent = info.contentHash !== meta.contentHash;
+    const changedFileKey = info.key.device !== meta.device || info.key.inode !== meta.inode;
+    if (changedContent || changedFileKey) {
+      let updatedMeta = { ...meta, device: info.key.device, inode: info.key.inode };
+      const changes = changedContent ? [eventFor(
+        this.state,
+        "document",
+        id,
+        meta.title,
+        "updated",
+        meta.version + 1,
+      )] : [];
+      if (changedContent) {
+        updatedMeta = {
+          ...updatedMeta,
+          contentHash: info.contentHash,
+          updatedAt: changes[0]!.createdAt,
+          version: meta.version + 1,
+        };
+      }
+      const sequencedChanges = changes.map((change) => ({ ...change, seq: this.state.sequence + 1 }));
+      this.persist({
+        ...this.state,
+        sequence: sequencedChanges.at(-1)?.seq ?? this.state.sequence,
+        documents: this.state.documents.map((document) => document.id === id ? updatedMeta : document),
+        changes: [...this.state.changes, ...sequencedChanges],
+      });
+      meta = updatedMeta;
+      return { document: this.documentRecord(meta, info.body), changes: sequencedChanges, fullReconcile: false };
+    }
+    return { document: this.documentRecord(meta, info.body), changes: [], fullReconcile: false };
+  }
+
   readAsset(relativePath: string, maxBytes: number): Buffer {
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_VAULT_ASSET_BYTES) {
       throw new RangeError("The vault image size limit is invalid.");
@@ -379,7 +433,7 @@ export class FileVault {
   private fileInfo(relative: string): { body: string; contentHash: string; key: FileKey; byteLength: number } {
     const absolute = this.safeAbsolute(relative);
     if (statKind(absolute) !== "file") throw new VaultStorageError("Expected a regular Markdown file.", "vault_entry_invalid", 409);
-    const bytes = readRegularFileNoFollow(absolute);
+    const bytes = readRegularFileNoFollow(absolute, MAX_VAULT_FILE_BYTES, this.rootDir, MAX_VAULT_FILE_BYTES, "vault");
     if (bytes.byteLength > MAX_VAULT_FILE_BYTES) {
       throw new VaultStorageError(`Markdown file exceeds the ${MAX_VAULT_FILE_BYTES} byte vault limit.`, "vault_file_too_large", 409);
     }
@@ -911,6 +965,21 @@ export class FileVault {
 
   reconcile(): { changed: boolean; changes: ChangeRecord[] } {
     return this.scanAndReconcile();
+  }
+
+  private documentRecord(meta: VaultDocumentMeta, body: string): DocumentRecord {
+    return {
+      id: meta.id,
+      title: meta.title,
+      folderId: meta.folderId,
+      filePath: meta.relativePath,
+      contentHash: meta.contentHash,
+      createdAt: meta.createdAt,
+      updatedAt: meta.updatedAt,
+      version: meta.version,
+      body,
+      excerpt: excerptFromMarkdown(body),
+    };
   }
 
   snapshot(): VaultSnapshot {

@@ -10,7 +10,7 @@ import { MissingDocumentError, VersionConflictError } from "./errors.js";
 import { insertChange, transact } from "./changes.js";
 import { getFolder, requireFolder } from "./folders.js";
 import { mapDocument, mapSummary } from "./records.js";
-import { rebuildVaultIndex } from "./vault-index.js";
+import { applyVaultDocumentRead, rebuildVaultIndex } from "./vault-index.js";
 
 export function listDocuments(db: DatabaseSync, query = "", folderId?: string | null): DocumentSummary[] {
   const value = query.trim();
@@ -36,6 +36,13 @@ export function listDocuments(db: DatabaseSync, query = "", folderId?: string | 
 export function getDocument(db: DatabaseSync, id: string): DocumentRecord | undefined {
   const row = db.prepare("SELECT * FROM documents WHERE id = ?").get(id) as SqlRow | undefined;
   return row ? mapDocument(row) : undefined;
+}
+
+export function readCurrentDocument(database: KnowledgeDatabase, id: string): DocumentRecord | undefined {
+  if (!database.vault) return getDocument(database.db, id);
+  const result = database.vault.readDocument(id);
+  applyVaultDocumentRead(database, result);
+  return result.document;
 }
 
 export function listTrashDocuments(db: DatabaseSync, limit = 500, maxBytes = Number.MAX_SAFE_INTEGER): VisualizationTrashNote[] {

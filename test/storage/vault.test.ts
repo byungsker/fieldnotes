@@ -150,6 +150,11 @@ test("filesystem mode keeps Markdown authoritative across API, CLI, external edi
 
     const externalPath = path.join(vaultDir, "External draft.md");
     writeFileSync(externalPath, "Imported from a generic Markdown file.\n", "utf8");
+    const beforeSync = await json(live.baseUrl, "/api/documents?q=External%20draft");
+    assert.equal(beforeSync.body.documents.length, 0);
+    const synced = await json(live.baseUrl, "/api/vault/sync", { method: "POST" });
+    assert.equal(synced.response.status, 200);
+    assert.equal(synced.body.enabled, true);
     const externalList = await json(live.baseUrl, "/api/documents?q=External%20draft");
     const external = externalList.body.documents[0];
     assert.equal(external.title, "External draft");

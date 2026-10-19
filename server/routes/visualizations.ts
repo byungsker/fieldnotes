@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import type { Express } from "express";
 import {
   createDocument,
-  getDocument,
   listTrashedDocuments,
   MissingDocumentError,
   restoreTrashedDocument,
+  readCurrentDocument,
   trashDocument,
   updateDocument,
   VersionConflictError,
@@ -161,6 +161,7 @@ export function registerVisualizationRoutes(app: Express, database: KnowledgeDat
       database.db,
       query,
       query.includeTrash ? listTrashedDocuments(database, MAX_VIEW_TRASH_CANDIDATES, MAX_VIEW_TRASH_BYTES) : [],
+      (id) => readCurrentDocument(database, id),
     ));
   });
 
@@ -168,7 +169,7 @@ export function registerVisualizationRoutes(app: Express, database: KnowledgeDat
     const id = requestDocumentId(request);
     const expectedHash = validateHash(request.query.v);
     if (!expectedHash) throw new RequestValidationError("A note content hash is required for view assets.");
-    const current = getDocument(database.db, id);
+    const current = readCurrentDocument(database, id);
     if (!current) throw new MissingDocumentError();
     const currentHash = current.contentHash || createHash("sha256").update(current.body, "utf8").digest("hex");
     if (expectedHash !== currentHash) throw new VersionConflictError(current.version, currentHash);
@@ -219,7 +220,7 @@ export function registerVisualizationRoutes(app: Express, database: KnowledgeDat
       try { frontmatter = action.frontmatter ? serializeFrontmatter(action.frontmatter) : ""; }
       catch (error) { throw new RequestValidationError(error instanceof Error ? error.message : "Frontmatter is not supported."); }
       const body = frontmatter ? `---\n${frontmatter}\n---\n${action.body ?? ""}` : action.body ?? "";
-      const existing = getDocument(database.db, action.actionId);
+      const existing = readCurrentDocument(database, action.actionId);
       if (existing) {
         if (existing.title !== action.title || existing.body !== body || existing.folderId !== (action.folderId ?? null)) {
           throw new VersionConflictError(existing.version, existing.contentHash);
@@ -237,7 +238,7 @@ export function registerVisualizationRoutes(app: Express, database: KnowledgeDat
       return;
     }
 
-    const current = getDocument(database.db, action.id);
+    const current = readCurrentDocument(database, action.id);
     if (!current) throw new MissingDocumentError();
     const currentHash = current.contentHash || createHash("sha256").update(current.body, "utf8").digest("hex");
     if (current.version !== action.expectedVersion || currentHash !== action.expectedHash) {

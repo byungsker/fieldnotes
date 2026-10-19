@@ -75,6 +75,7 @@ type FolderResponse = { folder: FolderRecord };
 type RecentResponse = { changes: ChangeRecord[] };
 type ChangesResponse = { changes: ChangeRecord[]; highWatermark: number };
 type BacklinksResponse = { backlinks: DocumentSummary[] };
+type VaultSyncResponse = { enabled: boolean; changed: boolean; changes: number; sequence: number };
 
 const LAST_SEQUENCE_KEY = "fieldnotes:last-change-sequence";
 const THEME_KEY = "fieldnotes:theme";
@@ -317,6 +318,7 @@ export function WorkspacePage() {
   const [notice, setNotice] = useState("");
   const [listError, setListError] = useState("");
   const [importing, setImporting] = useState(false);
+  const [syncingVault, setSyncingVault] = useState(false);
   const [actionDialog, setActionDialog] = useState<ActionDialogConfig | null>(null);
   const [routeError, setRouteError] = useState("");
   const [documentLoadError, setDocumentLoadError] = useState<{ documentId: string; message: string } | null>(null);
@@ -1614,6 +1616,21 @@ export function WorkspacePage() {
     }
   };
 
+  const syncMarkdownFiles = async () => {
+    setSyncingVault(true);
+    try {
+      const result = await apiRequest<VaultSyncResponse>("/api/vault/sync", jsonRequest("POST", {}));
+      if (result.enabled) await Promise.all([refreshDocuments(), refreshFolders(), refreshRecent()]);
+      setNotice(result.enabled
+        ? result.changes > 0 ? `Synced ${result.changes} Markdown ${result.changes === 1 ? "change" : "changes"}.` : "The Markdown vault is up to date."
+        : "This library uses SQLite and has no Markdown vault to sync.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not sync Markdown files.");
+    } finally {
+      setSyncingVault(false);
+    }
+  };
+
   const exportNotes = async () => {
     try {
       const response = await fetch("/api/export");
@@ -1795,7 +1812,7 @@ export function WorkspacePage() {
   }, [backlinks, documents]);
 
   const connectionLabel = connection === "connected"
-    ? reconciliationError ? "Live stream connected; saved changes need reconciliation" : "Live sync on"
+    ? reconciliationError ? "Live updates need a refresh" : "Live updates on"
     : connection === "connecting" ? "Connecting" : "Reconnecting";
   const handleMarkdownSerializationSafetyChange = useCallback((safe: boolean) => {
     markdownSafeToSaveRef.current = safe;
@@ -2363,6 +2380,17 @@ export function WorkspacePage() {
           <ArrowDownToLine size="var(--ds-icon-md)" />
           <span className={surface === "drawer" ? "drawer-tool-label" : undefined}>
             {surface === "drawer" ? "Export backup" : "Export"}
+          </span>
+        </button>
+        <button
+          type="button"
+          className={"text-tool" + (surface === "drawer" ? " drawer-tool" : "")}
+          onClick={() => void syncMarkdownFiles()}
+          disabled={syncingVault}
+        >
+          {syncingVault ? <LoaderCircle className="spin" size="var(--ds-icon-md)" /> : <RefreshCw size="var(--ds-icon-md)" />}
+          <span className={surface === "drawer" ? "drawer-tool-label" : undefined}>
+            {surface === "drawer" ? "Sync Markdown files" : "Sync files"}
           </span>
         </button>
         <input

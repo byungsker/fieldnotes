@@ -1,7 +1,6 @@
-import { watch, type FSWatcher } from "node:fs";
-import path from "node:path";
 import type { KnowledgeDatabase } from "./context.js";
 import { publishSafely } from "./changes.js";
+import type { VaultDocumentReadResult } from "../vault/types.js";
 
 export function rebuildVaultIndex(database: KnowledgeDatabase): void {
   if (!database.vault) return;
@@ -41,46 +40,52 @@ export function rebuildVaultIndex(database: KnowledgeDatabase): void {
   }
 }
 
-export function reconcileVault(database: KnowledgeDatabase): void {
-  if (!database.vault) return;
+export function reconcileVault(database: KnowledgeDatabase): { changed: boolean; changes: number; sequence: number } {
+  if (!database.vault) return { changed: false, changes: 0, sequence: 0 };
   const result = database.vault.reconcile();
   if (result.changed || result.changes.length > 0 || !database.vaultIndexReady || database.vaultIndexedSequence !== database.vault.sequence) {
     rebuildVaultIndex(database);
   }
+  return { changed: result.changed, changes: result.changes.length, sequence: database.vault.sequence };
 }
 
-export function startVaultMonitor(database: KnowledgeDatabase): () => void {
-  if (!database.vault) return () => {};
-  let busy = false;
-  let debounce: NodeJS.Timeout | undefined;
-  const reconcile = () => {
-    if (busy) return;
-    busy = true;
-    try {
-      reconcileVault(database);
-    } catch (error) {
-      console.error("Vault reconciliation failed; files were left untouched:", error);
-    } finally {
-      busy = false;
-    }
-  };
-  let watcher: FSWatcher | undefined;
-  try {
-    watcher = watch(database.vault.rootDir, { recursive: true }, (_event, filename) => {
-      const name = filename?.toString() ?? "";
-      if (name === ".fieldnotes" || name.startsWith(`.fieldnotes${path.sep}`) || name.includes(".fieldnotes-tmp-")) return;
-      if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(reconcile, 100);
-      debounce.unref();
-    });
-  } catch {
-    // The periodic full scan remains the correctness path when recursive watching is unavailable.
+export function applyVaultDocumentRead(database: KnowledgeDatabase, result: VaultDocumentReadResult): void {
+  if (!database.vault) return;
+  if (result.fullReconcile || !database.vaultIndexReady) {
+    rebuildVaultIndex(database);
+    return;
   }
-  const timer = setInterval(reconcile, 2_000);
-  timer.unref();
-  return () => {
-    if (timer) clearInterval(timer);
-    if (debounce) clearTimeout(debounce);
-    watcher?.close();
-  };
+  if (!result.changes.length) return;
+
+  const { db } = database;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const change of result.changes) {
+      if (change.entityType !== "document" || !change.documentId) continue;
+      if (result.document?.id === change.documentId) {
+        const document = result.document;
+        db.prepare(`
+          INSERT INTO documents (id, title, body, created_at, updated_at, version, folder_id, file_path, content_hash)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET title = excluded.title, body = excluded.body,
+            created_at = excluded.created_at, updated_at = excluded.updated_at,
+            version = excluded.version, folder_id = excluded.folder_id,
+            file_path = excluded.file_path, content_hash = excluded.content_hash
+        `).run(document.id, document.title, document.body, document.createdAt, document.updatedAt, document.version, document.folderId, document.filePath ?? "", document.contentHash ?? "");
+      } else {
+        db.prepare("DELETE FROM documents WHERE id = ?").run(change.documentId);
+      }
+      db.prepare(`
+        INSERT INTO changes (seq, document_id, entity_type, title, operation, version, created_at)
+        VALUES (?, ?, 'document', ?, ?, ?, ?)
+      `).run(change.seq, change.documentId, change.title, change.operation, change.version, change.createdAt);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    database.vaultIndexReady = false;
+    throw error;
+  }
+  database.vaultIndexedSequence = database.vault.sequence;
+  for (const change of result.changes) publishSafely(database.changes, change);
 }

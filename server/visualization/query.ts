@@ -9,6 +9,7 @@ import type {
   VisualizationValue,
 } from "../../shared/visualization.js";
 import { getDocument, getLatestChangeSequence } from "../storage/database.js";
+import type { DocumentRecord } from "../storage/types.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { extractLocalImageReferences } from "./assets.js";
 import { MAX_VIEW_TRASH_CANDIDATES } from "../view-query-limits.js";
@@ -199,6 +200,7 @@ export function queryVisualizationNotes(
   db: DatabaseSync,
   query: VisualizationQuery,
   trashNotes: VisualizationTrashNote[] = [],
+  readDocument: (id: string) => DocumentRecord | undefined = (id) => getDocument(db, id),
 ): VisualizationQueryResponse {
   const clauses: string[] = [];
   const parameters: (string | number)[] = [];
@@ -226,7 +228,7 @@ export function queryVisualizationNotes(
   let scannedBytes = 0;
   const notes: VisualizationNote[] = [];
   for (const candidate of candidates) {
-    const document = getDocument(db, candidate.id);
+    const document = readDocument(candidate.id);
     if (!document) continue;
     scannedBytes += Buffer.byteLength(document.body, "utf8");
     if (scannedBytes > MAX_SCAN_BYTES) {

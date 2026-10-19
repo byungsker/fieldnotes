@@ -4,10 +4,10 @@ import {
   deleteDocument,
   exportDocuments,
   getBacklinks,
-  getDocument,
   importDocuments,
   listDocuments,
   listFolders,
+  readCurrentDocument,
   updateDocument,
   type ImportedDocument,
   type KnowledgeDatabase,
@@ -48,7 +48,7 @@ function validateImport(value: unknown): ImportedDocument[] {
 
 function currentDocument(database: KnowledgeDatabase, request: Request, response: Response): boolean {
   const id = requestDocumentId(request);
-  const document = getDocument(database.db, id);
+  const document = readCurrentDocument(database, id);
   if (!document) {
     sendError(response, 404, "not_found", "Note not found.");
     return false;

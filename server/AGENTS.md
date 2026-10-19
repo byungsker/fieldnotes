@@ -6,12 +6,12 @@
 
 | 파일 | 소유하는 동작 | 함께 확인할 경계 |
 |---|---|---|
-| `index.ts` | 바인딩, 프로세스 lock, DB 시작, 종료 | `api.ts`의 drain과 vault monitor |
+| `index.ts` | 바인딩, 프로세스 lock, DB 시작, 종료 | `api.ts`의 drain |
 | `api.ts`의 `createApp` | 라우트 조합, 인증·CSP, SSE, drain | 미들웨어 순서와 인스턴스별 종료 상태 |
 | `routes/` | 문서·폴더·설정·북마크·시각화 API | 명시적으로 전달한 저장소·어댑터와 요청 계약 |
 | `http/validation.ts`, `http/errors.ts` | 공통 요청 검증·오류 응답 | 동일한 오류 클래스와 기존 상태·메시지 |
 | `storage/database.ts` | 저장소 열기·닫기와 공개 API 조합 | 데이터·vault 경로 검증과 저장 모드 선택 |
-| `storage/database/` | SQLite 스키마·행 변환·조회·트랜잭션, vault 인덱스·monitor | FileVault 성공 여부와 sequence, commit 후 변경 발행 |
+| `storage/database/` | SQLite 스키마·행 변환·조회·트랜잭션, vault 인덱스 | FileVault 성공 여부와 sequence, commit 후 변경 발행 |
 | `storage/vault.ts`의 `FileVault` | pending 작업, 복구, reconcile, 문서·폴더 변경 | private state와 파일·metadata 확정 순서 |
 | `storage/vault/` | 파일 접근·이름 규칙·manifest 검증·legacy 이관 | nofollow·fsync·hash 검사와 staging cutover |
 
@@ -19,7 +19,7 @@
 
 - `index.ts`는 DB를 열기 전에 `server.lock`을 배타적 생성한다. 시작 경로를 바꿀 때 lock 획득과 DB 초기화 실패 시 정리를 함께 확인한다.
 - 기존 lock은 PID가 유효하고 `process.kill(pid, 0)`이 `ESRCH`를 반환한 경우에만 stale로 처리한다. JSON 손상, 잘못된 PID, 권한 오류를 죽은 프로세스로 간주하지 않는다.
-- 정상 종료는 vault monitor 중지 → `server.close()`로 신규 연결 중지 → `beginShutdown()` 완료 대기 → 남은 연결 종료 → HTTP 서버 종료 대기 → DB 닫기 → 자기 PID의 lock 제거 순서를 유지한다.
+- 정상 종료는 `server.close()`로 신규 연결 중지 → `beginShutdown()` 완료 대기 → 남은 연결 종료 → HTTP 서버 종료 대기 → DB 닫기 → 자기 PID의 lock 제거 순서를 유지한다.
 - `beginShutdown()`은 새 요청에 503을 반환하고 SSE를 종료한 뒤 추적 중인 응답의 완료를 기다린다. SSE 종료 알림과 `finish`/`close` 정리를 함께 확인한다.
 - 중복 signal은 하나의 종료 Promise를 공유한다. drain 누락이나 실패를 강제 성공으로 바꾸거나 DB를 먼저 닫지 않는다.
 - 종료 시 lock 소유 PID가 바뀌었거나 내용을 검증할 수 없으면 남겨 둔다. 복구를 위해 살아 있는 프로세스의 lock을 수동 삭제하지 않는다.
@@ -43,7 +43,8 @@
 - 새 파일은 배타적 임시 파일 생성과 목적지 충돌 방지를, 교체는 임시 파일 fsync 후 현재 hash 재확인과 rename을 유지한다. 디렉터리 동기화도 함께 확인한다.
 - 이름 변경 중 원래 파일이 외부에서 수정되면 두 파일을 보존하는 충돌 경로를 유지한다. pending 복구에서 어느 파일이 최신인지 추측해 삭제하지 않는다.
 - 경로 변경은 `safeAbsolute`, 일반 파일 여부, symlink, 대소문자·Unicode 동등 이름 충돌 검사를 따라간다. 단순 문자열 prefix 검사로 대체하지 않는다.
-- `reconcileVault()`는 외부 변경을 반영한 후 인덱스 readiness와 sequence를 확인한다. watcher 알림만 믿지 말고 주기적 전체 scan 경로를 유지한다.
+- 일반 API 요청에서 전체 vault scan을 실행하지 않는다. 이미 manifest에 등록된 문서 read는 해당 Markdown 파일만 읽고 index·version·change sequence를 갱신한다. 신규 파일·경로 이동 등 전체 탐색이 필요한 변경은 명시적 `POST /api/vault/sync`와 서버 시작 시 반영한다.
+- `reconcileVault()`는 명시적 전체 sync 뒤 인덱스 readiness와 sequence를 확인한다. background watcher나 주기 scan을 추가하지 않는다.
 - `rebuildVaultIndex()`의 트랜잭션이 성공한 뒤 readiness·sequence를 갱신하고 변경 이벤트를 발행한다. rollback 후 인덱스를 준비 완료로 표시하지 않는다.
 - migration 수정은 staging 파일의 Markdown roundtrip 검증과 hash 기록, manifest 생성, 최종 rename 순서를 확인한다. 기존 목적지나 manifest를 덮어쓰지 않는 실패 경로도 보존한다.
 

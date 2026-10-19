@@ -2,8 +2,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import express, { type Express, type Response } from "express";
-import { getChangesAfter, getLatestChangeSequence, getRecentChanges, reconcileVault, type KnowledgeDatabase } from "./storage/database.js";
-import { VaultStorageError } from "./storage/vault.js";
+import { getChangesAfter, getLatestChangeSequence, getRecentChanges, type KnowledgeDatabase } from "./storage/database.js";
 import { VaultSettingsService } from "./storage/vault-settings.js";
 import type { ChangeRecord } from "./storage/types.js";
 import { errors, sendError } from "./http/errors.js";
@@ -11,6 +10,7 @@ import { RequestValidationError } from "./http/validation.js";
 import { registerDocumentRoutes } from "./routes/documents.js";
 import { registerFolderRoutes } from "./routes/folders.js";
 import { registerVaultSettingsRoutes } from "./routes/vault-settings.js";
+import { registerVaultSyncRoutes } from "./routes/vault-sync.js";
 import { registerBookmarkRoutes } from "./routes/bookmarks.js";
 import { registerVisualizationRoutes } from "./routes/visualizations.js";
 
@@ -154,26 +154,6 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
 
   app.use(express.json({ limit: "8mb", strict: true }));
 
-  app.use("/api", (request, response, next) => {
-    // View queries read from the reconciled index. The filesystem watcher updates
-    // that index when Markdown changes, so rewalking the entire vault on every
-    // render would defeat the query route's candidate and byte limits.
-    if (request.method === "POST" && request.path === "/views/query") {
-      next();
-      return;
-    }
-    try {
-      reconcileVault(database);
-      next();
-    } catch (error) {
-      if (error instanceof VaultStorageError) {
-        sendError(response, error.status, error.code, error.message);
-        return;
-      }
-      next(error);
-    }
-  });
-
   app.get("/api/health", (_request, response) => {
     response.json({
       ok: true,
@@ -183,6 +163,8 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
   });
 
   registerVaultSettingsRoutes(app, database, vaultSettings);
+
+  registerVaultSyncRoutes(app, database);
 
   registerBookmarkRoutes(app);
 

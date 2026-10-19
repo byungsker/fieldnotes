@@ -137,6 +137,7 @@ export function readRegularFileNoFollow(
   maxBytes = MAX_VAULT_FILE_BYTES,
   allowedRoot?: string,
   maxAllowedBytes = MAX_VAULT_FILE_BYTES,
+  limitError: "view" | "vault" = maxBytes < maxAllowedBytes || maxAllowedBytes !== MAX_VAULT_FILE_BYTES ? "view" : "vault",
 ): Buffer {
   let descriptor: number | undefined;
   try {
@@ -149,13 +150,13 @@ export function readRegularFileNoFollow(
     if (!stat.isFile()) throw new VaultStorageError("Expected a regular file; symbolic links are not followed.", "vault_symlink", 409);
     const effectiveMaxBytes = Math.min(maxBytes, maxAllowedBytes);
     if (stat.size > BigInt(effectiveMaxBytes)) {
-      if (allowedRoot || maxBytes < maxAllowedBytes) throw new ViewQueryLimitError(VIEW_TRASH_LIMIT_MESSAGE);
+      if (limitError === "view") throw new ViewQueryLimitError(VIEW_TRASH_LIMIT_MESSAGE);
       throw new VaultStorageError(`Markdown file exceeds the ${MAX_VAULT_FILE_BYTES} byte vault limit.`, "vault_file_too_large", 409);
     }
     if (allowedRoot) assertOpenedPathWithinRoot(absolutePath, allowedRoot, stat);
     const result = readDescriptorBounded(descriptor, effectiveMaxBytes, readSync, maxAllowedBytes);
     if (result.exceededLimit) {
-      if (allowedRoot || maxBytes < maxAllowedBytes) throw new ViewQueryLimitError(VIEW_TRASH_LIMIT_MESSAGE);
+      if (limitError === "view") throw new ViewQueryLimitError(VIEW_TRASH_LIMIT_MESSAGE);
       throw new VaultStorageError(`Markdown file exceeds the ${MAX_VAULT_FILE_BYTES} byte vault limit.`, "vault_file_too_large", 409);
     }
     return result.bytes;

@@ -8,7 +8,7 @@
 
 결과에는 ID·제목·상대 경로·시간·version·content hash·150자 excerpt·frontmatter와 선택적 `frontmatterError`가 있다. 전체 Markdown 본문과 절대 경로는 전달하지 않는다. 파일 저장소에서는 문서에 명시적으로 삽입한 JPEG·PNG·WebP·GIF·AVIF의 정규화된 상대 경로를 최대 20개 제공한다. 경로는 참조이며 파일 바이트가 아니다. `path` 필터는 본문을 읽기 전에 경로 메타데이터에서 적용하고, 나머지 필터는 최대 1,000개 후보·20,000,000 UTF-8 바이트 제한 안에서 검사한다. JSON 응답은 1.5 MB로 제한한다. 초과하면 `413`이므로 폴더나 경로 조건으로 query 범위를 줄여야 한다.
 
-`includeTrash`는 최근 휴지통 항목 최대 100개와 최대 20,000,000 UTF-8 바이트에서 ID·제목·폴더 ID·삭제 시간·version·excerpt를 읽는다. 초과 조회는 `413`이다. 조회는 동기화된 인덱스를 사용하며 vault monitor가 파일 변경을 반영한다. 매 렌더마다 vault 전체를 탐색하지 않는다. YAML은 안전한 scalar·list·mapping 부분집합으로 읽으며 태그·생성자·표현식을 평가하지 않는다. 해석 실패는 `frontmatterError`로 보고하고 원문을 재작성하지 않는다.
+`includeTrash`는 최근 휴지통 항목 최대 100개와 최대 20,000,000 UTF-8 바이트에서 ID·제목·폴더 ID·삭제 시간·version·excerpt를 읽는다. 초과 조회는 `413`이다. 일반 조회는 index에서 후보를 고른 뒤 해당 Markdown 파일만 직접 읽으며, 전체 Vault scan은 매 렌더마다 실행하지 않는다. 외부 신규 파일과 경로 변경은 사용자가 `POST /api/vault/sync`를 실행할 때 index에 반영된다. YAML은 안전한 scalar·list·mapping 부분집합으로 읽으며 태그·생성자·표현식을 평가하지 않는다. 해석 실패는 `frontmatterError`로 보고하고 원문을 재작성하지 않는다.
 
 ## 실행 경계
 
