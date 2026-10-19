@@ -8,6 +8,7 @@ All routes are under the same origin as the web app. Requests and responses are 
 | --- | --- | --- |
 | `GET` | `/api/health` | Health and database schema version |
 | `GET` | `/api/vault/status` | Active storage mode, counts, and durable vault sequence |
+| `POST` | `/api/vault/sync` | 외부에서 추가·이름 변경·삭제한 Markdown 파일을 명시적으로 다시 검색 |
 | `GET` | `/api/vault/settings` | Current absolute server vault path and any saved next-restart selection |
 | `GET` | `/api/vault/settings/directories?relativePath=...` | Browse real, non-symlink subdirectories under the server Mac's `Documents` folder |
 | `POST` | `/api/vault/settings/verify` | Verify `{relativePath}` is an empty private folder or valid Fieldnotes vault |
@@ -55,7 +56,9 @@ Document and folder updates/deletes require the exact current version. Vault-mod
 
 For a client-generated `id`, repeating a create request after an uncertain response returns the already-created document without creating another change event. The server rejects reusing an ID that was previously deleted. Updates and deletes remain guarded by their expected version and, in vault mode, the latest content hash.
 
-In SQLite mode, mutations and change-log entries share a SQLite transaction. In filesystem mode, the `.md` write and private `.fieldnotes` operation journal are flushed before success. The SQLite file `vault-index.sqlite` is a rebuildable search index. API requests reconcile the vault before reading or writing, and an OS file watcher plus periodic scan notices edits made in Finder or another Markdown editor. Markdown responses then include a vault-relative `filePath` and SHA-256 `contentHash`; SQLite-mode responses omit them.
+SQLite mode에서는 변경과 변경 기록이 하나의 SQLite transaction으로 저장된다. Filesystem mode에서는 `.md` 파일과 private `.fieldnotes` operation journal을 먼저 기록하고, SQLite `vault-index.sqlite`는 검색용으로 재생성 가능한 index로 유지한다. 일반 API 요청은 전체 vault scan을 하지 않는다. 문서 상세와 custom view query는 index에서 후보 ID를 고른 뒤 해당 Markdown 파일만 읽고, 변경된 파일의 hash·version·change sequence를 갱신한다. 등록 경로가 사라진 문서의 상세 read는 이름 변경·삭제를 정리하기 위해 한 번 전체 reconcile을 실행할 수 있다. 새 파일과 목록 수준의 경로 변경은 `POST /api/vault/sync`로 반영한다. 백그라운드 watcher와 주기 scan은 실행하지 않는다. Filesystem mode의 Markdown 응답에는 vault 기준 상대 `filePath`와 SHA-256 `contentHash`가 포함되고 SQLite mode에서는 생략된다.
+
+외부 편집으로 발견된 변경의 SSE 알림은 해당 문서를 읽거나 `POST /api/vault/sync`를 실행할 때 발생한다. 앱의 API를 통해 저장한 변경은 저장 직후 기존 SSE 흐름으로 전달된다.
 
 Each SSE `change` event has a monotonically increasing `id` and JSON data:
 

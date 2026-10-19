@@ -40,9 +40,9 @@ If verification fails, the script exits before changing `.env`; the original SQL
 
 ## Editing and synchronization
 
-The app writes Markdown atomically and durably before returning a successful save. It updates the manifest and change sequence, then refreshes the SQLite index. A filesystem watcher accelerates external-change detection; a periodic full scan and reconciliation on API requests provide recovery if watcher events are missed. Clients receive saved updates through SSE and can request changes after their last sequence.
+앱은 성공 응답 전에 Markdown을 atomic하게 기록하고 manifest와 change sequence를 갱신한 뒤 SQLite index를 업데이트한다. 문서 상세와 custom view query는 manifest에 등록된 문서 중 필요한 파일만 직접 읽는다. 일반 API 요청마다 전체 Vault를 훑지 않으며 background watcher와 주기 scan도 실행하지 않는다. 등록된 파일 경로가 사라진 상세 read는 이름 변경·삭제를 정리할 때 한 번 전체 reconcile을 할 수 있다. 외부에서 새로 추가·이름 변경·삭제한 파일을 폴더 목록과 검색에 반영하려면 `POST /api/vault/sync`를 명시적으로 호출한다. 서버 시작 시에도 한 번 전체 Vault를 확인하고 index를 재구성한다.
 
-Edit the `.md` files with a Markdown editor or Finder-aware editor while the app runs. A changed file increments its version and adds a change event. A UI or CLI save based on an older version or hash returns HTTP 409; the UI preserves the unsaved draft until the user loads or merges the latest version. Do not edit `.fieldnotes/state.json` by hand. Avoid simultaneous edits to the same file from an editor that writes in place while Fieldnotes saves; close the app or let one writer finish first.
+이미 등록된 문서를 Markdown editor나 Finder에서 수정하면 다음 문서 상세 또는 view query 요청에서 해당 파일을 읽고 hash, version, change event를 갱신한다. 전체 sync 전에는 새 파일이나 경로가 바뀐 항목이 목록에 나타나지 않을 수 있다. 오래된 version/hash를 사용하는 UI·CLI 저장은 HTTP 409로 거절되며, UI는 사용자가 최신 내용을 불러오거나 병합할 때까지 초안을 보존한다. `.fieldnotes/state.json`은 직접 수정하지 않는다. Fieldnotes가 저장하는 도중 같은 파일을 다른 editor가 동시에 덮어쓰지 않도록 한쪽 작업이 끝날 때까지 기다린다.
 
 Titles may contain punctuation or path-like text; Fieldnotes encodes those characters into a single safe filename component. Folder names reject path separators and reserved names. Filesystem names are normalized for collision checks, including case and Unicode equivalents.
 

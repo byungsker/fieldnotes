@@ -59,6 +59,12 @@ export type VaultSnapshot = {
   changes: ChangeRecord[];
 };
 
+export type VaultDocumentReadResult = {
+  document?: DocumentRecord;
+  changes: ChangeRecord[];
+  fullReconcile: boolean;
+};
+
 export type LegacyDocument = {
   id: string;
   title: string;

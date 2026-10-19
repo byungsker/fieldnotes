@@ -293,11 +293,19 @@ test("filesystem view queries use the bounded index without triggering a full va
   const created = createDocument(fsDatabase, "Indexed fixture", "Cached synthetic content.");
   const vault = fsDatabase.vault;
   assert.ok(vault);
+  writeFileSync(path.join(vaultDirectory, created.filePath ?? ""), "---\nstatus: direct\n---\nFetched from Markdown.\n", "utf8");
   let reconcileCount = 0;
   const reconcile = vault.reconcile.bind(vault);
+  let directReadCount = 0;
+  const readDocument = vault.readDocument.bind(vault);
   vault.reconcile = () => {
     reconcileCount += 1;
     return reconcile();
+  };
+  vault.readDocument = (id) => {
+    directReadCount += 1;
+    assert.equal(id, created.id);
+    return readDocument(id);
   };
   const queryServer = createApp(fsDatabase).listen(0, "127.0.0.1");
   await new Promise<void>((resolve, reject) => {
@@ -310,16 +318,24 @@ test("filesystem view queries use the bounded index without triggering a full va
     const response = await fetch(`http://127.0.0.1:${address.port}/api/views/query`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: { search: "Indexed fixture" } }),
+      body: JSON.stringify({ query: { search: "Fetched from Markdown" } }),
       signal: AbortSignal.timeout(5_000),
     });
     assert.equal(response.status, 200);
-    const result = await response.json() as { notes: Array<{ id: string }> };
-    assert.ok(result.notes.some((note) => note.id === created.id));
+    const result = await response.json() as { notes: Array<{ id: string; version: number; frontmatter: Record<string, unknown> }> };
+    const note = result.notes.find((entry) => entry.id === created.id);
+    assert.ok(note, "view query should return the current Markdown file body, not the cached SQLite body");
+    assert.equal(note.version, created.version + 1);
+    assert.equal(note.frontmatter.status, "direct");
     assert.equal(reconcileCount, 0);
+    assert.equal(directReadCount, 1);
 
     const health = await fetch(`http://127.0.0.1:${address.port}/api/health`);
     assert.equal(health.status, 200);
+    assert.equal(reconcileCount, 0);
+
+    const sync = await fetch(`http://127.0.0.1:${address.port}/api/vault/sync`, { method: "POST" });
+    assert.equal(sync.status, 200);
     assert.equal(reconcileCount, 1);
   } finally {
     await new Promise<void>((resolve, reject) => queryServer.close((error) => error ? reject(error) : resolve()));

@@ -2,7 +2,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, w
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { closeDatabase, openDatabase, startVaultMonitor } from "./storage/database.js";
+import { closeDatabase, openDatabase } from "./storage/database.js";
 import { createApp } from "./api.js";
 import { resolveSavedVaultSelection } from "./storage/vault-settings.js";
 
@@ -55,7 +55,6 @@ try {
 }
 const staticDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../client");
 const app = createApp(database, isDevelopment ? undefined : staticDirectory);
-const stopVaultMonitor = startVaultMonitor(database);
 const server = app.listen(port, host, () => {
   const address = server.address();
   const listeningPort = address && typeof address !== "string" ? address.port : port;
@@ -64,7 +63,6 @@ const server = app.listen(port, host, () => {
 });
 
 server.on("error", (error) => {
-  stopVaultMonitor();
   closeDatabase(database);
   if (existsSync(lockPath)) unlinkSync(lockPath);
   console.error("Could not start Fieldnotes:", error);
@@ -74,7 +72,6 @@ server.on("error", (error) => {
 let shutdownPromise: Promise<void> | undefined;
 function shutdown(): void {
   if (shutdownPromise) return;
-  stopVaultMonitor();
   const serverClosed = new Promise<void>((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve());
   });
