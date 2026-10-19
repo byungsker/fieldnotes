@@ -225,6 +225,67 @@ test("host returns a realistic 44-note dashboard fixture within query-result lim
   assert.ok(result.notes.every((note) => !Object.hasOwn(note, "body")), "query results stay metadata-only");
 });
 
+test("article dashboard query returns all 422 dated article notes within the generic view cap", async () => {
+  const insert = database.db.prepare(`
+    INSERT INTO documents (id, title, body, created_at, updated_at, version, file_path)
+    VALUES (?, ?, ?, ?, ?, 1, ?)
+  `);
+  const timestamp = "2026-10-19T00:00:00.000Z";
+  const syntheticIds: string[] = [];
+  try {
+    database.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (let index = 0; index < 422; index += 1) {
+        const id = randomUUID();
+        const day = String((index % 28) + 1).padStart(2, "0");
+        const body = [
+          "---",
+          `date: 2026-10-${day}`,
+          `read: ${index % 2 === 0}`,
+          "category: engineering",
+          "tags: [fieldnotes, dashboard]",
+          `summary: Synthetic article summary ${index + 1}`,
+          "source: https://example.com/article",
+          "---",
+          `Synthetic article body ${index + 1}.`,
+        ].join("\n");
+        insert.run(id, `Synthetic article ${index + 1}`, body, timestamp, timestamp, `article/2026-Q3/fixture-${index + 1}.md`);
+        syntheticIds.push(id);
+      }
+      const dashboardId = randomUUID();
+      insert.run(dashboardId, "Synthetic article dashboard", "---\ntype: dashboard\n---\nNo date, so it is excluded.", timestamp, timestamp, "article/dashboard.md");
+      syntheticIds.push(dashboardId);
+      database.db.exec("COMMIT");
+    } catch (error) {
+      database.db.exec("ROLLBACK");
+      throw error;
+    }
+
+    const response = await fetch(`${baseUrl}/api/views/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: {
+        where: [
+          { field: "path", operator: "contains", value: "article/" },
+          { field: "frontmatter.date", operator: "exists" },
+        ],
+        sort: { field: "frontmatter.date", direction: "desc" },
+        limit: 500,
+      } }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json() as { notes: Array<{ path: string; frontmatter: { date?: string } }> };
+    assert.equal(result.notes.length, 422, "the query limit must not truncate the article dashboard at 200 notes");
+    assert.ok(result.notes.every((note) => note.path.startsWith("article/") && note.frontmatter.date));
+  } finally {
+    database.db.exec("BEGIN IMMEDIATE");
+    const remove = database.db.prepare("DELETE FROM documents WHERE id = ?");
+    for (const id of syntheticIds) remove.run(id);
+    database.db.exec("COMMIT");
+  }
+});
+
 test("path filters narrow large vaults before applying the scan limit", async () => {
   const insert = database.db.prepare(`
     INSERT INTO documents (id, title, body, created_at, updated_at, version, file_path)
