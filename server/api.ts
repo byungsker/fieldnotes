@@ -110,7 +110,7 @@ export function createApp(database: KnowledgeDatabase, staticDirectory?: string,
       response.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     }
     response.setHeader("Content-Security-Policy", visualizationRunner
-      ? "default-src 'none'; script-src 'sha256-atIptvn92Og+7m39auaWhoYmYl0SOFwVLPEsid+egfg=' blob:; script-src-elem 'sha256-atIptvn92Og+7m39auaWhoYmYl0SOFwVLPEsid+egfg=' blob:; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'none'; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'; frame-ancestors 'self'; worker-src blob:"
+      ? "default-src 'none'; script-src 'sha256-0nBpzAsjKLJHpsldaEjC4un7Xz/tKEXOUXnIMm05BwQ=' blob:; script-src-elem 'sha256-0nBpzAsjKLJHpsldaEjC4un7Xz/tKEXOUXnIMm05BwQ=' blob:; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'none'; media-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'none'; frame-ancestors 'self'; worker-src blob:"
       : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
 
     if (allowedTailscaleLogin) {

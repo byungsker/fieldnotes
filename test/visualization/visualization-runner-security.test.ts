@@ -340,7 +340,7 @@ test("sandbox images accept only explicit note-scoped local assets regardless of
 
 test("generated Worker rejects excessive HTML and CSS before posting output", () => {
   for (const renderSource of [
-    'return { html: "x".repeat(48_001), css: "" };',
+    'return { html: "x".repeat(96_001), css: "" };',
     'return { html: "<p>ok</p>", css: "x".repeat(12_001) };',
   ]) {
     const { context } = workerContext(renderSource);
@@ -385,7 +385,7 @@ test("synthetic custom-view examples follow the render-function-body contract an
   }
 });
 
-test("article dashboard renders 422 queried notes as bounded 40-note pages", () => {
+test("article dashboard with high-cardinality filters stays within bounded runner output", () => {
   const markdown = readFileSync(path.join(projectRoot, "test/fixtures/native-visualizations/articles-dashboard.md"), "utf8");
   const block = [...markdown.matchAll(/```fieldnotes-view\n[\s\S]*?\n```/gu)]
     .map((match) => match[0] ?? "")
@@ -394,7 +394,8 @@ test("article dashboard renders 422 queried notes as bounded 40-note pages", () 
   const config = parseFieldnotesViewConfig(block);
   assert.equal(config.query?.limit, 500);
   assert.ok(config.js);
-  const notes = Array.from({ length: 422 }, (_, index) => ({
+  const tags = Array.from({ length: 1_038 }, (_, index) => `tag-${String(index).padStart(4, "0")}`);
+  const notes = Array.from({ length: 406 }, (_, index) => ({
     id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
     title: `Synthetic article ${index + 1}`,
     path: `article/2026-Q3/fixture-${index + 1}.md`,
@@ -406,25 +407,33 @@ test("article dashboard renders 422 queried notes as bounded 40-note pages", () 
     frontmatter: {
       date: `2026-10-${String((index % 28) + 1).padStart(2, "0")}`,
       read: index % 2 === 0,
-      category: "engineering",
-      tags: ["fieldnotes", "dashboard"],
+      category: `category-${String(index % 86).padStart(3, "0")}`,
+      tags: [tags[(index * 3) % tags.length], tags[(index * 3 + 1) % tags.length], tags[(index * 3 + 2) % tags.length]],
       summary: `Synthetic article summary ${index + 1}`,
-      source: "https://example.com/article",
+      source: `https://source${String(index % 124).padStart(3, "0")}.example/article`,
     },
   }));
+  assert.equal(new Set(notes.flatMap((note) => note.frontmatter.tags)).size, 1_038);
+  assert.equal(new Set(notes.map((note) => note.frontmatter.category)).size, 86);
+  assert.equal(new Set(notes.map((note) => note.frontmatter.source)).size, 124);
   const input = { requestId: 501, notes, trash: [], state: {} };
   const serialized = JSON.stringify(input);
-  assert.ok(serialized.length < 1_000_000, "the full 422-note metadata fits the unchanged 1 MB runner input cap");
+  assert.ok(serialized.length < 1_000_000, "the full 406-note metadata fits the unchanged 1 MB runner input cap");
 
   const firstPage = workerContext(config.js);
   vm.runInContext(`self.onmessage({ data: ${serialized} });`, firstPage.context);
   const firstMessage = (firstPage.context.__messages as Array<{ type: string; html?: string; css?: string; message?: string }>)[0];
   assert.equal(firstMessage?.type, "result", firstMessage?.message);
-  assert.match(firstMessage?.html ?? "", /총 422편/u);
+  assert.match(firstMessage?.html ?? "", /총 406편/u);
   assert.match(firstMessage?.html ?? "", /1 \/ 11/u);
   assert.equal(firstMessage?.html?.match(/<tr>/gu)?.length, 41, "the first page renders 40 notes plus its table header");
-  assert.ok((firstMessage?.html?.length ?? 0) < 48_000, "the first page fits the HTML output cap");
+  assert.ok((firstMessage?.html?.length ?? 0) <= 96_000, "the high-cardinality filter options fit the HTML output cap");
   const sanitizer = sanitizerContext();
+  sanitizer.__fixtureHtml = firstMessage?.html ?? "";
+  const sanitizedMarkup = vm.runInContext("sanitizeMarkup(__fixtureHtml)", sanitizer) as SyntheticDomNode;
+  const elementCount = countSyntheticDomElements(sanitizedMarkup);
+  assert.ok(elementCount > 1_000, "the synthetic fixture exercises the former DOM element cap");
+  assert.ok(elementCount <= 2_048, "the sanitized dashboard fits the bounded DOM element cap");
   sanitizer.__fixtureCss = firstMessage?.css ?? "";
   const sanitizedCss = vm.runInContext("sanitizeStyles(__fixtureCss)", sanitizer) as string;
   assert.match(sanitizedCss, /fieldnotes-custom-root \.article-view/u, "the actual runner retains the dashboard's bounded CSS");
@@ -548,14 +557,14 @@ test("full-size synthetic movie dashboard fits host, worker, asset, and sanitize
   const result = (context.__messages as Array<{ type: string; html?: string; message?: string }>)[0];
   assert.equal(result?.type, "result", result?.message);
   const html = result?.html ?? "";
-  assert.ok(html.length < 48_000, "the fixture fits the runner HTML byte cap");
+  assert.ok(html.length < 96_000, "the fixture fits the runner HTML output cap");
   const parsedHtml = parseSyntheticMarkup(html);
   const elementCount = parsedHtml.reduce((count, node) => count + countSyntheticDomElements(node), 0);
   assert.equal(elementCount, 711, "the fixture covers 41 twelve-column records, calendar, stats, and watchlist");
   assert.equal(parsedHtml.reduce((count, node) => count + countSyntheticDomElementsNamed(node, "img"), 0), 74,
     "the fixture renders 41 catalog, 31 calendar, and 2 watchlist poster instances");
   assert.ok(elementCount > 500, `fixture should reproduce the former cap, got ${elementCount} elements`);
-  assert.ok(elementCount <= 1_000, `fixture should remain inside the bounded sanitizer cap, got ${elementCount} elements`);
+  assert.ok(elementCount <= 2_048, `fixture should remain inside the bounded sanitizer cap, got ${elementCount} elements`);
   assert.doesNotMatch(html, /\?field=poster/u, "local poster files must use the host's asset query shape");
 
   const sanitizer = sanitizerContext();
@@ -569,7 +578,7 @@ test("full-size synthetic movie dashboard fits host, worker, asset, and sanitize
   assert.equal(countSyntheticDomElements(sanitized), elementCount, "all fixture elements remain within the sanitizer policy");
   assert.equal(countSyntheticDomElementsNamed(sanitized, "img"), 74, "all local poster instances survive the real allowlist and sanitizer");
 
-  sanitizer.__fixtureHtml = Array.from({ length: 1_001 }, () => "<div></div>").join("");
+  sanitizer.__fixtureHtml = Array.from({ length: 2_049 }, () => "<div></div>").join("");
   let boundedRejection = "";
   try {
     vm.runInContext("sanitizeMarkup(__fixtureHtml, new Set())", sanitizer);
@@ -620,9 +629,9 @@ test("runner source masks network APIs and drops outbound HTML/CSS surfaces", ()
   assert.match(runnerSource, /const MAX_NOTES = 500/);
   assert.match(runnerSource, /const MAX_INPUT_CHARS = 1_000_000/);
   assert.match(runnerSource, /const MAX_JAVASCRIPT_CHARS = 16_000/);
-  assert.match(runnerSource, /const MAX_HTML_CHARS = 48_000/);
+  assert.match(runnerSource, /const MAX_HTML_CHARS = 96_000/);
   assert.match(runnerSource, /const MAX_CSS_CHARS = 12_000/);
-  assert.match(runnerSource, /const MAX_ELEMENTS = 1_000/);
+  assert.match(runnerSource, /const MAX_ELEMENTS = 2_048/);
   assert.match(runnerSource, /const MAX_DEPTH = 20/);
   assert.match(runnerSource, /const ALLOWED_TAGS = new Set\(\[.*"form".*"input"/s);
   assert.match(runnerSource, /const DROPPED_TAGS = new Set\(\[.*"script".*"iframe".*"object"/s);
