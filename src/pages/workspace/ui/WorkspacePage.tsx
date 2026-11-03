@@ -47,12 +47,11 @@ import {
 } from "../model/sidebar-width";
 import {
   AUTOSAVE_DELAY_MS,
-  clearLocalDraft,
   draftMatchesDocument,
   isMeaningfulNewDraft,
+  LocalDraftQueue,
   readLocalDraft,
   rebaseDraft,
-  writeLocalDraft,
   type LocalDraftSnapshot,
 } from "../model/autosave";
 import type { ChangeRecord, DocumentRecord, DocumentSummary, FolderRecord } from "../model/workspace-types";
@@ -359,6 +358,18 @@ export function WorkspacePage() {
   const activeWriteSnapshotsRef = useRef(new Map<string, DraftSnapshot>());
   const conflictedNotesRef = useRef(new Set<string>());
   const saveTimersRef = useRef(new Map<string, number>());
+  const componentMountedRef = useRef(false);
+  const localDraftQueueRef = useRef<LocalDraftQueue | null>(null);
+  if (!localDraftQueueRef.current) {
+    localDraftQueueRef.current = new LocalDraftQueue(
+      () => window.localStorage,
+      (documentId, saved) => {
+        if (componentMountedRef.current && selectedRef.current?.id === documentId) {
+          setDraftRecoveryAvailable(saved);
+        }
+      },
+    );
+  }
   const dialogResolverRef = useRef<((result: ActionDialogResult) => void) | null>(null);
   const navigationPendingRef = useRef(false);
   const vaultSettingsHistoryEntryRef = useRef(false);
@@ -665,12 +676,7 @@ export function WorkspacePage() {
     if (!changed) {
       draftsRef.current.delete(document.id);
       pendingWritesRef.current.delete(document.id);
-      try {
-        clearLocalDraft(document.id, window.localStorage);
-        setDraftRecoveryAvailable(true);
-      } catch {
-        setDraftRecoveryAvailable(false);
-      }
+      localDraftQueueRef.current?.clear(document.id);
       return null;
     }
     const snapshot: DraftSnapshot = {
@@ -685,11 +691,8 @@ export function WorkspacePage() {
       initialFolderId,
     };
     draftsRef.current.set(document.id, snapshot);
-    try {
-      setDraftRecoveryAvailable(writeLocalDraft(snapshot, window.localStorage));
-    } catch {
-      setDraftRecoveryAvailable(false);
-    }
+    localDraftQueueRef.current?.schedule(snapshot);
+    setDraftRecoveryAvailable(true);
     return snapshot;
   }, []);
 
@@ -864,7 +867,7 @@ export function WorkspacePage() {
       draftsRef.current.delete(document.id);
       pendingWritesRef.current.delete(document.id);
       conflictedNotesRef.current.delete(document.id);
-      try { clearLocalDraft(document.id, window.localStorage); } catch { /* storage may be unavailable */ }
+      localDraftQueueRef.current?.clear(document.id);
     }
     let versionChanged = false;
     if (cachedDraft?.pendingCreate) {
@@ -873,10 +876,10 @@ export function WorkspacePage() {
       if (draftMatchesDocument(cachedDraft, document)) {
         cachedDraft = undefined;
         draftsRef.current.delete(document.id);
-        try { clearLocalDraft(document.id, window.localStorage); } catch { /* storage may be unavailable */ }
+        localDraftQueueRef.current?.clear(document.id);
       } else {
         draftsRef.current.set(document.id, cachedDraft);
-        try { writeLocalDraft(cachedDraft, window.localStorage); } catch { /* storage may be unavailable */ }
+        localDraftQueueRef.current?.writeNow(cachedDraft);
       }
     } else if (cachedDraft) {
       versionChanged = cachedDraft.baseVersion !== document.version ||
@@ -884,7 +887,7 @@ export function WorkspacePage() {
       if (draftMatchesDocument(cachedDraft, document)) {
         cachedDraft = undefined;
         draftsRef.current.delete(document.id);
-        try { clearLocalDraft(document.id, window.localStorage); } catch { /* storage may be unavailable */ }
+        localDraftQueueRef.current?.clear(document.id);
       } else {
         draftsRef.current.set(document.id, cachedDraft);
       }
@@ -1149,6 +1152,7 @@ export function WorkspacePage() {
     const leftDocument = previous.kind === "document" &&
       !(currentRoute.kind === "document" && currentRoute.documentId === previous.documentId);
     previousRouteRef.current = currentRoute;
+    if (leftDocument) localDraftQueueRef.current?.flush(previous.documentId);
     if (!leftDocument) return;
     const active = selectedRef.current;
     if (!active || active.id !== previous.documentId) return;
@@ -1157,6 +1161,24 @@ export function WorkspacePage() {
     // These event helpers read current draft values from refs; the effect should run only on route changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentRoute]);
+
+  useEffect(() => {
+    componentMountedRef.current = true;
+    const flushLocalDrafts = () => {
+      localDraftQueueRef.current?.flushAll();
+    };
+    const flushWhenHidden = () => {
+      if (document.visibilityState === "hidden") flushLocalDrafts();
+    };
+    window.addEventListener("pagehide", flushLocalDrafts);
+    document.addEventListener("visibilitychange", flushWhenHidden);
+    return () => {
+      window.removeEventListener("pagehide", flushLocalDrafts);
+      document.removeEventListener("visibilitychange", flushWhenHidden);
+      componentMountedRef.current = false;
+      localDraftQueueRef.current?.flushAll();
+    };
+  }, []);
 
   useEffect(() => {
     const active = selectedDocument;
@@ -1179,6 +1201,7 @@ export function WorkspacePage() {
 
   useEffect(() => {
     const warnBeforeClose = (event: BeforeUnloadEvent) => {
+      localDraftQueueRef.current?.flushAll();
       if (draftsRef.current.size === 0 && pendingWritesRef.current.size === 0 && activeWritesRef.current.size === 0) return;
       event.preventDefault();
       event.returnValue = "";
@@ -1302,7 +1325,7 @@ export function WorkspacePage() {
               pendingCreate: false,
             };
             draftsRef.current.set(documentId, rebased);
-            try { setDraftRecoveryAvailable(writeLocalDraft(rebased, window.localStorage)); } catch { setDraftRecoveryAvailable(false); }
+            localDraftQueueRef.current?.writeNow(rebased);
             pendingWritesRef.current.set(documentId, rebased);
             if (isActive) setSaveState("unsaved");
           } else {
@@ -1315,7 +1338,7 @@ export function WorkspacePage() {
               revision: latestValues?.revision ?? snapshot.revision,
             });
             try {
-              clearLocalDraft(documentId, window.localStorage);
+              localDraftQueueRef.current?.clear(documentId);
               if (isActive) setDraftRecoveryAvailable(true);
             } catch { if (isActive) setDraftRecoveryAvailable(false); }
             if (isActive) {
@@ -1427,7 +1450,7 @@ export function WorkspacePage() {
       setSelectedDocument(latest.document);
       const rebased = rebaseDraft(currentDraft, latest.document);
       draftsRef.current.set(selected.id, rebased);
-      try { writeLocalDraft(rebased, window.localStorage); } catch { setDraftRecoveryAvailable(false); }
+      localDraftQueueRef.current?.writeNow(rebased);
       conflictedNotesRef.current.delete(selected.id);
       setExternalVersion(null);
       setSaveState("unsaved");
@@ -1524,7 +1547,7 @@ export function WorkspacePage() {
       draftsRef.current.delete(selected.id);
       pendingCreateRef.current.delete(selected.id);
       pendingWritesRef.current.delete(selected.id);
-      try { clearLocalDraft(selected.id, window.localStorage); } catch { /* storage may be unavailable */ }
+      localDraftQueueRef.current?.clear(selected.id);
       selectedRef.current = null;
       setSelectedDocument(null);
       setBacklinks([]);
@@ -1538,7 +1561,7 @@ export function WorkspacePage() {
       conflictedNotesRef.current.delete(selected.id);
       documentBasesRef.current.delete(selected.id);
       latestDraftValuesRef.current.delete(selected.id);
-      try { clearLocalDraft(selected.id, window.localStorage); } catch { /* storage may be unavailable */ }
+      localDraftQueueRef.current?.clear(selected.id);
       selectedRef.current = null;
       setSelectedDocument(null);
       setBacklinks([]);
@@ -3133,8 +3156,16 @@ export function WorkspacePage() {
                     if (control instanceof HTMLElement) keepEditorControlVisible(control);
                   }}
                   onChange={(nextBody) => {
-                    setDraftBody(nextBody);
-                    rememberDraft(selectedRef.current, draftTitleRef.current, nextBody, draftFolderIdRef.current);
+                    const isCurrentDocument = selectedRef.current?.id === displayDocument.id;
+                    const latestValues = latestDraftValuesRef.current.get(displayDocument.id);
+                    if (isCurrentDocument) setDraftBody(nextBody);
+                    rememberDraft(
+                      displayDocument,
+                      latestValues?.title ?? displayDocument.title,
+                      nextBody,
+                      latestValues?.folderId ?? displayDocument.folderId,
+                    );
+                    if (!isCurrentDocument) return;
                     setSaveState(externalVersion !== null || externalDelete ? "conflict" : "unsaved");
                     if (notice) setNotice("");
                   }}
