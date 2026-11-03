@@ -33,6 +33,7 @@ import { BookmarkCard } from "./BookmarkCardExtension.tsx";
 import { FieldnotesViewBlock } from "./FieldnotesViewBlock.tsx";
 import { PreservedMarkdown, PreservedWhitespace } from "./PreservedMarkdownExtension.tsx";
 import { MarkdownDocument } from "./MarkdownDocumentExtension.ts";
+import { MarkdownUpdateScheduler } from "./markdown-update-scheduler.ts";
 import { WikiLink } from "./WikiLinkExtension.tsx";
 import { parseMarkdownWithPreservedBlocks } from "./markdown-preservation.ts";
 import {
@@ -268,7 +269,7 @@ export function MarkdownLiveEditor({
   }, []);
 
   const updateMarkdown = useCallback((activeEditor: Editor) => {
-    if (!richModeRef.current) return;
+    if (!richModeRef.current || composingRef.current || activeEditor.isDestroyed) return;
     try {
       const markdown = (activeEditor as EditorWithMarkdown).getMarkdown?.();
       if (typeof markdown !== "string") throw new Error("Markdown serializer is unavailable.");
@@ -292,6 +293,15 @@ export function MarkdownLiveEditor({
     }
   }, []);
 
+  const markdownUpdateSchedulerRef = useRef<MarkdownUpdateScheduler<Editor> | null>(null);
+  if (!markdownUpdateSchedulerRef.current) {
+    markdownUpdateSchedulerRef.current = new MarkdownUpdateScheduler(
+      updateMarkdown,
+      (callback) => window.requestAnimationFrame(callback),
+      (handle) => window.cancelAnimationFrame(handle),
+    );
+  }
+
   const editor = useEditor(
     {
       extensions,
@@ -306,6 +316,11 @@ export function MarkdownLiveEditor({
           spellcheck: "true",
         },
         handleDOMEvents: {
+          blur: () => {
+            const activeEditor = editorRef.current;
+            if (activeEditor && !activeEditor.isDestroyed) markdownUpdateSchedulerRef.current?.flush(activeEditor);
+            return false;
+          },
           compositionstart: () => {
             composingRef.current = true;
             return false;
@@ -315,15 +330,7 @@ export function MarkdownLiveEditor({
             queueMicrotask(() => {
               const activeEditor = editorRef.current;
               if (!activeEditor || activeEditor.isDestroyed || !richModeRef.current) return;
-              try {
-                const markdown = (activeEditor as EditorWithMarkdown).getMarkdown?.();
-                if (typeof markdown !== "string") throw new Error("Markdown serializer is unavailable.");
-                setHasSerializationError(false);
-                onSerializationSafetyChangeRef.current?.(true);
-              } catch {
-                setHasSerializationError(true);
-                onSerializationSafetyChangeRef.current?.(false);
-              }
+              markdownUpdateSchedulerRef.current?.flush(activeEditor, true);
             });
             return false;
           },
@@ -363,7 +370,7 @@ export function MarkdownLiveEditor({
           : null;
         setActiveCodeLanguage(language);
       },
-      onUpdate: ({ editor: activeEditor }) => updateMarkdown(activeEditor),
+      onUpdate: ({ editor: activeEditor }) => markdownUpdateSchedulerRef.current?.schedule(activeEditor),
     },
     [extensions, updateMarkdown, ariaLabel, insertUploadedImage]
   );
@@ -414,7 +421,28 @@ export function MarkdownLiveEditor({
   }, [editor, value]);
 
   useEffect(() => () => {
+    const activeEditor = editorRef.current;
+    if (activeEditor && !activeEditor.isDestroyed) markdownUpdateSchedulerRef.current?.flush(activeEditor);
     editorRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    const flushPendingMarkdown = () => {
+      const activeEditor = editorRef.current;
+      if (activeEditor && !activeEditor.isDestroyed) markdownUpdateSchedulerRef.current?.flush(activeEditor);
+    };
+    const flushWhenHidden = () => {
+      if (document.visibilityState === "hidden") flushPendingMarkdown();
+    };
+    window.addEventListener("beforeunload", flushPendingMarkdown, true);
+    window.addEventListener("pagehide", flushPendingMarkdown, true);
+    document.addEventListener("visibilitychange", flushWhenHidden, true);
+    return () => {
+      window.removeEventListener("beforeunload", flushPendingMarkdown, true);
+      window.removeEventListener("pagehide", flushPendingMarkdown, true);
+      document.removeEventListener("visibilitychange", flushWhenHidden, true);
+      flushPendingMarkdown();
+    };
   }, []);
 
   useEffect(() => {
@@ -469,8 +497,7 @@ export function MarkdownLiveEditor({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [editor, snippets]);
 
-  const body = splitLeadingFrontmatter(value).body;
-  const frontmatter = splitLeadingFrontmatter(value).frontmatter;
+  const { body, frontmatter } = currentParts;
   const headings = useMemo(() => extractHeadings(body), [body]);
   const minHeightStyle = {
     "--mle-min-height": typeof minHeight === "number" ? minHeight + "px" : minHeight,
